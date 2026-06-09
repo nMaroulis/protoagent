@@ -1,4 +1,10 @@
-# ProtoAgent
+                ██████╗ ██████╗  ██████╗ ████████╗ ██████╗  █████╗  ██████╗ ███████╗███╗   ██╗████████╗
+                ██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
+                ██████╔╝██████╔╝██║   ██║   ██║   ██║   ██║███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   
+                ██╔═══╝ ██╔══██╗██║   ██║   ██║   ██║   ██║██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   
+                ██║     ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   
+                ╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝ ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   
+                                        ⚡ LOCAL ENGINE ACTIVE ⚡
 
 **An enterprise-grade, local-first AI agent ecosystem engineered for speed, privacy, and absolute developer control.** *Note: The formal orchestration architecture and mathematical routing models are currently being formalized. (White paper pending).*
 
@@ -33,76 +39,6 @@ A specialized server that implements the Agent Client Protocol (ACP) to bring th
 
 * **The Experience:** Think of this as your local, ultra-reliable alternative to **Cline** or **Aider**.
 * **Universal Support:** Hook it seamlessly into **Zed**, PyCharm, JetBrains, or any editor that supports modern agent protocols. Your editor handles the chat UI; ProtoAgent handles the heavy multi-agent routing in the background and hands back clean, perfectly formatted file diffs.
-
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#0d1117', 'edgeLabelBackground':'#161b22', 'tertiaryColor': '#161b22', 'primaryTextColor': '#c9d1d9', 'lineColor': '#8b949e', 'fontFamily': 'inter, helvetica', 'fontSize': '14px'}}}%%
-
-graph TD
-    %% Define Nodes and Shapes %%
-    classDef main fill:#1f6feb,stroke:#58a6ff,stroke-width:2px,color:white,rx:8,ry:8;
-    classDef ecosystem fill:#161b22,stroke:#8b949e,color:#c9d1d9,rx:5,ry:5;
-    classDef rust fill:#d35400,stroke:#e67e22,color:white,rx:5,ry:5;
-    classDef python fill:#f1c40f,stroke:#f39c12,color:black,rx:5,ry:5;
-    classDef interface fill:#0d1117,stroke:#30363d,color:#8b949e,rx:2,ry:2;
-    classDef model fill:#8e44ad,stroke:#9b59b6,color:white,rx:15,ry:15;
-    classDef danger fill:#c0392b,stroke:#e74c3c,color:white,rx:2,ry:2,stroke-dasharray: 5 5;
-
-    %% Ecosystem Boundary %%
-    subgraph Ecosystem ["<br>PROTOAGENT MONOREPO<br>"]
-        
-        %% Component Isolation %%
-        subgraph Faces ["<br>Interfaces (Frontend)<br>"]
-            CLI(proto-cli):::rust
-            ACP(proto-acp Server):::python
-        
-            %% Bridge Connection %%
-            PyO3(Embeds Python via PyO3):::interface
-            PyO3 -.-> CLI
-        end
-
-        subgraph Logic ["<br>Central Intelligence (Backend)<br>"]
-            CORE[protoagent-core]:::main
-            Router(Router / Memory):::ecosystem
-            
-            subgraph Engine ["<br>Orchestration Engine<br>"]
-                Protolink(PROTOLINK):::python
-                Plan(Planner):::ecosystem
-                Code(Coder):::ecosystem
-                Crit(Critic):::ecosystem
-            
-                Protolink --> Plan & Code & Crit
-            end
-            
-            CORE --> Router
-            Router --> Engine
-        end
-    end
-
-    %% Inputs & Outputs (External) %%
-    User([USER INTERACTION]):::interface
-    LocalAI([LOCAL LLM RUNNER <br> Ollama / LM Studio]):::model
-    Disk([LOCAL OS / FILESYSTEM]):::danger
-
-    %% User Flow %%
-    User -->|Type commands| CLI
-    User -->|Chat in Editor| ACP
-
-    %% Interface -> Core Communication (Structured Payload) %%
-    CLI <==>|JSON| CORE
-    ACP <==>|JSON| CORE
-
-    %% Core -> Model Communication %%
-    Engine <==>|Prompt / Response| LocalAI
-
-    %% Human-in-the-loop Safeguard %%
-    Engine -.->|Dangerous Tool Call| Disk
-    Disk -->|Approval HALT| CLI & ACP
-
-    %% Flow Style %%
-    linkStyle 0,1,2,3,11,12,13,14 stroke-width:1px,fill:none,stroke:#8b949e;
-    linkStyle 7,8,9,10 stroke-width:1px,fill:none,stroke:#58a6ff;
-    linkStyle 5,6 stroke-width:3px,fill:none,stroke:#58a6ff;
-    linkStyle 15 stroke-width:1px,stroke-dasharray: 5 5,stroke:#e74c3c;
-    linkStyle 16 stroke-width:1px,fill:none,stroke:#c9d1d9;
 
 ---
 
