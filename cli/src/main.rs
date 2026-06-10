@@ -127,6 +127,8 @@ struct DoctorReport {
 struct ProtolinkStatus {
     installed: bool,
     #[serde(default)]
+    agent_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
@@ -903,8 +905,10 @@ fn show_doctor() -> Result<()> {
             format!("Config    : {}", report.config_path),
             format!(
                 "Protolink : {}",
-                if report.protolink.installed {
-                    "installed".to_string()
+                if report.protolink.installed && report.protolink.agent_ready {
+                    "installed, agent runtime ready".to_string()
+                } else if report.protolink.installed {
+                    format!("installed, agent runtime blocked ({})", report.protolink.error)
                 } else {
                     format!("missing ({})", report.protolink.error)
                 }

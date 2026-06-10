@@ -1,31 +1,27 @@
-"""Runtime model calls for the CLI.
-
-This layer deliberately uses provider HTTP APIs directly for the interactive
-CLI path. The protolink agent factories still live in agents.py for the full
-A2A mesh, but a user who selects a model should get a response immediately.
-"""
+"""ProtoLink runtime mesh for the CLI core."""
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
+import asyncio
+import os
+import socket
+from contextlib import suppress
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
 
-DEFAULT_TIMEOUT = 300
-
-SYSTEM_PROMPT = """You are ProtoAgent, a local-first coding assistant.
-
-Be warm, concise, and useful. For casual conversation, answer naturally.
-For coding requests, explain what you can do and avoid claiming that files
-were changed unless a tool/action payload actually did it.
-"""
+_FALLBACK_PORT = 19100
 
 
-def run_selected_model(prompt: str) -> dict[str, Any]:
+def run_selected_model(prompt: str, workspace: str | None = None) -> dict[str, Any]:
+    """Run the selected model through the ProtoLink Architect agent.
+
+    The CLI enters the core by sending a Task to Architect through ProtoLink's
+    AgentClient. Architect owns orchestration and resolves Explorer/Coder by
+    querying the Registry, just like the upstream coding-agent example.
+    """
     config = load_config()
     provider = normalize_provider(config.get("active_provider", "ollama"))
     cfg = provider_config(provider, config)
@@ -33,135 +29,201 @@ def run_selected_model(prompt: str) -> dict[str, Any]:
     if not model:
         raise RuntimeError(f"No model selected for provider '{provider}'")
 
-    if provider == "ollama":
-        answer = _ollama_chat(cfg, model, prompt)
-    elif provider in {"lmstudio", "llama.cpp-server"}:
-        answer = _openai_compatible_chat(cfg, model, prompt, default_base_url=cfg.get("base_url", ""))
-    elif provider == "openai":
-        answer = _openai_compatible_chat(cfg, model, prompt, default_base_url="https://api.openai.com/v1")
-    elif provider == "deepseek":
-        answer = _openai_compatible_chat(cfg, model, prompt, default_base_url="https://api.deepseek.com/v1")
-    elif provider == "anthropic":
-        answer = _anthropic_chat(cfg, model, prompt)
-    elif provider == "gemini":
-        answer = _gemini_chat(cfg, model, prompt)
-    else:
-        raise RuntimeError(f"Provider '{provider}' is not executable from the CLI yet")
-
-    cleaned = answer.strip()
-    if not cleaned:
-        cleaned = "(model returned an empty response)"
-
-    return {
-        "provider": provider,
-        "model": model,
-        "answer": cleaned,
-    }
+    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace))
 
 
-def _ollama_chat(cfg: dict[str, Any], model: str, prompt: str) -> str:
-    base_url = (cfg.get("base_url") or "http://localhost:11434").rstrip("/")
-    payload = {
-        "model": model,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    data = _post_json(f"{base_url}/api/chat", payload)
-    if data.get("error"):
-        raise RuntimeError(data["error"])
-    return data.get("message", {}).get("content", "")
-
-
-def _openai_compatible_chat(
-    cfg: dict[str, Any],
-    model: str,
+async def _run_agent_deck(
     prompt: str,
-    *,
-    default_base_url: str,
-) -> str:
-    base_url = (cfg.get("base_url") or default_base_url).rstrip("/")
-    if base_url.endswith("/v1"):
-        url = f"{base_url}/chat/completions"
-    else:
-        url = f"{base_url}/v1/chat/completions"
+    provider: str,
+    model: str,
+    workspace: str | None,
+) -> dict[str, Any]:
+    from protolink.client import AgentClient
+    from protolink.discovery import Registry
+    from protolink.core.task import Task
 
-    headers = {}
-    api_key = cfg.get("api_key")
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    urls = _runtime_urls()
+    events: list[str] = [
+        f"Registry prepared at {urls['registry']}.",
+        f"All LLM-capable agents configured with {provider} / {model}.",
+    ]
+    side_effects: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+    diffs: list[dict[str, str]] = []
+    registry = None
+    client = None
+    deck: dict[str, Any] = {}
+    started_agents: list[Any] = []
 
-    payload = {
-        "model": model,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    data = _post_json(url, payload, headers=headers)
-    choices = data.get("choices", [])
-    if not choices:
-        return ""
-    return choices[0].get("message", {}).get("content", "")
-
-
-def _anthropic_chat(cfg: dict[str, Any], model: str, prompt: str) -> str:
-    api_key = cfg.get("api_key")
-    if not api_key:
-        raise RuntimeError("Anthropic API key is not set")
-    payload = {
-        "model": model,
-        "max_tokens": 2048,
-        "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    data = _post_json(
-        "https://api.anthropic.com/v1/messages",
-        payload,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-    )
-    parts = data.get("content", [])
-    return "".join(part.get("text", "") for part in parts if part.get("type") == "text")
-
-
-def _gemini_chat(cfg: dict[str, Any], model: str, prompt: str) -> str:
-    api_key = cfg.get("api_key")
-    if not api_key:
-        raise RuntimeError("Gemini API key is not set")
-    quoted_model = urllib.parse.quote(model, safe="")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{quoted_model}:generateContent?key={api_key}"
-    payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-    }
-    data = _post_json(url, payload)
-    candidates = data.get("candidates", [])
-    if not candidates:
-        return ""
-    parts = candidates[0].get("content", {}).get("parts", [])
-    return "".join(part.get("text", "") for part in parts)
-
-
-def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str] | None = None) -> dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
-    request_headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        **(headers or {}),
-    }
-    request = urllib.request.Request(url, data=body, headers=request_headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT) as response:
-            text = response.read().decode("utf-8")
-            return json.loads(text)
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{url} returned HTTP {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"{url} failed: {exc}") from exc
+        registry = Registry(url=urls["registry"], transport="http", verbosity=0)
+        registry.start(background=True)
+        events.append("Registry started.")
+
+        deck = create_agent_deck(
+            registry=registry,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            urls={
+                "explorer": urls["explorer"],
+                "coder": urls["coder"],
+                "architect": urls["architect"],
+            },
+            side_effects=side_effects,
+        )
+
+        for name in ("explorer", "coder", "architect"):
+            deck[name].start(background=True)
+            started_agents.append(deck[name])
+            events.append(f"{name.title()} registered at {deck[name].card.url}.")
+
+        await asyncio.sleep(float(os.getenv("PROTOAGENT_DISCOVERY_DELAY", "0.15")))
+        discovered = await deck["architect"].discover_agents()
+        names = ", ".join(sorted(card.name for card in discovered)) or "none"
+        events.append(f"Architect discovery sees: {names}.")
+
+        client = AgentClient(url=urls["client"], transport="http", timeout=_runtime_timeout())
+        task = Task.create_infer(prompt=prompt)
+        events.append("AgentClient sent the user task to Architect.")
+        result_task = await client.send_task(agent_url=deck["architect"].card.url, task=task)
+        raw_answer = _normalize(result_task.get_last_part_content())
+        _collect_side_effects(raw_answer, actions, diffs)
+
+        for payload in side_effects:
+            _collect_side_effects(_normalize(payload), actions, diffs)
+
+        answer = _content_to_text(raw_answer)
+        if not answer:
+            answer = "(model returned an empty response)"
+
+        return {
+            "provider": provider,
+            "model": model,
+            "answer": answer,
+            "events": events,
+            "actions": actions,
+            "diffs": _dedupe_diffs(diffs),
+        }
+    finally:
+        if client is not None:
+            transport = getattr(client, "_transport", None)
+            if transport is not None and hasattr(transport, "stop"):
+                with suppress(Exception):
+                    await transport.stop()
+        for agent in reversed(started_agents):
+            with suppress(Exception):
+                agent.stop()
+        if registry is not None:
+            with suppress(Exception):
+                registry.stop()
+
+
+def _runtime_urls() -> dict[str, str]:
+    host = os.getenv("PROTOAGENT_RUNTIME_HOST", "127.0.0.1")
+    return {
+        "registry": _env_url("PROTOAGENT_REGISTRY_URL", "REGISTRY_URL") or _local_url(host),
+        "client": _env_url("PROTOAGENT_CLIENT_URL", "CLIENT_URL") or _local_url(host),
+        "architect": _env_url("PROTOAGENT_ARCHITECT_URL", "ARCHITECT_AGENT_URL") or _local_url(host),
+        "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
+        "coder": _env_url("PROTOAGENT_CODER_URL", "CODER_AGENT_URL") or _local_url(host),
+    }
+
+
+def _env_url(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
+def _local_url(host: str) -> str:
+    return f"http://{host}:{_free_port(host)}"
+
+
+def _free_port(host: str) -> int:
+    global _FALLBACK_PORT
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
+    except OSError:
+        _FALLBACK_PORT += 1
+        return _FALLBACK_PORT
+
+
+def _runtime_timeout() -> int:
+    raw = os.getenv("PROTOAGENT_AGENT_TIMEOUT", "600")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 600
+
+
+def _normalize(value: Any) -> Any:
+    if hasattr(value, "to_dict"):
+        return _normalize(value.to_dict())
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, dict):
+        return {key: _normalize(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    return value
+
+
+def _content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, dict):
+        if "content" in content:
+            return _content_to_text(content["content"])
+        if "result" in content:
+            return _content_to_text(content["result"])
+        if "text" in content:
+            return _content_to_text(content["text"])
+    if isinstance(content, list):
+        return "\n".join(filter(None, (_content_to_text(item) for item in content))).strip()
+    return str(content).strip()
+
+
+def _collect_side_effects(
+    result: Any,
+    actions: list[dict[str, Any]],
+    diffs: list[dict[str, str]],
+) -> None:
+    if isinstance(result, list):
+        for item in result:
+            _collect_side_effects(item, actions, diffs)
+        return
+    if not isinstance(result, dict):
+        return
+
+    nested = result.get("result")
+    if nested is not None:
+        _collect_side_effects(nested, actions, diffs)
+
+    action = result.get("action")
+    if isinstance(action, dict):
+        actions.append(action)
+
+    diff = result.get("diff")
+    path = result.get("path") or result.get("file_target") or ""
+    if isinstance(diff, str) and diff.strip():
+        diffs.append({"path": str(path), "diff": diff})
+
+
+def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict[str, str]] = []
+    for item in diffs:
+        key = (item.get("path", ""), item.get("diff", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique

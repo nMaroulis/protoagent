@@ -81,9 +81,9 @@ def process_prompt(prompt: str, workspace: str | None = None) -> str:
     except Exception as exc:
         fallback = _fallback_response(prompt, workspace, started)
         fallback["status"] = "fallback"
-        fallback["headline"] = "Model call failed; showing core diagnostics."
+        fallback["headline"] = "ProtoLink agent run failed; showing core diagnostics."
         fallback["warning"] = str(exc)
-        fallback["events"].append(f"Provider call failed: {exc}")
+        fallback["events"].append(f"ProtoLink agent run failed: {exc}")
         return _json(fallback)
 
 
@@ -124,8 +124,11 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
         "Explorer built a read-only context map for the workspace.",
         "Coder tools are registered for diff and new-file approval payloads.",
     ]
-    if not validate_protolink()["installed"]:
+    protolink_status = validate_protolink()
+    if not protolink_status["installed"]:
         events.append("Protolink is not importable in this Python environment yet.")
+    elif not protolink_status.get("agent_ready"):
+        events.append(f"Protolink Agent runtime is blocked: {protolink_status.get('error', 'unknown error')}")
     if not model:
         events.append("No active model is selected for the current provider.")
 
@@ -135,8 +138,9 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
         f"Active provider: {provider}\n"
         f"Active model: {model or 'not selected'}\n"
         f"Likely target: {target_label}\n\n"
-        "The Python core could not complete a provider call, so this diagnostic "
-        "response shows the selected runtime, workspace, and registered tools."
+        "The Python core could not complete the ProtoLink agent run, so this "
+        "diagnostic response shows the selected runtime, workspace, and "
+        "registered tools."
     )
 
     return {
@@ -157,13 +161,26 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
 
 
 def _model_response(prompt: str, workspace: str, started: float) -> dict[str, Any]:
-    result = run_selected_model(prompt)
+    result = run_selected_model(prompt, workspace)
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
-    target_label = ", ".join(targets) if targets else ""
+    diff_items = result.get("diffs", [])
+    action_items = result.get("actions", [])
+    action_targets = [
+        str(action.get("path", ""))
+        for action in action_items
+        if isinstance(action, dict) and action.get("path")
+    ]
+    diff_targets = [
+        str(item.get("path", ""))
+        for item in diff_items
+        if isinstance(item, dict) and item.get("path")
+    ]
+    target_label = ", ".join(sorted(set([*targets, *action_targets, *diff_targets]))) if [*targets, *action_targets, *diff_targets] else ""
+    diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
     return {
-        "status": "answered",
-        "headline": "Model response received.",
+        "status": "approval-required" if action_items else "answered",
+        "headline": "Architect completed the ProtoLink run.",
         "answer": result["answer"],
         "thought_process": (
             f"Request: {prompt}\n\n"
@@ -173,14 +190,10 @@ def _model_response(prompt: str, workspace: str, started: float) -> dict[str, An
             f"Likely target: {target_label or '(not selected yet)'}"
         ),
         "file_target": target_label,
-        "diff": "",
-        "requires_approval": False,
-        "actions": [],
-        "events": [
-            "Architect loaded the selected provider and model.",
-            "Provider returned a model response.",
-            "No file actions were requested or applied.",
-        ],
+        "diff": diff,
+        "requires_approval": bool(action_items),
+        "actions": action_items,
+        "events": result.get("events", []),
         "provider": result["provider"],
         "model": result["model"],
         "workspace": workspace,

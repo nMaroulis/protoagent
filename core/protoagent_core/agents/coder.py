@@ -1,0 +1,81 @@
+"""Coder agent factory."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import tools
+from .common import QUIET_LOGGER, create_selected_llm, record_side_effect, resolve_agent_url
+
+CODER_SYSTEM_PROMPT = """You are the ProtoAgent Coder.
+
+Given a user objective and Explorer context, produce exact file modifications.
+Use your tools to generate unified diffs or new-file proposals. Do not write to
+disk. Return pending actions that require frontend approval.
+
+Before producing a diff, make sure you have enough original content or context
+from Explorer. Keep changes focused and explain assumptions briefly.
+"""
+
+
+def create_coder_agent(
+    registry=None,
+    provider: str = "ollama",
+    model: str | None = None,
+    workspace: str | None = None,
+    url: str | None = None,
+    side_effects: list[dict[str, Any]] | None = None,
+):
+    """Create the diff synthesis agent."""
+    from protolink.agents import Agent
+
+    agent = Agent(
+        card={
+            "name": "coder",
+            "description": (
+                "Diff synthesis agent. Generates unified diffs and new-file "
+                "proposals without writing to disk."
+            ),
+            "url": resolve_agent_url("coder", url),
+            "capabilities": {
+                "delegation": False,
+                "tool_calling": True,
+                "multi_step_reasoning": True,
+            },
+            "tags": ["protoagent", "diffs", "coding"],
+        },
+        transport="http",
+        registry=registry,
+        llm=create_selected_llm(provider, model),
+        system_prompt=CODER_SYSTEM_PROMPT,
+        logger=QUIET_LOGGER,
+        verbosity=0,
+    )
+    agent.transport.timeout = 600
+
+    @agent.tool(
+        name="generate_unified_diff",
+        description="Generate a unified diff for replacing a file with updated content.",
+        input_schema={"path": str, "updated_content": str, "original_content": str},
+    )
+    def generate_unified_diff(
+        path: str,
+        updated_content: str,
+        original_content: str | None = None,
+    ) -> dict[str, Any]:
+        result = tools.generate_unified_diff(path, updated_content, original_content, workspace)
+        record_side_effect(side_effects, {"source": "coder", **result})
+        return result
+
+    @agent.tool(
+        name="create_new_file",
+        description="Prepare a new file creation as a pending approval action.",
+        input_schema={"path": str, "content": str},
+    )
+    def create_new_file(path: str, content: str) -> dict[str, Any]:
+        result = tools.create_new_file(path, content, workspace)
+        record_side_effect(side_effects, {"source": "coder", **result})
+        return result
+
+    return agent
+
