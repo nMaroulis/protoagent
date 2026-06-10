@@ -23,22 +23,27 @@ from .tools import build_context_map, safe_path, workspace_root
 
 
 def list_models() -> str:
+    """Return model inventory JSON for the Rust CLI."""
     return _json(discover_models())
 
 
 def get_config() -> str:
+    """Return redacted provider configuration JSON for display."""
     return _json(visible_config())
 
 
 def add_api_key(provider: str, api_key: str) -> str:
+    """Store a cloud provider API key and return redacted config JSON."""
     return _json(set_api_key(provider, api_key))
 
 
 def set_model(provider: str, model: str, base_url: str | None = None) -> str:
+    """Persist the active provider/model selection and return config JSON."""
     return _json(set_active_model(provider, model, base_url))
 
 
 def doctor(workspace: str | None = None) -> str:
+    """Return runtime diagnostics consumed by the CLI doctor panel."""
     config = visible_config()
     protolink = validate_protolink()
     inventory = discover_models()
@@ -88,6 +93,7 @@ def process_prompt(prompt: str, workspace: str | None = None) -> str:
 
 
 def apply_action(action_json: str, workspace: str | None = None) -> str:
+    """Apply a user-approved action payload inside the workspace."""
     action = json.loads(action_json)
     workspace = str(workspace_root(workspace))
     action_type = action.get("type")
@@ -111,6 +117,7 @@ def apply_action(action_json: str, workspace: str | None = None) -> str:
 
 
 def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str, Any]:
+    """Build a diagnostic response when the live ProtoLink run is unavailable."""
     config = visible_config()
     provider = config.get("active_provider", "ollama")
     provider_data = config.get("providers", {}).get(provider, {})
@@ -161,6 +168,7 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
 
 
 def _model_response(prompt: str, workspace: str, started: float) -> dict[str, Any]:
+    """Run the live model path and adapt the result to the CLI response schema."""
     result = run_selected_model(prompt, workspace)
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
@@ -202,6 +210,7 @@ def _model_response(prompt: str, workspace: str, started: float) -> dict[str, An
 
 
 def _extract_file_targets(prompt: str, files: list[dict[str, Any]]) -> list[str]:
+    """Infer likely file targets mentioned in a prompt."""
     known = {item.get("path", "") for item in files}
     targets: list[str] = []
     candidates = re.findall(r"[A-Za-z0-9_./-]+\.[A-Za-z0-9_+-]+", prompt)
@@ -213,4 +222,5 @@ def _extract_file_targets(prompt: str, files: list[dict[str, Any]]) -> list[str]
 
 
 def _json(value: dict[str, Any]) -> str:
+    """Serialize a response using ASCII-safe JSON for the Rust boundary."""
     return json.dumps(value, ensure_ascii=True)

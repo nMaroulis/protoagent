@@ -93,6 +93,7 @@ Once the interactive terminal is running, you can use slash commands:
 * `/doctor` - Checks Python, protolink, and the active provider.
 * `/agents` - Shows the Architect / Explorer / Coder topology.
 * `/last` - Re-renders the last agent response.
+* `/history` - Shows the retained prompt history for this session.
 * `/diff` - Re-renders the last proposed diff.
 * `/help`  - Displays all available commands.
 
@@ -110,9 +111,10 @@ cargo run --manifest-path cli/Cargo.toml -- doctor
 cargo run --manifest-path cli/Cargo.toml -- agents
 ```
 
-Interactive mode uses an alternate terminal screen by default so the console
-feels like an agent cockpit and restores your shell when you quit. Set
-`PROTOAGENT_NO_ALT=1` to run it inline.
+Interactive mode runs inline by default so your terminal scrollback keeps the
+agent transcript. The prompt has a visible cursor, basic editing keys, and
+Up/Down navigation through the last 10,000 session inputs. Set
+`PROTOAGENT_ALT_SCREEN=1` to run it in an alternate-screen cockpit.
 
 ---
 

@@ -38,6 +38,7 @@ async def _run_agent_deck(
     model: str,
     workspace: str | None,
 ) -> dict[str, Any]:
+    """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink.client import AgentClient
     from protolink.discovery import Registry
     from protolink.core.task import Task
@@ -120,6 +121,7 @@ async def _run_agent_deck(
 
 
 def _runtime_urls() -> dict[str, str]:
+    """Resolve runtime URLs for the Registry, client, and agents."""
     host = os.getenv("PROTOAGENT_RUNTIME_HOST", "127.0.0.1")
     return {
         "registry": _env_url("PROTOAGENT_REGISTRY_URL", "REGISTRY_URL") or _local_url(host),
@@ -131,6 +133,7 @@ def _runtime_urls() -> dict[str, str]:
 
 
 def _env_url(*names: str) -> str | None:
+    """Return the first configured URL from a list of environment names."""
     for name in names:
         value = os.getenv(name)
         if value:
@@ -139,10 +142,12 @@ def _env_url(*names: str) -> str | None:
 
 
 def _local_url(host: str) -> str:
+    """Build a localhost URL with an available port."""
     return f"http://{host}:{_free_port(host)}"
 
 
 def _free_port(host: str) -> int:
+    """Find an available port, falling back when port probing is blocked."""
     global _FALLBACK_PORT
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -155,6 +160,7 @@ def _free_port(host: str) -> int:
 
 
 def _runtime_timeout() -> int:
+    """Read the AgentClient timeout from the environment."""
     raw = os.getenv("PROTOAGENT_AGENT_TIMEOUT", "600")
     try:
         return max(1, int(raw))
@@ -163,6 +169,7 @@ def _runtime_timeout() -> int:
 
 
 def _normalize(value: Any) -> Any:
+    """Convert dataclasses and ProtoLink objects into plain containers."""
     if hasattr(value, "to_dict"):
         return _normalize(value.to_dict())
     if is_dataclass(value):
@@ -175,6 +182,7 @@ def _normalize(value: Any) -> Any:
 
 
 def _content_to_text(content: Any) -> str:
+    """Extract readable text from a ProtoLink response payload."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -196,6 +204,7 @@ def _collect_side_effects(
     actions: list[dict[str, Any]],
     diffs: list[dict[str, str]],
 ) -> None:
+    """Collect approval actions and diffs from nested tool payloads."""
     if isinstance(result, list):
         for item in result:
             _collect_side_effects(item, actions, diffs)
@@ -218,6 +227,7 @@ def _collect_side_effects(
 
 
 def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Remove duplicate diff payloads while preserving order."""
     seen: set[tuple[str, str]] = set()
     unique: list[dict[str, str]] = []
     for item in diffs:

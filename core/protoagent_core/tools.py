@@ -25,11 +25,13 @@ MAX_SEARCH_RESULTS = 120
 
 
 def workspace_root(workspace: str | None = None) -> Path:
+    """Resolve the active workspace root."""
     raw = workspace or os.getenv("PROTOAGENT_WORKSPACE") or os.getcwd()
     return Path(raw).expanduser().resolve()
 
 
 def safe_path(path: str, workspace: str | None = None) -> Path:
+    """Resolve a path and reject access outside the workspace."""
     root = workspace_root(workspace)
     target = Path(path).expanduser()
     if not target.is_absolute():
@@ -41,6 +43,7 @@ def safe_path(path: str, workspace: str | None = None) -> Path:
 
 
 def to_relative(path: Path, workspace: str | None = None) -> str:
+    """Return a workspace-relative path when possible."""
     try:
         return str(path.resolve().relative_to(workspace_root(workspace)))
     except ValueError:
@@ -48,6 +51,7 @@ def to_relative(path: Path, workspace: str | None = None) -> str:
 
 
 def read_file(path: str, workspace: str | None = None, with_line_numbers: bool = True) -> dict[str, Any]:
+    """Read a UTF-8 text file with optional line-number formatting."""
     target = safe_path(path, workspace)
     if not target.exists():
         return {"success": False, "error": f"File not found: {path}"}
@@ -76,6 +80,7 @@ def read_file(path: str, workspace: str | None = None, with_line_numbers: bool =
 
 
 def list_directory(path: str = ".", workspace: str | None = None) -> dict[str, Any]:
+    """List non-ignored entries in a workspace directory."""
     target = safe_path(path, workspace)
     if not target.exists():
         return {"success": False, "error": f"Directory not found: {path}"}
@@ -112,6 +117,7 @@ def search_regex(
     file_filter: str = ".*",
     workspace: str | None = None,
 ) -> dict[str, Any]:
+    """Search workspace text files with a regular expression."""
     root = safe_path(path, workspace)
     if not root.exists():
         return {"success": False, "error": f"Path not found: {path}"}
@@ -159,6 +165,7 @@ def search_regex(
 
 
 def get_git_status(workspace: str | None = None) -> dict[str, Any]:
+    """Return `git status --short` for the workspace."""
     root = workspace_root(workspace)
     try:
         result = subprocess.run(
@@ -185,6 +192,7 @@ def generate_unified_diff(
     original_content: str | None = None,
     workspace: str | None = None,
 ) -> dict[str, Any]:
+    """Generate an approval-gated unified diff for a file replacement."""
     target = safe_path(path, workspace)
     if original_content is None:
         if target.exists():
@@ -218,6 +226,7 @@ def generate_unified_diff(
 
 
 def create_new_file(path: str, content: str, workspace: str | None = None) -> dict[str, Any]:
+    """Prepare an approval-gated diff for creating a new file."""
     target = safe_path(path, workspace)
     if target.exists():
         return {"success": False, "error": f"File already exists: {path}"}
@@ -225,6 +234,7 @@ def create_new_file(path: str, content: str, workspace: str | None = None) -> di
 
 
 def build_context_map(workspace: str | None = None, max_files: int = 80) -> dict[str, Any]:
+    """Build a compact workspace file and git-status summary."""
     root = workspace_root(workspace)
     files = []
     for file_path in _walk_text_files(root):
@@ -245,6 +255,7 @@ def build_context_map(workspace: str | None = None, max_files: int = 80) -> dict
 
 
 def _walk_text_files(root: Path):
+    """Yield text-like files below a root while respecting ignore rules."""
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
@@ -259,6 +270,7 @@ def _walk_text_files(root: Path):
 
 
 def _looks_binary(path: Path) -> bool:
+    """Return true for file types the text tools should skip."""
     binary_suffixes = {
         ".png",
         ".jpg",
@@ -279,6 +291,7 @@ def _looks_binary(path: Path) -> bool:
 
 
 def _safe_size(path: Path) -> int:
+    """Return file size, or zero when stat fails."""
     try:
         return path.stat().st_size
     except OSError:

@@ -57,6 +57,7 @@ PROVIDER_LABELS = {
 
 
 def default_config() -> dict[str, Any]:
+    """Create the baseline provider configuration."""
     providers: dict[str, dict[str, Any]] = {}
     for provider in [*sorted(LOCAL_PROVIDERS), *sorted(API_PROVIDERS)]:
         providers[provider] = {
@@ -89,6 +90,7 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any]) -> None:
+    """Persist provider configuration with user-only file permissions."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     with CONFIG_PATH.open("w", encoding="utf-8") as handle:
         json.dump(config, handle, indent=2, sort_keys=True)
@@ -100,6 +102,7 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def set_api_key(provider: str, api_key: str) -> dict[str, Any]:
+    """Store an API key for a supported cloud provider."""
     provider = normalize_provider(provider)
     if provider not in API_PROVIDERS:
         raise ValueError(f"{provider} does not use a cloud API key")
@@ -114,6 +117,7 @@ def set_api_key(provider: str, api_key: str) -> dict[str, Any]:
 
 
 def set_active_model(provider: str, model: str, base_url: str | None = None) -> dict[str, Any]:
+    """Set the active provider/model pair used by the agent runtime."""
     provider = normalize_provider(provider)
     if provider not in load_config()["providers"]:
         raise ValueError(f"Unknown provider: {provider}")
@@ -130,6 +134,7 @@ def set_active_model(provider: str, model: str, base_url: str | None = None) -> 
 
 
 def provider_config(provider: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return a provider config with environment API keys resolved."""
     config = config or load_config()
     provider = normalize_provider(provider or config.get("active_provider", "ollama"))
     data = deepcopy(config["providers"].get(provider, {}))
@@ -139,6 +144,7 @@ def provider_config(provider: str | None = None, config: dict[str, Any] | None =
 
 
 def visible_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return configuration safe for terminal display."""
     config = deepcopy(config or load_config())
     for provider, data in config.get("providers", {}).items():
         key = data.get("api_key") or os.getenv(ENV_KEYS.get(provider, ""), "")
@@ -150,6 +156,7 @@ def visible_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def redact_key(value: str) -> str:
+    """Mask an API key while keeping enough shape for recognition."""
     if not value:
         return ""
     if len(value) <= 8:
@@ -158,6 +165,7 @@ def redact_key(value: str) -> str:
 
 
 def normalize_provider(provider: str) -> str:
+    """Normalize provider aliases to canonical config identifiers."""
     normalized = provider.strip().lower().replace("_", "-")
     aliases = {
         "lm-studio": "lmstudio",
@@ -171,6 +179,7 @@ def normalize_provider(provider: str) -> str:
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge user config over defaults."""
     merged = deepcopy(base)
     for key, value in overlay.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):

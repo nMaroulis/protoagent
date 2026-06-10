@@ -78,6 +78,7 @@ def discover_models() -> dict[str, Any]:
 
 
 def _discover_ollama() -> dict[str, Any]:
+    """Discover models from the Ollama HTTP API or CLI fallback."""
     cfg = provider_config("ollama")
     base_url = cfg.get("base_url") or "http://localhost:11434"
     response = _get_json(f"{base_url.rstrip('/')}/api/tags")
@@ -107,6 +108,7 @@ def _discover_ollama() -> dict[str, Any]:
 
 
 def _discover_lmstudio() -> dict[str, Any]:
+    """Discover models from an LM Studio OpenAI-compatible endpoint."""
     cfg = provider_config("lmstudio")
     base_url = (cfg.get("base_url") or "http://localhost:1234/v1").rstrip("/")
     response = _get_json(f"{base_url}/models")
@@ -128,6 +130,7 @@ def _discover_lmstudio() -> dict[str, Any]:
 
 
 def _discover_llamacpp_server() -> dict[str, Any]:
+    """Discover the model exposed by a llama.cpp HTTP server."""
     cfg = provider_config("llama.cpp-server")
     base_url = (cfg.get("base_url") or "http://localhost:8080").rstrip("/")
     response = _get_json(f"{base_url}/v1/models")
@@ -155,6 +158,7 @@ def _discover_llamacpp_server() -> dict[str, Any]:
 
 
 def _discover_llamacpp_local() -> dict[str, Any]:
+    """Discover local GGUF models from common model directories."""
     models = _scan_models("llama.cpp-local")
     return _provider(
         "llama.cpp-local",
@@ -167,6 +171,7 @@ def _discover_llamacpp_local() -> dict[str, Any]:
 
 
 def _api_provider(provider: str) -> dict[str, Any]:
+    """Build a cloud provider inventory card from config and defaults."""
     cfg = provider_config(provider)
     key = cfg.get("api_key") or os.getenv(ENV_KEYS.get(provider, ""), "")
     models = [_model(name, source=provider) for name in API_MODEL_CHOICES.get(provider, [])]
@@ -182,6 +187,7 @@ def _api_provider(provider: str) -> dict[str, Any]:
 
 
 def _get_json(url: str, timeout: float = 1.2) -> dict[str, Any]:
+    """Fetch JSON with a short timeout and return a status envelope."""
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -192,6 +198,7 @@ def _get_json(url: str, timeout: float = 1.2) -> dict[str, Any]:
 
 
 def _ollama_cli_models() -> list[dict[str, Any]]:
+    """Read installed Ollama models from the `ollama list` command."""
     try:
         result = subprocess.run(
             ["ollama", "list"],
@@ -216,6 +223,7 @@ def _ollama_cli_models() -> list[dict[str, Any]]:
 
 
 def _scan_models(source: str, limit: int = 80) -> list[dict[str, Any]]:
+    """Scan common directories for GGUF model files."""
     found: list[dict[str, Any]] = []
     for raw_dir in MODEL_SCAN_DIRS:
         root = Path(raw_dir).expanduser()
@@ -248,6 +256,7 @@ def _provider(
     hint: str = "",
     configured: bool | None = None,
 ) -> dict[str, Any]:
+    """Create a normalized provider inventory record."""
     return {
         "id": provider_id,
         "name": PROVIDER_LABELS.get(provider_id, provider_id),
@@ -268,6 +277,7 @@ def _model(
     modified_at: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Create a normalized model inventory record."""
     return {
         "id": str(model_id),
         "source": source,
@@ -279,6 +289,7 @@ def _model(
 
 
 def _size_label(size_bytes: int | None) -> str:
+    """Format a byte count into a compact human-readable label."""
     if not size_bytes:
         return ""
     size = float(size_bytes)

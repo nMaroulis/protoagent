@@ -12,6 +12,7 @@ from .config import normalize_provider, provider_config
 
 
 def protolink_provider(provider: str) -> str:
+    """Map ProtoAgent provider IDs to ProtoLink provider IDs."""
     provider = normalize_provider(provider)
     if provider == "lmstudio":
         return "openai"
@@ -19,6 +20,7 @@ def protolink_provider(provider: str) -> str:
 
 
 def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
+    """Build keyword arguments for ProtoLink LLM construction."""
     provider = normalize_provider(provider)
     cfg = provider_config(provider)
     selected_model = model or cfg.get("model")
@@ -58,18 +60,23 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
 
 
 def _create_openai_compatible_chat_llm(provider: str, model: str | None = None):
+    """Create a minimal ProtoLink LLM adapter for LM Studio chat APIs."""
     from protolink.llms.base import LLM
 
     class OpenAICompatibleChatLLM(LLM):
+        """OpenAI-compatible chat adapter backed by ProtoLink's LLM base."""
+
         provider = "lmstudio"
         model_type = "server"
 
         def __init__(self, *, base_url: str, model: str, api_key: str | None = None):
+            """Initialize the adapter with endpoint and model selection."""
             self.base_url = base_url.rstrip("/")
             self.api_key = api_key
             super().__init__(model=model, model_params={"temperature": 0.2})
 
         def call(self, history) -> str:
+            """Execute a non-streaming chat completion request."""
             url = f"{self.base_url}/chat/completions" if self.base_url.endswith("/v1") else f"{self.base_url}/v1/chat/completions"
             payload = {
                 "model": self.model,
@@ -94,9 +101,11 @@ def _create_openai_compatible_chat_llm(provider: str, model: str | None = None):
             return choices[0].get("message", {}).get("content", "")
 
         async def call_stream(self, history) -> AsyncIterator[str]:
+            """Yield a single chunk for transports expecting streaming."""
             yield self.call(history)
 
         def validate_connection(self) -> bool:
+            """Check whether the LM Studio models endpoint is reachable."""
             url = f"{self.base_url}/models" if self.base_url.endswith("/v1") else f"{self.base_url}/v1/models"
             try:
                 request = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -114,6 +123,7 @@ def _create_openai_compatible_chat_llm(provider: str, model: str | None = None):
 
 
 def validate_protolink() -> dict[str, Any]:
+    """Report whether ProtoLink and its agent runtime can be imported."""
     try:
         import protolink  # noqa: F401
         from protolink.agents import Agent  # noqa: F401
