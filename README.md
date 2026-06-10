@@ -1,7 +1,7 @@
 # ProtoAgent
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/nMaroulis/protoagent/misc/assets/banner.jpeg" alt="ProtoAgent Logo" width="60%">
+  <img src="https://github.com/nMaroulis/protoagent/blob/main/misc/assets/banner.jpeg?raw=true" alt="ProtoAgent Logo" width="60%">
 </div>
 
 **An enterprise-grade, local-first AI agent ecosystem engineered for speed, privacy, and absolute developer control.** *Note: The formal orchestration architecture and mathematical routing models are currently being formalized. (White paper pending).*
