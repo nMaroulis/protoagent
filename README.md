@@ -22,6 +22,8 @@ If **LangChain** is the massive, heavy enterprise framework for cloud models, `p
 * **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. Protolink acts as a buffer, specifically hand-holding 7B/8B parameter models (like Qwen, Llama 3) through strict multi-agent loops (Planner ➔ Coder ➔ Critic) without them hallucinating or breaking syntax.
 * **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits strict JSON task payloads.
 
+Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).
+
 ### 2. The CLI (The Terminal Face)
 
 **Embedded via PyO3 • Rust**
