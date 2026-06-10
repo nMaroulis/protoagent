@@ -11,15 +11,15 @@ through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 - `protoagent_core/agents.py` - Protolink Architect, Explorer, and Coder factories.
 - `protoagent_core/tools.py` - Read-only exploration tools plus diff/new-file proposal tools.
 
-## Live Protolink Mode
+## Provider Execution
 
-The CLI is wired and safe by default. The live protolink execution path is
-gated so provider/runtime debugging can happen separately:
+The CLI calls the selected provider/model by default. Use scaffold mode only
+when you want to test the Rust/Python contract without contacting a model:
 
 ```bash
-PROTOAGENT_LIVE=1 cargo run --manifest-path cli/Cargo.toml -- run "your task"
+PROTOAGENT_SCAFFOLD=1 cargo run --manifest-path cli/Cargo.toml -- run "your task"
 ```
 
-The current live gate validates protolink and exposes the agent factories.
-The next implementation step is launching the HTTP/runtime mesh and routing
-the Architect through Explorer and Coder.
+The full protolink A2A mesh factories are in `protoagent_core/agents.py`.
+The immediate CLI runtime uses direct provider HTTP calls so a selected model
+responds right away.

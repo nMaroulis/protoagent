@@ -12,14 +12,13 @@ from typing import Any
 
 from .agents import agent_manifest
 from .config import (
-    load_config,
-    normalize_provider,
     set_active_model,
     set_api_key,
     visible_config,
 )
 from .llm import validate_protolink
 from .models import discover_models
+from .runtime import run_selected_model
 from .tools import build_context_map, safe_path, workspace_root
 
 
@@ -67,25 +66,25 @@ def doctor(workspace: str | None = None) -> str:
 def process_prompt(prompt: str, workspace: str | None = None) -> str:
     """Process a user prompt and return structured CLI output as JSON.
 
-    The default path is a safe scaffold response so the Rust CLI remains usable
-    before local models, provider SDKs, and protolink runtime servers are fully
-    debugged. Set PROTOAGENT_LIVE=1 to opt into the experimental live path once
-    the Python environment is ready.
+    By default this calls the selected provider/model. Set
+    PROTOAGENT_SCAFFOLD=1 to force the old no-model scaffold mode.
     """
     started = time.time()
     workspace = str(workspace_root(workspace))
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
 
-    if os.getenv("PROTOAGENT_LIVE") == "1":
-        try:
-            return _json(_live_placeholder(prompt, workspace, started))
-        except Exception as exc:
-            fallback = _fallback_response(prompt, workspace, started)
-            fallback["status"] = "fallback"
-            fallback["warning"] = f"Live protolink execution failed: {exc}"
-            return _json(fallback)
+    if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
+        return _json(_fallback_response(prompt, workspace, started))
 
-    return _json(_fallback_response(prompt, workspace, started))
+    try:
+        return _json(_model_response(prompt, workspace, started))
+    except Exception as exc:
+        fallback = _fallback_response(prompt, workspace, started)
+        fallback["status"] = "fallback"
+        fallback["headline"] = "Model call failed; showing core diagnostics."
+        fallback["warning"] = str(exc)
+        fallback["events"].append(f"Provider call failed: {exc}")
+        return _json(fallback)
 
 
 def apply_action(action_json: str, workspace: str | None = None) -> str:
@@ -136,14 +135,14 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
         f"Active provider: {provider}\n"
         f"Active model: {model or 'not selected'}\n"
         f"Likely target: {target_label}\n\n"
-        "The Rust CLI is now wired to the Python core. Live protolink execution "
-        "is intentionally gated behind PROTOAGENT_LIVE=1 so provider/runtime "
-        "debugging can happen independently."
+        "The Python core could not complete a provider call, so this diagnostic "
+        "response shows the selected runtime, workspace, and registered tools."
     )
 
     return {
         "status": "ready",
-        "headline": "Core scaffold is ready; live mesh is gated.",
+        "headline": "Core diagnostics are available.",
+        "answer": "",
         "thought_process": thought,
         "file_target": target_label,
         "diff": "",
@@ -157,37 +156,33 @@ def _fallback_response(prompt: str, workspace: str, started: float) -> dict[str,
     }
 
 
-def _live_placeholder(prompt: str, workspace: str, started: float) -> dict[str, Any]:
-    """Experimental hook where real protolink execution will live.
-
-    Keeping this explicit is useful while protolink is alpha: the CLI can be
-    polished and stable while the Python implementation evolves.
-    """
-    protolink = validate_protolink()
-    if not protolink["installed"]:
-        raise RuntimeError(protolink["error"])
-    config = load_config()
-    provider = normalize_provider(config.get("active_provider", "ollama"))
-    model = config.get("providers", {}).get(provider, {}).get("model", "")
+def _model_response(prompt: str, workspace: str, started: float) -> dict[str, Any]:
+    result = run_selected_model(prompt)
+    context = build_context_map(workspace)
+    targets = _extract_file_targets(prompt, context.get("files", []))
+    target_label = ", ".join(targets) if targets else ""
     return {
-        "status": "live-ready",
-        "headline": "Live protolink mode reached the execution gate.",
+        "status": "answered",
+        "headline": "Model response received.",
+        "answer": result["answer"],
         "thought_process": (
-            f"Prompt received for live execution: {prompt}\n"
-            f"Provider: {provider}\nModel: {model or 'provider default'}\n"
-            "Agent factories are available in protoagent_core.agents."
+            f"Request: {prompt}\n\n"
+            f"Workspace: {workspace}\n"
+            f"Active provider: {result['provider']}\n"
+            f"Active model: {result['model']}\n"
+            f"Likely target: {target_label or '(not selected yet)'}"
         ),
-        "file_target": "",
+        "file_target": target_label,
         "diff": "",
         "requires_approval": False,
         "actions": [],
         "events": [
-            "Validated protolink import.",
-            "Loaded active provider and model.",
-            "Live HTTP/runtime mesh launch is the next Python debug step.",
+            "Architect loaded the selected provider and model.",
+            "Provider returned a model response.",
+            "No file actions were requested or applied.",
         ],
-        "provider": provider,
-        "model": model,
+        "provider": result["provider"],
+        "model": result["model"],
         "workspace": workspace,
         "elapsed_ms": int((time.time() - started) * 1000),
     }

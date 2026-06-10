@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
-use std::io::stdout;
+use std::io::{stdout, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -24,6 +24,8 @@ struct CoreResponse {
     status: String,
     #[serde(default)]
     headline: String,
+    #[serde(default)]
+    answer: String,
     #[serde(default)]
     thought_process: String,
     #[serde(default)]
@@ -245,9 +247,9 @@ async fn interactive() -> Result<()> {
     loop {
         print_status_strip(&state);
         let prompt = interactive_prompt(&state);
-        let input = Text::new(&prompt)
-            .with_help_message("/menu, /dashboard, /models, /model, /key, /doctor, /agents, /last, /quit")
-            .prompt()?;
+        let Some(input) = read_primary_input(&prompt)? else {
+            break;
+        };
         let input = input.trim();
         if input.is_empty() {
             continue;
@@ -530,6 +532,11 @@ fn render_response(response: &CoreResponse) -> Result<()> {
 
     if !response.events.is_empty() {
         render_agent_trace(&response.events);
+    }
+
+    if !response.answer.trim().is_empty() {
+        let answer = wrap_lines(&response.answer, panel_inner_width());
+        print_panel("ANSWER", &answer, PanelTone::Cyan);
     }
 
     if !response.file_target.is_empty() {
@@ -1024,6 +1031,18 @@ fn active_label() -> Result<String> {
 
 fn interactive_prompt(state: &SessionState) -> String {
     format!("{} ", style(format!("proto[{:02}]>", state.turn + 1)).bold().magenta())
+}
+
+fn read_primary_input(prompt: &str) -> Result<Option<String>> {
+    print!("{prompt}");
+    stdout().flush()?;
+
+    let mut buffer = String::new();
+    let bytes = std::io::stdin().read_line(&mut buffer)?;
+    if bytes == 0 {
+        return Ok(None);
+    }
+    Ok(Some(buffer.trim_end_matches(['\r', '\n']).to_string()))
 }
 
 fn render_error(message: &str) {
