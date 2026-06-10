@@ -84,11 +84,16 @@ protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 Once the interactive terminal is running, you can use slash commands:
 
 * `/clear` - Clears the current terminal buffer.
+* `/menu` - Opens the command palette.
+* `/dashboard` - Redraws the full cockpit.
 * `/models` - Shows Ollama, LM Studio, llama.cpp, and cloud provider model options.
 * `/model` - Selects the active provider/model.
 * `/key` - Adds an OpenAI, Anthropic, Gemini, or DeepSeek API key.
 * `/config` - Shows the redacted provider config.
 * `/doctor` - Checks Python, protolink, and the active provider.
+* `/agents` - Shows the Architect / Explorer / Coder topology.
+* `/last` - Re-renders the last agent response.
+* `/diff` - Re-renders the last proposed diff.
 * `/help`  - Displays all available commands.
 
 ### Direct Commands
@@ -96,12 +101,18 @@ Once the interactive terminal is running, you can use slash commands:
 ```bash
 cargo run --manifest-path cli/Cargo.toml -- start
 cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
+cargo run --manifest-path cli/Cargo.toml -- dashboard
 cargo run --manifest-path cli/Cargo.toml -- models
 cargo run --manifest-path cli/Cargo.toml -- model
 cargo run --manifest-path cli/Cargo.toml -- key openai
 cargo run --manifest-path cli/Cargo.toml -- config
 cargo run --manifest-path cli/Cargo.toml -- doctor
+cargo run --manifest-path cli/Cargo.toml -- agents
 ```
+
+Interactive mode uses an alternate terminal screen by default so the console
+feels like an agent cockpit and restores your shell when you quit. Set
+`PROTOAGENT_NO_ALT=1` to run it inline.
 
 ---
 

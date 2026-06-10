@@ -1,5 +1,10 @@
 use anyhow::{anyhow, Result};
 use console::{style, Term};
+use crossterm::{
+    cursor::{Hide, Show},
+    execute,
+    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
+};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Confirm, Password, Select, Text};
 use pyo3::prelude::*;
@@ -7,10 +12,14 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
+use std::io::stdout;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Debug, Deserialize)]
+const APP_TITLE: &str = "PROTOAGENT";
+const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
+
+#[derive(Debug, Clone, Deserialize)]
 struct CoreResponse {
     status: String,
     #[serde(default)]
@@ -126,6 +135,46 @@ struct AgentManifest {
     tools: Vec<String>,
 }
 
+#[derive(Default)]
+struct SessionState {
+    turn: usize,
+    last_query: String,
+    last_response: Option<CoreResponse>,
+}
+
+struct TerminalTakeover {
+    active: bool,
+}
+
+impl TerminalTakeover {
+    fn enter() -> Self {
+        if env::var("PROTOAGENT_NO_ALT").is_ok() {
+            return Self { active: false };
+        }
+
+        let mut out = stdout();
+        let active = execute!(
+            out,
+            EnterAlternateScreen,
+            Hide,
+            SetTitle("ProtoAgent // Local Agent Console"),
+            Clear(ClearType::All)
+        )
+        .is_ok();
+
+        Self { active }
+    }
+}
+
+impl Drop for TerminalTakeover {
+    fn drop(&mut self) {
+        if self.active {
+            let mut out = stdout();
+            let _ = execute!(out, Show, LeaveAlternateScreen);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env::set_var("PYTHONDONTWRITEBYTECODE", "1");
@@ -138,7 +187,7 @@ async fn main() -> Result<()> {
                 return Err(anyhow!("Usage: proto-cli run \"your task\""));
             }
             print_header()?;
-            run_orchestration(&query).await
+            run_orchestration(&query).await.map(|_| ())
         }
         Some("models") => {
             print_header()?;
@@ -161,6 +210,13 @@ async fn main() -> Result<()> {
             print_header()?;
             show_doctor()
         }
+        Some("dashboard") | Some("dash") | Some("status") => {
+            show_dashboard()
+        }
+        Some("agents") => {
+            print_header()?;
+            show_agents()
+        }
         Some("help") | Some("--help") | Some("-h") => {
             print_cli_help();
             Ok(())
@@ -173,15 +229,24 @@ async fn main() -> Result<()> {
 }
 
 async fn interactive() -> Result<()> {
+    let _takeover = TerminalTakeover::enter();
     let term = Term::stdout();
     term.clear_screen()?;
-    print_header()?;
-    println!("{}", style("Type /help for commands. Type a task to run the agent deck.").dim());
+    let mut state = SessionState::default();
+
+    show_dashboard()?;
+    println!(
+        "{}",
+        style("Press /menu for the command palette. Type a task to launch the agent deck.")
+            .dim()
+            .italic()
+    );
 
     loop {
-        let prompt = format!("{} ", style("proto>").bold().cyan());
+        print_status_strip(&state);
+        let prompt = interactive_prompt(&state);
         let input = Text::new(&prompt)
-            .with_help_message("task, /models, /model, /key, /doctor, /quit")
+            .with_help_message("/menu, /dashboard, /models, /model, /key, /doctor, /agents, /last, /quit")
             .prompt()?;
         let input = input.trim();
         if input.is_empty() {
@@ -189,36 +254,46 @@ async fn interactive() -> Result<()> {
         }
 
         if input.starts_with('/') {
-            match handle_slash_command(input, &term).await {
+            match handle_slash_command(input, &term, &mut state).await {
                 Ok(should_continue) => {
                     if !should_continue {
                         break;
                     }
                 }
-                Err(err) => println!("{} {err}", style("error:").red().bold()),
+                Err(err) => render_error(&err.to_string()),
             }
             continue;
         }
 
-        run_orchestration(input).await?;
+        state.turn += 1;
+        state.last_query = input.to_string();
+        match run_orchestration(input).await {
+            Ok(response) => state.last_response = Some(response),
+            Err(err) => render_error(&err.to_string()),
+        }
     }
 
-    println!("{}", style("Neon link closed.").cyan().bold());
+    println!("{}", style("Session restored to your shell.").cyan().bold());
     Ok(())
 }
 
-async fn handle_slash_command(input: &str, term: &Term) -> Result<bool> {
+async fn handle_slash_command(input: &str, term: &Term, state: &mut SessionState) -> Result<bool> {
     let mut parts = input.split_whitespace();
     let command = parts.next().unwrap_or("");
     match command {
         "/quit" | "/exit" => Ok(false),
         "/clear" => {
             term.clear_screen()?;
-            print_header()?;
+            show_dashboard()?;
             Ok(true)
         }
         "/help" => {
             print_interactive_help();
+            Ok(true)
+        }
+        "/menu" | "/palette" => command_palette(state).await,
+        "/dashboard" | "/dash" | "/status" => {
+            show_dashboard()?;
             Ok(true)
         }
         "/models" => {
@@ -241,65 +316,169 @@ async fn handle_slash_command(input: &str, term: &Term) -> Result<bool> {
             show_doctor()?;
             Ok(true)
         }
+        "/agents" => {
+            show_agents()?;
+            Ok(true)
+        }
+        "/last" => {
+            show_last_response(state)?;
+            Ok(true)
+        }
+        "/diff" => {
+            show_last_diff(state)?;
+            Ok(true)
+        }
         "/run" => {
             let query = parts.collect::<Vec<_>>().join(" ");
             if query.trim().is_empty() {
                 println!("{}", style("Usage: /run your task").yellow());
             } else {
-                run_orchestration(&query).await?;
+                state.turn += 1;
+                state.last_query = query.clone();
+                state.last_response = Some(run_orchestration(&query).await?);
             }
             Ok(true)
         }
         _ => {
-            println!("{}", style("Unknown slash command. Try /help.").yellow());
+            println!("{}", style("Unknown slash command. Try /menu or /help.").yellow());
             Ok(true)
         }
     }
 }
 
+async fn command_palette(state: &mut SessionState) -> Result<bool> {
+    let choices = vec![
+        "Run task",
+        "Dashboard",
+        "Model radar",
+        "Choose model",
+        "Add API key",
+        "Doctor",
+        "Agent topology",
+        "Config",
+        "Last response",
+        "Last diff",
+        "Clear screen",
+        "Quit session",
+    ];
+    let selected = Select::new("Command palette", choices).prompt()?;
+    match selected {
+        "Run task" => {
+            let query = Text::new("Task").prompt()?;
+            if !query.trim().is_empty() {
+                state.turn += 1;
+                state.last_query = query.trim().to_string();
+                state.last_response = Some(run_orchestration(query.trim()).await?);
+            }
+            Ok(true)
+        }
+        "Dashboard" => {
+            show_dashboard()?;
+            Ok(true)
+        }
+        "Model radar" => {
+            show_models()?;
+            Ok(true)
+        }
+        "Choose model" => {
+            choose_model(None)?;
+            Ok(true)
+        }
+        "Add API key" => {
+            add_key(None)?;
+            Ok(true)
+        }
+        "Doctor" => {
+            show_doctor()?;
+            Ok(true)
+        }
+        "Agent topology" => {
+            show_agents()?;
+            Ok(true)
+        }
+        "Config" => {
+            show_config()?;
+            Ok(true)
+        }
+        "Last response" => {
+            show_last_response(state)?;
+            Ok(true)
+        }
+        "Last diff" => {
+            show_last_diff(state)?;
+            Ok(true)
+        }
+        "Clear screen" => {
+            Term::stdout().clear_screen()?;
+            show_dashboard()?;
+            Ok(true)
+        }
+        "Quit session" => Ok(false),
+        _ => Ok(true),
+    }
+}
+
 fn print_header() -> Result<()> {
-    println!();
-    println!("{}", style("PROTOAGENT").bold().magenta());
-    println!("{}", style("NEON LOCAL AGENT DECK // MIAMI-80 TERMINAL MODE").cyan());
-    println!("{}", style("Architect -> Explorer -> Coder | powered by core/protoagent_core").dim());
-    println!();
+    render_brand_header();
     Ok(())
 }
 
 fn print_cli_help() {
-    println!("{}", style("ProtoAgent CLI").bold().cyan());
-    println!("  proto-cli start              Start interactive mode");
+    render_brand_header();
+    println!("{}", style("Commands").bold().underlined());
+    println!("  proto-cli start              Enter the full-screen agent console");
     println!("  proto-cli run \"task\"         Run one task");
+    println!("  proto-cli dashboard          Show cockpit status");
     println!("  proto-cli models             Show detected local/API models");
     println!("  proto-cli model              Pick active provider/model");
     println!("  proto-cli key [provider]     Add API key");
     println!("  proto-cli config             Show current config");
     println!("  proto-cli doctor             Check Python/protolink/providers");
+    println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
+    println!();
 }
 
 fn print_interactive_help() {
-    println!();
-    println!("{}", style("Commands").bold().underlined());
-    println!("  {}   Browse Ollama, LM Studio, llama.cpp, and API models", style("/models").cyan());
-    println!("  {}    Select active provider and model", style("/model").cyan());
-    println!("  {}      Add an API key for OpenAI, Anthropic, Gemini, or DeepSeek", style("/key").cyan());
-    println!("  {}   Show redacted config", style("/config").cyan());
-    println!("  {}   Check Python core, protolink, and active provider", style("/doctor").cyan());
-    println!("  {}    Clear the terminal", style("/clear").cyan());
-    println!("  {}     Exit", style("/quit").cyan());
-    println!();
+    let rows = vec![
+        "/menu       Command palette".to_string(),
+        "/dashboard  Cockpit overview".to_string(),
+        "/models     Model radar for Ollama, LM Studio, llama.cpp, and APIs".to_string(),
+        "/model      Select active provider/model".to_string(),
+        "/key        Store a cloud provider key".to_string(),
+        "/doctor     Runtime checks".to_string(),
+        "/agents     Agent topology and tool isolation".to_string(),
+        "/last       Re-render the last response".to_string(),
+        "/diff       Re-render the last proposed diff".to_string(),
+        "/clear      Redraw console".to_string(),
+        "/quit       Leave the console".to_string(),
+    ];
+    print_panel("COMMANDS", &rows, PanelTone::Cyan);
 }
 
-async fn run_orchestration(query: &str) -> Result<()> {
+async fn run_orchestration(query: &str) -> Result<CoreResponse> {
+    render_run_banner(query);
+
     let m = MultiProgress::new();
     let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
         .tick_chars(">|/-\\");
 
-    let pb = m.add(ProgressBar::new_spinner());
-    pb.set_style(spinner_style);
-    pb.set_prefix("[deck]");
-    pb.set_message("Architect is routing through the Python core...");
-    pb.enable_steady_tick(Duration::from_millis(90));
+    let pb_architect = m.add(ProgressBar::new_spinner());
+    pb_architect.set_style(spinner_style.clone());
+    pb_architect.set_prefix("[architect]");
+    pb_architect.set_message("routing request through the Python core");
+    pb_architect.enable_steady_tick(Duration::from_millis(80));
+
+    let pb_explorer = m.add(ProgressBar::new_spinner());
+    pb_explorer.set_style(spinner_style.clone());
+    pb_explorer.set_prefix("[explorer]");
+    pb_explorer.set_message("mapping workspace context");
+    pb_explorer.enable_steady_tick(Duration::from_millis(120));
+
+    let pb_coder = m.add(ProgressBar::new_spinner());
+    pb_coder.set_style(spinner_style);
+    pb_coder.set_prefix("[coder]");
+    pb_coder.set_message("preparing approval-safe output");
+    pb_coder.enable_steady_tick(Duration::from_millis(100));
 
     let prompt = query.to_string();
     let workspace = workspace_dir_string();
@@ -307,83 +486,122 @@ async fn run_orchestration(query: &str) -> Result<()> {
         .await?
         .map_err(|err| anyhow!("Python core error: {err:?}"))?;
 
-    pb.finish_and_clear();
+    pb_architect.finish_with_message("request routed");
+    pb_explorer.finish_with_message("context mapped");
+    pb_coder.finish_with_message("output assembled");
+    m.clear()?;
+
     let response: CoreResponse = serde_json::from_str(&json)?;
     render_response(&response)?;
 
     if response.requires_approval || !response.actions.is_empty() {
+        render_approval_gate(&response);
         let approve = Confirm::new("Apply the proposed action payloads?")
             .with_default(false)
             .prompt()?;
         if approve {
             apply_actions(&response.actions, &response.workspace)?;
         } else {
-            println!("{}", style("No files changed.").yellow().bold());
+            println!("{}", style("Approval denied. No files changed.").yellow().bold());
         }
     }
 
-    Ok(())
+    Ok(response)
 }
 
 fn render_response(response: &CoreResponse) -> Result<()> {
-    println!(
-        "{} {}",
-        style("status:").bold().cyan(),
-        style(&response.status).bold()
-    );
+    let model = if response.model.is_empty() {
+        "not selected"
+    } else {
+        response.model.as_str()
+    };
+    let mut summary = vec![
+        format!("Status      : {}", response.status),
+        format!("Provider    : {} / {}", empty_as_unknown(&response.provider), model),
+        format!("Elapsed     : {} ms", response.elapsed_ms),
+    ];
     if !response.headline.is_empty() {
-        println!("{} {}", style("headline:").bold().magenta(), response.headline);
-    }
-    if !response.provider.is_empty() {
-        let model = if response.model.is_empty() {
-            "not selected"
-        } else {
-            response.model.as_str()
-        };
-        println!("{} {} / {}", style("model:").bold().cyan(), response.provider, model);
-    }
-    if response.elapsed_ms > 0 {
-        println!("{} {} ms", style("elapsed:").bold().cyan(), response.elapsed_ms);
+        summary.push(format!("Headline    : {}", response.headline));
     }
     if !response.warning.is_empty() {
-        println!("{} {}", style("warning:").yellow().bold(), response.warning);
+        summary.push(format!("Warning     : {}", response.warning));
     }
+    print_panel("RUN SUMMARY", &summary, PanelTone::Magenta);
 
     if !response.events.is_empty() {
-        println!();
-        println!("{}", style("Agent Trace").bold().underlined());
-        for event in &response.events {
-            println!("  {} {}", style(">").magenta(), event);
-        }
-    }
-
-    if !response.thought_process.is_empty() {
-        println!();
-        println!("{}", style("Core Notes").bold().underlined());
-        println!("{}", style(&response.thought_process).dim());
+        render_agent_trace(&response.events);
     }
 
     if !response.file_target.is_empty() {
-        println!();
-        println!("{} {}", style("target:").bold().cyan(), response.file_target);
+        print_panel("TARGET", &[response.file_target.clone()], PanelTone::Cyan);
+    }
+
+    if !response.thought_process.is_empty() {
+        let notes = wrap_lines(&response.thought_process, panel_inner_width());
+        print_panel("CORE NOTES", &notes, PanelTone::Dim);
     }
 
     if !response.diff.trim().is_empty() {
-        println!();
-        println!("{}", style("Proposed Diff").bold().underlined());
-        println!("{}", style(&response.diff).green());
+        render_diff(&response.diff);
     }
 
     if !response.actions.is_empty() {
-        println!();
-        println!(
-            "{} {} pending action(s)",
-            style("approval:").bold().yellow(),
-            response.actions.len()
+        print_panel(
+            "PENDING ACTIONS",
+            &[format!("{} approval payload(s) waiting at the gate", response.actions.len())],
+            PanelTone::Yellow,
         );
     }
-    println!();
     Ok(())
+}
+
+fn render_run_banner(query: &str) {
+    println!();
+    println!("{}", style(repeat_char('=', terminal_width())).magenta());
+    println!("{}", style("RUN CHANNEL OPEN").bold().magenta());
+    println!("{}", style(truncate_plain(query, terminal_width().saturating_sub(4))).cyan());
+    println!("{}", style(repeat_char('-', terminal_width())).dim());
+}
+
+fn render_agent_trace(events: &[String]) {
+    println!("{}", style("AGENT TRACE").bold().underlined().cyan());
+    for (idx, event) in events.iter().enumerate() {
+        let label = match idx % 3 {
+            0 => style("ARCH").magenta().bold(),
+            1 => style("EXPL").cyan().bold(),
+            _ => style("CODE").yellow().bold(),
+        };
+        println!("  {} {} {}", style(format!("{:02}", idx + 1)).dim(), label, event);
+    }
+    println!();
+}
+
+fn render_diff(diff: &str) {
+    println!("{}", style("PROPOSED DIFF").bold().underlined().cyan());
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            println!("{}", style(line).green());
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            println!("{}", style(line).red());
+        } else if line.starts_with("@@") {
+            println!("{}", style(line).cyan().bold());
+        } else {
+            println!("{}", style(line).dim());
+        }
+    }
+    println!();
+}
+
+fn render_approval_gate(response: &CoreResponse) {
+    let mut rows = vec![
+        "Human approval required before side effects are applied.".to_string(),
+        format!("Workspace : {}", empty_as_unknown(&response.workspace)),
+        format!("Actions   : {}", response.actions.len()),
+    ];
+    if !response.file_target.is_empty() {
+        rows.push(format!("Target    : {}", response.file_target));
+    }
+    print_panel("APPROVAL GATE", &rows, PanelTone::Yellow);
 }
 
 fn apply_actions(actions: &[Value], workspace: &str) -> Result<()> {
@@ -401,72 +619,144 @@ fn apply_actions(actions: &[Value], workspace: &str) -> Result<()> {
     Ok(())
 }
 
+fn show_dashboard() -> Result<()> {
+    render_brand_header();
+    let inventory = load_inventory();
+    let config = load_visible_config();
+    let workspace = workspace_dir_string();
+
+    let mut rows = vec![format!("Workspace : {}", workspace)];
+    match &config {
+        Ok(config) => {
+            let provider = &config.active_provider;
+            let model = config
+                .providers
+                .get(provider)
+                .map(|data| data.model.as_str())
+                .unwrap_or("");
+            rows.push(format!("Provider  : {}", provider));
+            rows.push(format!("Model     : {}", if model.is_empty() { "not selected" } else { model }));
+            rows.push(format!("Config    : {}", config.config_path));
+        }
+        Err(err) => rows.push(format!("Config    : unavailable ({err})")),
+    }
+    match &inventory {
+        Ok(inventory) => {
+            let total_models: usize = inventory.providers.iter().map(|provider| provider.models.len()).sum();
+            let online = inventory
+                .providers
+                .iter()
+                .filter(|provider| provider.status == "online" || provider.status == "configured")
+                .count();
+            rows.push(format!("Models    : {} visible across {} providers", total_models, inventory.providers.len()));
+            rows.push(format!("Ready     : {} provider(s)", online));
+        }
+        Err(err) => rows.push(format!("Models    : unavailable ({err})")),
+    }
+    print_panel("COCKPIT", &rows, PanelTone::Magenta);
+
+    print_agent_graph();
+
+    if let Ok(inventory) = inventory {
+        render_provider_strip(&inventory);
+    }
+
+    let commands = vec![
+        "/menu opens the command palette".to_string(),
+        "/models scans local and cloud model options".to_string(),
+        "/doctor checks runtime wiring".to_string(),
+        "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
+    ];
+    print_panel("HOTKEYS", &commands, PanelTone::Cyan);
+    Ok(())
+}
+
 fn show_models() -> Result<()> {
     let inventory = load_inventory()?;
-    println!("{}", style("Model Radar").bold().underlined());
-    println!(
-        "{} {} / {}",
-        style("active:").cyan().bold(),
-        inventory.active_provider,
-        if inventory.active_model.is_empty() {
-            "not selected"
-        } else {
-            inventory.active_model.as_str()
-        }
+    print_panel(
+        "MODEL RADAR",
+        &[
+            format!(
+                "Active : {} / {}",
+                inventory.active_provider,
+                if inventory.active_model.is_empty() {
+                    "not selected"
+                } else {
+                    inventory.active_model.as_str()
+                }
+            ),
+            format!("Config : {}", inventory.config_path),
+        ],
+        PanelTone::Magenta,
     );
-    println!("{} {}", style("config:").cyan().bold(), inventory.config_path);
-    println!();
 
     for provider in &inventory.providers {
-        let status = status_style(&provider.status);
-        println!(
-            "{} {} [{}] {} {}",
-            style(&provider.name).bold().magenta(),
-            style(format!("({})", provider.id)).dim(),
-            provider.kind,
-            status,
-            if provider.configured {
-                style("ready").green().dim().to_string()
-            } else {
-                style("setup").yellow().dim().to_string()
-            }
-        );
-        if !provider.base_url.is_empty() {
-            println!("  base: {}", style(&provider.base_url).dim());
-        }
-        if provider.models.is_empty() {
-            let hint = if provider.hint.is_empty() {
-                "No models reported."
-            } else {
-                provider.hint.as_str()
-            };
-            println!("  {}", style(hint).yellow());
-        } else {
-            for model in provider.models.iter().take(10) {
-                let size = if model.size_label.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", style(format!("[{}]", model.size_label)).dim())
-                };
-                let source = if model.source.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", style(format!("via {}", model.source)).dim())
-                };
-                let modified = if model.modified_at.is_empty() {
-                    String::new()
-                } else {
-                    format!(" {}", style(&model.modified_at).dim())
-                };
-                println!("  - {}{}{}{}", model.id, size, source, modified);
-            }
-            if provider.models.len() > 10 {
-                println!("  {}", style(format!("...and {} more", provider.models.len() - 10)).dim());
-            }
-        }
-        println!();
+        render_provider_card(provider);
     }
     Ok(())
+}
+
+fn render_provider_strip(inventory: &ModelInventory) {
+    let mut rows = Vec::new();
+    for provider in &inventory.providers {
+        rows.push(format!(
+            "{:<18} {:<11} {:>2} model(s) {}",
+            provider.name,
+            provider.status,
+            provider.models.len(),
+            if provider.configured { "ready" } else { "setup" }
+        ));
+    }
+    print_panel("PROVIDERS", &rows, PanelTone::Dim);
+}
+
+fn render_provider_card(provider: &ModelProvider) {
+    let mut rows = vec![
+        format!("Kind   : {}", provider.kind),
+        format!("Status : {} ({})", provider.status, if provider.configured { "ready" } else { "setup" }),
+    ];
+    if !provider.base_url.is_empty() {
+        rows.push(format!("Base   : {}", provider.base_url));
+    }
+    if provider.models.is_empty() {
+        rows.push(format!(
+            "Models : {}",
+            if provider.hint.is_empty() {
+                "none reported"
+            } else {
+                provider.hint.as_str()
+            }
+        ));
+    } else {
+        rows.push(format!("Models : {}", provider.models.len()));
+        for model in provider.models.iter().take(8) {
+            let size = if model.size_label.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", model.size_label)
+            };
+            let source = if model.source.is_empty() {
+                String::new()
+            } else {
+                format!(" via {}", model.source)
+            };
+            let modified = if model.modified_at.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", model.modified_at)
+            };
+            rows.push(format!("  - {}{}{}{}", model.id, size, source, modified));
+        }
+        if provider.models.len() > 8 {
+            rows.push(format!("  ...and {} more", provider.models.len() - 8));
+        }
+    }
+    let tone = match provider.status.as_str() {
+        "online" | "configured" | "detected" => PanelTone::Cyan,
+        "needs-key" | "not-found" => PanelTone::Yellow,
+        _ => PanelTone::Dim,
+    };
+    print_panel(&format!("{} ({})", provider.name, provider.id), &rows, tone);
 }
 
 fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
@@ -523,11 +813,10 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
 
     call_set_model(provider.id.clone(), model.clone(), base_url)
         .map_err(|err| anyhow!("Python config error: {err:?}"))?;
-    println!(
-        "{} {} / {}",
-        style("selected:").green().bold(),
-        provider.id,
-        model
+    print_panel(
+        "MODEL SELECTED",
+        &[format!("{} / {}", provider.id, model)],
+        PanelTone::Cyan,
     );
     Ok(())
 }
@@ -545,12 +834,10 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
         None => Select::new("Cloud provider", providers).prompt()?,
     };
 
-    let api_key = Password::new("API key")
-        .without_confirmation()
-        .prompt()?;
+    let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.clone(), api_key)
         .map_err(|err| anyhow!("Python config error: {err:?}"))?;
-    println!("{} {}", style("stored key for").green().bold(), provider);
+    print_panel("KEY STORED", &[format!("Provider: {}", provider)], PanelTone::Cyan);
 
     if Confirm::new("Choose a model for this provider now?")
         .with_default(true)
@@ -562,76 +849,131 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
 }
 
 fn show_config() -> Result<()> {
-    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err:?}"))?;
-    let config: VisibleConfig = serde_json::from_str(&json)?;
-    println!("{}", style("Configuration").bold().underlined());
-    println!("{} {}", style("path:").cyan().bold(), config.config_path);
-    println!("{} {}", style("active:").cyan().bold(), config.active_provider);
-    println!();
+    let config = load_visible_config()?;
+    print_panel(
+        "CONFIGURATION",
+        &[
+            format!("Path   : {}", config.config_path),
+            format!("Active : {}", config.active_provider),
+        ],
+        PanelTone::Magenta,
+    );
 
     let mut providers: Vec<_> = config.providers.iter().collect();
     providers.sort_by(|a, b| a.0.cmp(b.0));
     for (id, provider) in providers {
-        println!("{} {}", style(id).bold().magenta(), provider.label);
-        println!(
-            "  model: {}",
-            if provider.model.is_empty() {
-                style("not selected").yellow().to_string()
-            } else {
-                provider.model.clone()
-            }
-        );
+        let mut rows = vec![
+            format!("Label : {}", provider.label),
+            format!(
+                "Model : {}",
+                if provider.model.is_empty() {
+                    "not selected"
+                } else {
+                    provider.model.as_str()
+                }
+            ),
+        ];
         if !provider.base_url.is_empty() {
-            println!("  base: {}", style(&provider.base_url).dim());
+            rows.push(format!("Base  : {}", provider.base_url));
         }
         if provider.api_key_set {
             let source = if provider.from_env { "env" } else { "config" };
-            println!("  key: {} ({source})", provider.api_key);
+            rows.push(format!("Key   : {} ({source})", provider.api_key));
         }
+        print_panel(id, &rows, PanelTone::Dim);
     }
-    println!();
     Ok(())
 }
 
 fn show_doctor() -> Result<()> {
-    let json = call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
-    let report: DoctorReport = serde_json::from_str(&json)?;
-    println!("{}", style("Doctor").bold().underlined());
-    println!("{} {}", style("python:").cyan().bold(), report.python);
-    println!("{} {}", style("platform:").cyan().bold(), report.platform);
-    println!("{} {}", style("workspace:").cyan().bold(), report.workspace);
-    println!("{} {}", style("config:").cyan().bold(), report.config_path);
-    println!(
-        "{} {}",
-        style("protolink:").cyan().bold(),
-        if report.protolink.installed {
-            style("installed").green().to_string()
-        } else {
-            style(format!("missing ({})", report.protolink.error)).yellow().to_string()
-        }
+    let report = load_doctor()?;
+    print_panel(
+        "DOCTOR",
+        &[
+            format!("Python    : {}", report.python),
+            format!("Platform  : {}", report.platform),
+            format!("Workspace : {}", report.workspace),
+            format!("Config    : {}", report.config_path),
+            format!(
+                "Protolink : {}",
+                if report.protolink.installed {
+                    "installed".to_string()
+                } else {
+                    format!("missing ({})", report.protolink.error)
+                }
+            ),
+            format!(
+                "Active    : {} / {} [{}]",
+                report.active_provider,
+                if report.active_model.is_empty() {
+                    "not selected"
+                } else {
+                    report.active_model.as_str()
+                },
+                report.active_provider_status
+            ),
+        ],
+        PanelTone::Magenta,
     );
-    println!(
-        "{} {} / {} [{}]",
-        style("active:").cyan().bold(),
-        report.active_provider,
-        if report.active_model.is_empty() {
-            "not selected"
-        } else {
-            report.active_model.as_str()
-        },
-        report.active_provider_status
-    );
-    println!();
-    println!("{}", style("Agents").bold().underlined());
-    for agent in report.agents {
-        println!(
-            "  {} {} - {}",
-            style(agent.name).magenta().bold(),
-            style(format!("({})", agent.role)).dim(),
-            agent.tools.join(", ")
-        );
+
+    let rows: Vec<String> = report
+        .agents
+        .iter()
+        .map(|agent| format!("{} ({}) -> {}", agent.name, agent.role, agent.tools.join(", ")))
+        .collect();
+    print_panel("AGENTS", &rows, PanelTone::Cyan);
+    Ok(())
+}
+
+fn show_agents() -> Result<()> {
+    print_agent_graph();
+    if let Ok(report) = load_doctor() {
+        let rows: Vec<String> = report
+            .agents
+            .iter()
+            .map(|agent| format!("{} ({}) -> {}", agent.name, agent.role, agent.tools.join(", ")))
+            .collect();
+        print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
     }
-    println!();
+    Ok(())
+}
+
+fn print_agent_graph() {
+    let rows = vec![
+        "[USER]".to_string(),
+        "   |".to_string(),
+        "   v".to_string(),
+        "[ARCHITECT] intent, routing, approval gate".to_string(),
+        "   |".to_string(),
+        "   +--> [EXPLORER] read_file, list_directory, search_regex, git status".to_string(),
+        "   |".to_string(),
+        "   +--> [CODER] generate_unified_diff, create_new_file".to_string(),
+        "   |".to_string(),
+        "   v".to_string(),
+        "[HUMAN APPROVAL] before writes land on disk".to_string(),
+    ];
+    print_panel("AGENT DECK", &rows, PanelTone::Magenta);
+}
+
+fn show_last_response(state: &SessionState) -> Result<()> {
+    if let Some(response) = &state.last_response {
+        render_response(response)
+    } else {
+        print_panel("LAST RESPONSE", &["No response in this session yet.".to_string()], PanelTone::Yellow);
+        Ok(())
+    }
+}
+
+fn show_last_diff(state: &SessionState) -> Result<()> {
+    if let Some(response) = &state.last_response {
+        if response.diff.trim().is_empty() {
+            print_panel("LAST DIFF", &["No diff in the last response.".to_string()], PanelTone::Yellow);
+        } else {
+            render_diff(&response.diff);
+        }
+    } else {
+        print_panel("LAST DIFF", &["No response in this session yet.".to_string()], PanelTone::Yellow);
+    }
     Ok(())
 }
 
@@ -640,11 +982,169 @@ fn load_inventory() -> Result<ModelInventory> {
     Ok(serde_json::from_str(&json)?)
 }
 
-fn status_style(status: &str) -> String {
-    match status {
-        "online" | "configured" | "detected" => style(status).green().bold().to_string(),
-        "needs-key" | "not-found" => style(status).yellow().bold().to_string(),
-        _ => style(status).red().bold().to_string(),
+fn load_visible_config() -> Result<VisibleConfig> {
+    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err:?}"))?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+fn load_doctor() -> Result<DoctorReport> {
+    let json = call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
+    Ok(serde_json::from_str(&json)?)
+}
+
+fn print_status_strip(state: &SessionState) {
+    let active = active_label().unwrap_or_else(|_| "provider: unknown / model: unknown".to_string());
+    let last = if state.last_query.is_empty() {
+        "last: none".to_string()
+    } else {
+        format!("last: {}", truncate_plain(&state.last_query, 34))
+    };
+    println!(
+        "{} {} {}",
+        style(format!("[turn {:02}]", state.turn + 1)).magenta().bold(),
+        style(active).cyan(),
+        style(last).dim()
+    );
+}
+
+fn active_label() -> Result<String> {
+    let config = load_visible_config()?;
+    let provider = config.active_provider;
+    let model = config
+        .providers
+        .get(&provider)
+        .map(|data| data.model.as_str())
+        .unwrap_or("");
+    Ok(format!(
+        "provider: {} / model: {}",
+        provider,
+        if model.is_empty() { "not selected" } else { model }
+    ))
+}
+
+fn interactive_prompt(state: &SessionState) -> String {
+    format!("{} ", style(format!("proto[{:02}]>", state.turn + 1)).bold().magenta())
+}
+
+fn render_error(message: &str) {
+    print_panel("ERROR", &[message.to_string()], PanelTone::Yellow);
+}
+
+#[derive(Clone, Copy)]
+enum PanelTone {
+    Magenta,
+    Cyan,
+    Yellow,
+    Dim,
+}
+
+fn print_panel(title: &str, rows: &[String], tone: PanelTone) {
+    let width = terminal_width();
+    let inner = width.saturating_sub(4).max(24);
+    let title_text = format!(" {} ", title);
+    let line_len = width.saturating_sub(title_text.len() + 3).max(2);
+    let top = format!("+{}{}+", title_text, repeat_char('-', line_len));
+    println!("{}", tone_style(&top, tone).bold());
+    if rows.is_empty() {
+        println!("| {:<inner$} |", "", inner = inner);
+    }
+    for row in rows {
+        for wrapped in wrap_lines(row, inner) {
+            println!("| {:<inner$} |", truncate_plain(&wrapped, inner), inner = inner);
+        }
+    }
+    println!("{}", tone_style(&format!("+{}+", repeat_char('-', width.saturating_sub(2))), tone).bold());
+    println!();
+}
+
+fn render_brand_header() {
+    let width = terminal_width();
+    println!();
+    println!("{}", style(repeat_char('=', width)).magenta().bold());
+    println!("{}", style(APP_TITLE).bold().magenta());
+    println!("{}", style(TAGLINE).cyan().bold());
+    println!("{}", style("Architect -> Explorer -> Coder // approval-gated local ops").dim());
+    println!("{}", style(repeat_char('=', width)).magenta().bold());
+    println!();
+}
+
+fn tone_style(text: &str, tone: PanelTone) -> console::StyledObject<&str> {
+    match tone {
+        PanelTone::Magenta => style(text).magenta(),
+        PanelTone::Cyan => style(text).cyan(),
+        PanelTone::Yellow => style(text).yellow(),
+        PanelTone::Dim => style(text).dim(),
+    }
+}
+
+fn terminal_width() -> usize {
+    let (_rows, cols) = Term::stdout().size();
+    (cols as usize).clamp(72, 118)
+}
+
+fn panel_inner_width() -> usize {
+    terminal_width().saturating_sub(4).max(24)
+}
+
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw_line in text.lines() {
+        let mut line = raw_line.trim_end().to_string();
+        if line.is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        while line.chars().count() > width {
+            let split = split_at_width(&line, width);
+            out.push(split.0.trim_end().to_string());
+            line = split.1.trim_start().to_string();
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn split_at_width(text: &str, width: usize) -> (String, String) {
+    let mut split_byte = text.len();
+    let mut last_space = None;
+    for (idx, (byte_idx, ch)) in text.char_indices().enumerate() {
+        if idx >= width {
+            split_byte = last_space.unwrap_or(byte_idx);
+            break;
+        }
+        if ch.is_whitespace() {
+            last_space = Some(byte_idx);
+        }
+    }
+    let (left, right) = text.split_at(split_byte);
+    (left.to_string(), right.to_string())
+}
+
+fn truncate_plain(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return text.to_string();
+    }
+    if width <= 3 {
+        return repeat_char('.', width);
+    }
+    let mut value: String = text.chars().take(width - 3).collect();
+    value.push_str("...");
+    value
+}
+
+fn repeat_char(ch: char, width: usize) -> String {
+    std::iter::repeat(ch).take(width).collect()
+}
+
+fn empty_as_unknown(value: &str) -> &str {
+    if value.is_empty() {
+        "unknown"
+    } else {
+        value
     }
 }
 
@@ -660,7 +1160,10 @@ fn call_process_prompt(prompt: String, workspace: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("process_prompt")?.call1((prompt, workspace))?.extract()
+        module
+            .getattr("process_prompt")?
+            .call1((prompt, workspace))?
+            .extract()
     })
 }
 

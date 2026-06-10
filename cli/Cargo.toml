@@ -8,6 +8,7 @@ tokio = { version = "1.36", features = ["full"] }
 inquire = "0.7.5"
 indicatif = "0.17.8"
 console = "0.15.8"
+crossterm = "0.25.0"
 anyhow = "1.0.81"
 pyo3 = { version = "0.28.3", features = ["auto-initialize"] }
 serde = { version = "1.0.228", features = ["derive"] }
