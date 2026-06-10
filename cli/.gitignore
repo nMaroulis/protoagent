@@ -1,0 +1,11 @@
+# MacOS vars
+.DS_Store
+
+# Rust
+/target/
+Cargo.lock
+
+# Python
+.venv/
+__pycache__/
+*.pyc

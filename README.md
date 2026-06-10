@@ -1,10 +1,8 @@
-    ██████╗ ██████╗  ██████╗ ████████╗ ██████╗  █████╗  ██████╗ ███████╗███╗   ██╗████████╗
-    ██╔══██╗██╔══██╗██╔═══██╗╚══██╔══╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝
-    ██████╔╝██████╔╝██║   ██║   ██║   ██║   ██║███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   
-    ██╔═══╝ ██╔══██╗██║   ██║   ██║   ██║   ██║██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   
-    ██║     ██║  ██║╚██████╔╝   ██║   ╚██████╔╝██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   
-    ╚═╝     ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝ ╚═╝  ╚═╝ ╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝   
-                            ⚡ LOCAL ENGINE ACTIVE ⚡
+# ProtoAgent
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/nMaroulis/protoagent/misc/assets/banner.jepg" alt="ProtoAgent Logo" width="60%">
+</div>
 
 **An enterprise-grade, local-first AI agent ecosystem engineered for speed, privacy, and absolute developer control.** *Note: The formal orchestration architecture and mathematical routing models are currently being formalized. (White paper pending).*
 
@@ -19,7 +17,7 @@ ProtoAgent isn't just a script; it's a unified, modular ecosystem. By keeping th
 ### 1. The Core Engine (The Brain)
 
 **Powered by `protolink` • Python**
-If **LangChain** is the massive, heavy enterprise framework for cloud models, `protolink` is the lightning-fast, minimalist alternative engineered strictly for local execution.
+If **LangChain** is the massive, heavy enterprise framework for cloud models, `protolink` is the lightning-fast, minimalist alternative engineered strictly building autonomous agents using a simple intuitive API, powered by the Agent-to-Agent (A2A) protocol.
 
 * **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. Protolink acts as a buffer, specifically hand-holding 7B/8B parameter models (like Qwen, Llama 3) through strict multi-agent loops (Planner ➔ Coder ➔ Critic) without them hallucinating or breaking syntax.
 * **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits strict JSON task payloads.
