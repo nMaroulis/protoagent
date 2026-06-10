@@ -84,8 +84,24 @@ protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 Once the interactive terminal is running, you can use slash commands:
 
 * `/clear` - Clears the current terminal buffer.
-* `/reset` - Wipes the agent's memory for the current session.
+* `/models` - Shows Ollama, LM Studio, llama.cpp, and cloud provider model options.
+* `/model` - Selects the active provider/model.
+* `/key` - Adds an OpenAI, Anthropic, Gemini, or DeepSeek API key.
+* `/config` - Shows the redacted provider config.
+* `/doctor` - Checks Python, protolink, and the active provider.
 * `/help`  - Displays all available commands.
+
+### Direct Commands
+
+```bash
+cargo run --manifest-path cli/Cargo.toml -- start
+cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
+cargo run --manifest-path cli/Cargo.toml -- models
+cargo run --manifest-path cli/Cargo.toml -- model
+cargo run --manifest-path cli/Cargo.toml -- key openai
+cargo run --manifest-path cli/Cargo.toml -- config
+cargo run --manifest-path cli/Cargo.toml -- doctor
+```
 
 ---
 
