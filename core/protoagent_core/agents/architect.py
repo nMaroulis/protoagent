@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .common import QUIET_LOGGER, create_selected_llm, record_side_effect, resolve_agent_url
+from .common import (
+    QUIET_LOGGER,
+    create_selected_llm,
+    record_side_effect,
+    resolve_agent_url,
+    set_transport_timeout,
+)
 
 ARCHITECT_SYSTEM_PROMPT = """You are the ProtoAgent Architect, a local-first coding coordinator.
 
@@ -36,6 +42,7 @@ def create_architect_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
+    transport: str = "sse",
     side_effects: list[dict[str, Any]] | None = None,
 ):
     """Create the user-facing orchestrator agent."""
@@ -58,14 +65,14 @@ def create_architect_agent(
             },
             "tags": ["protoagent", "orchestrator", "coding"],
         },
-        transport="http",
+        transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=ARCHITECT_SYSTEM_PROMPT,
         logger=QUIET_LOGGER,
         verbosity=0,
     )
-    agent.transport.timeout = 600
+    set_transport_timeout(agent.transport, 600)
 
     @agent.tool(
         name="request_user_approval",
@@ -91,4 +98,3 @@ def create_architect_agent(
         return payload
 
     return agent
-

@@ -41,7 +41,7 @@ If you haven't already, initialize the Python environment in the monorepo root:
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]"
+pip install "protolink[http,llms]>=0.5.8"
 
 ```
 
@@ -148,7 +148,7 @@ We welcome Rustaceans 🦀 to help us optimize this frontend!
 Areas we are actively looking to improve:
 
 * Enhancing the `clap` terminal argument parsing.
-* Improving the `PyO3` asynchronous bindings to stream Python generator chunks faster.
+* Surfacing ProtoLink SSE task events as live Rust UI updates instead of post-run trace summaries.
 * Adding beautiful, bat-like terminal diffing for the `[Y/n]` file write approvals.
 
 To contribute to the underlying agent logic or prompts, head over to the [`core/`](https://www.google.com/search?q=../core/README.md) directory.

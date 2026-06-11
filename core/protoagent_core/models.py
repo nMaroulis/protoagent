@@ -64,10 +64,11 @@ def discover_models() -> dict[str, Any]:
     providers = [
         _discover_ollama(),
         _discover_lmstudio(),
+        _discover_openai_compatible(),
         _discover_llamacpp_server(),
         _discover_llamacpp_local(),
     ]
-    providers.extend(_api_provider(provider) for provider in sorted(API_PROVIDERS))
+    providers.extend(_api_provider(provider) for provider in sorted(API_PROVIDERS - {"openai-compatible"}))
 
     return {
         "config_path": config["config_path"],
@@ -111,7 +112,7 @@ def _discover_lmstudio() -> dict[str, Any]:
     """Discover models from an LM Studio OpenAI-compatible endpoint."""
     cfg = provider_config("lmstudio")
     base_url = (cfg.get("base_url") or "http://localhost:1234/v1").rstrip("/")
-    response = _get_json(f"{base_url}/models")
+    response = _get_json(_openai_compatible_models_url(base_url))
     models = []
     if response.get("ok"):
         for item in response.get("data", {}).get("data", []):
@@ -126,6 +127,29 @@ def _discover_lmstudio() -> dict[str, Any]:
         base_url=base_url,
         models=models,
         hint=response.get("error") if not response.get("ok") else "",
+    )
+
+
+def _discover_openai_compatible() -> dict[str, Any]:
+    """Discover models from a generic OpenAI-compatible endpoint."""
+    cfg = provider_config("openai-compatible")
+    base_url = (cfg.get("base_url") or "http://localhost:1234/v1").rstrip("/")
+    api_key = cfg.get("api_key", "")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
+    response = _get_json(_openai_compatible_models_url(base_url), headers=headers)
+    models = []
+    if response.get("ok"):
+        for item in response.get("data", {}).get("data", []):
+            models.append(_model(item.get("id", ""), source="openai-compatible", metadata=item))
+
+    return _provider(
+        "openai-compatible",
+        kind="openai-compatible-server",
+        status="online" if response.get("ok") else "offline",
+        base_url=base_url,
+        models=models,
+        hint=response.get("error") if not response.get("ok") else "",
+        configured=bool(response.get("ok") or cfg.get("model") or api_key),
     )
 
 
@@ -186,15 +210,26 @@ def _api_provider(provider: str) -> dict[str, Any]:
     )
 
 
-def _get_json(url: str, timeout: float = 1.2) -> dict[str, Any]:
+def _get_json(url: str, timeout: float = 1.2, headers: dict[str, str] | None = None) -> dict[str, Any]:
     """Fetch JSON with a short timeout and return a status envelope."""
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, headers=request_headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             text = response.read().decode("utf-8")
             return {"ok": True, "data": json.loads(text)}
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         return {"ok": False, "error": str(exc)}
+
+
+def _openai_compatible_models_url(base_url: str) -> str:
+    """Return the models endpoint for an OpenAI-compatible base URL."""
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        return f"{root}/models"
+    return f"{root}/v1/models"
 
 
 def _ollama_cli_models() -> list[dict[str, Any]]:

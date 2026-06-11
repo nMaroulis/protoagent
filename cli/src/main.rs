@@ -132,7 +132,11 @@ struct DoctorReport {
 struct ProtolinkStatus {
     installed: bool,
     #[serde(default)]
+    version: String,
+    #[serde(default)]
     agent_ready: bool,
+    #[serde(default)]
+    streaming_ready: bool,
     #[serde(default)]
     error: String,
 }
@@ -485,7 +489,7 @@ fn print_interactive_help() {
     let rows = vec![
         "/menu       Command palette".to_string(),
         "/dashboard  Cockpit overview".to_string(),
-        "/models     Model radar for Ollama, LM Studio, llama.cpp, and APIs".to_string(),
+        "/models     Model radar for Ollama, LM Studio, OpenAI-compatible, llama.cpp, and APIs".to_string(),
         "/model      Select active provider/model".to_string(),
         "/key        Store a cloud provider key".to_string(),
         "/doctor     Runtime checks".to_string(),
@@ -876,11 +880,12 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
         "anthropic".to_string(),
         "gemini".to_string(),
         "deepseek".to_string(),
+        "openai-compatible".to_string(),
     ];
     let provider = match preselected_provider {
         Some(value) if providers.iter().any(|provider| provider == value) => value.to_string(),
         Some(value) => return Err(anyhow!("{value} is not a supported API-key provider")),
-        None => Select::new("Cloud provider", providers).prompt()?,
+        None => Select::new("API-key provider", providers).prompt()?,
     };
 
     let api_key = Password::new("API key").without_confirmation().prompt()?;
@@ -946,7 +951,11 @@ fn show_doctor() -> Result<()> {
             format!(
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
-                    "installed, agent runtime ready".to_string()
+                    format!(
+                        "installed {}, agent runtime ready, streaming {}",
+                        empty_as_unknown(&report.protolink.version),
+                        if report.protolink.streaming_ready { "ready" } else { "unavailable" }
+                    )
                 } else if report.protolink.installed {
                     format!("installed, agent runtime blocked ({})", report.protolink.error)
                 } else {

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import tools
-from .common import QUIET_LOGGER, create_selected_llm, resolve_agent_url
+from .common import QUIET_LOGGER, create_selected_llm, resolve_agent_url, set_transport_timeout
 
 EXPLORER_SYSTEM_PROMPT = """You are the ProtoAgent Explorer.
 
@@ -24,6 +24,7 @@ def create_explorer_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
+    transport: str = "sse",
 ):
     """Create the read-only repository cartographer."""
     from protolink.agents import Agent
@@ -44,14 +45,14 @@ def create_explorer_agent(
             },
             "tags": ["protoagent", "context", "read-only", "coding"],
         },
-        transport="http",
+        transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=EXPLORER_SYSTEM_PROMPT,
         logger=QUIET_LOGGER,
         verbosity=0,
     )
-    agent.transport.timeout = 600
+    set_transport_timeout(agent.transport, 600)
 
     @agent.tool(name="read_file", description="Read a UTF-8 text file with line numbers.")
     def read_file(path: str) -> dict[str, Any]:
@@ -74,4 +75,3 @@ def create_explorer_agent(
         return tools.get_git_status(workspace)
 
     return agent
-

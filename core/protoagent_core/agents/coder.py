@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from .. import tools
-from .common import QUIET_LOGGER, create_selected_llm, record_side_effect, resolve_agent_url
+from .common import (
+    QUIET_LOGGER,
+    create_selected_llm,
+    record_side_effect,
+    resolve_agent_url,
+    set_transport_timeout,
+)
 
 CODER_SYSTEM_PROMPT = """You are the ProtoAgent Coder.
 
@@ -24,6 +30,7 @@ def create_coder_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
+    transport: str = "sse",
     side_effects: list[dict[str, Any]] | None = None,
 ):
     """Create the diff synthesis agent."""
@@ -44,14 +51,14 @@ def create_coder_agent(
             },
             "tags": ["protoagent", "diffs", "coding"],
         },
-        transport="http",
+        transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=CODER_SYSTEM_PROMPT,
         logger=QUIET_LOGGER,
         verbosity=0,
     )
-    agent.transport.timeout = 600
+    set_transport_timeout(agent.transport, 600)
 
     @agent.tool(
         name="generate_unified_diff",
@@ -78,4 +85,3 @@ def create_coder_agent(
         return result
 
     return agent
-

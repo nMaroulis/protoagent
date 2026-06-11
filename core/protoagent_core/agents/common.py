@@ -50,8 +50,15 @@ def resolve_agent_url(name: str, explicit_url: str | None = None) -> str:
     return os.getenv(env_name, DEFAULT_AGENT_URLS[name])
 
 
+def set_transport_timeout(transport, timeout: int) -> None:
+    """Apply a long request timeout across ProtoLink transport implementations."""
+    if hasattr(transport, "timeout"):
+        transport.timeout = timeout
+    elif hasattr(transport, "_timeout"):
+        transport._timeout = timeout
+
+
 def record_side_effect(side_effects: list[dict[str, Any]] | None, payload: dict[str, Any]) -> None:
     """Record tool-produced payloads for the Rust CLI surface."""
     if side_effects is not None:
         side_effects.append(payload)
-

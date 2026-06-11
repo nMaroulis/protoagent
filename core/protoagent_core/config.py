@@ -12,7 +12,7 @@ CONFIG_VERSION = 1
 CONFIG_DIR = Path(os.getenv("PROTOAGENT_HOME", "~/.protoagent")).expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
-API_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek"}
+API_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek", "openai-compatible"}
 LOCAL_PROVIDERS = {"ollama", "lmstudio", "llama.cpp-server", "llama.cpp-local"}
 
 ENV_KEYS = {
@@ -20,6 +20,7 @@ ENV_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
+    "openai-compatible": "OPENAI_COMPATIBLE_API_KEY",
 }
 
 DEFAULT_MODELS = {
@@ -31,6 +32,7 @@ DEFAULT_MODELS = {
     "anthropic": "claude-sonnet-4-20250514",
     "gemini": "gemini-2.5-pro",
     "deepseek": "deepseek-chat",
+    "openai-compatible": "",
 }
 
 DEFAULT_BASE_URLS = {
@@ -42,6 +44,7 @@ DEFAULT_BASE_URLS = {
     "anthropic": "",
     "gemini": "",
     "deepseek": "https://api.deepseek.com",
+    "openai-compatible": os.getenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:1234/v1"),
 }
 
 PROVIDER_LABELS = {
@@ -53,6 +56,7 @@ PROVIDER_LABELS = {
     "anthropic": "Anthropic",
     "gemini": "Gemini",
     "deepseek": "DeepSeek",
+    "openai-compatible": "OpenAI compatible",
 }
 
 
@@ -174,6 +178,10 @@ def normalize_provider(provider: str) -> str:
         "llama.cpp": "llama.cpp-server",
         "llama.cpp-local": "llama.cpp-local",
         "llama-cpp-local": "llama.cpp-local",
+        "openai-compatible": "openai-compatible",
+        "openai-compatible-server": "openai-compatible",
+        "openai-compatible-local": "openai-compatible",
+        "openai-compatible-api": "openai-compatible",
     }
     return aliases.get(normalized, normalized)
 
