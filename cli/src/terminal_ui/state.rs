@@ -135,7 +135,7 @@ pub(super) enum PanelView {
     Dashboard,
     Models,
     Agents,
-    Doctor,
+    Check,
     Config,
     Help,
 }
@@ -146,7 +146,7 @@ impl PanelView {
             Self::Dashboard => "dashboard",
             Self::Models => "models",
             Self::Agents => "agents",
-            Self::Doctor => "doctor",
+            Self::Check => "check",
             Self::Config => "config",
             Self::Help => "help",
         }

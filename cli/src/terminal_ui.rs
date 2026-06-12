@@ -191,16 +191,16 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             switch_panel(app, PanelView::Help, command, "Help panel pinned.");
             Ok(true)
         }
-        "/doctor" => {
+        "/check" => {
             app.activity = "checking runtime".to_string();
             terminal.render(app, None)?;
             match load_doctor() {
                 Ok(report) => {
-                    app.panel = PanelView::Doctor;
+                    app.panel = PanelView::Check;
                     app.refresh(Some(&report));
-                    app.push(Role::Command, "/doctor", "Doctor panel refreshed.");
+                    app.push(Role::Command, "/check", "Runtime check refreshed.");
                 }
-                Err(err) => app.push(Role::Error, "/doctor", &format!("Doctor failed: {err}")),
+                Err(err) => app.push(Role::Error, "/check", &format!("Check failed: {err}")),
             }
             app.activity = "idle".to_string();
             Ok(true)
@@ -370,85 +370,162 @@ fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Result<()> {
         write_line(out, y, width, "", muted(), panel_bg(), false)?;
     }
 
-    let content_width = width.saturating_sub(2).max(20) as usize;
-    let mut content = Vec::new();
-    append_wrapped_render_line(
-        &mut content,
-        " ",
-        &format!("{} / {}    {}", app.status.provider, app.status.model, app.activity),
-        cyan(),
-        true,
-        content_width,
-    );
-    for row in panel_rows(app) {
-        append_wrapped_render_line(&mut content, " ", &row, muted(), false, content_width);
-    }
+    let rows = panel_rows(app);
     let available_rows = controls_row.saturating_sub(1) as usize;
-    for (idx, line) in content.iter().take(available_rows).enumerate() {
-        write_line(out, idx as u16 + 1, width, &line.text, line.color, panel_bg(), line.bold)?;
-    }
+    draw_panel_rows(out, width, &rows, available_rows)?;
 
-    write_line(
-        out,
-        controls_row,
-        width,
-        " /dashboard /models /agents /doctor /config /help    Wheel/PageUp scrolls chat    Esc exits",
-        muted(),
-        panel_bg(),
-        false,
-    )?;
+    draw_command_bar(out, controls_row, width, app.panel)?;
     write_line(out, separator_row, width, &"-".repeat(width as usize), magenta(), panel_bg(), false)?;
     Ok(())
 }
 
-fn panel_rows(app: &TerminalApp) -> Vec<String> {
-    match app.panel {
-        PanelView::Dashboard => vec![
-            format!(" dashboard | workspace {}", app.status.workspace),
-            format!(" models {}", app.status.model_summary),
-            " agents Architect routes | Explorer reads | Coder drafts | human approves".to_string(),
-            format!(
-                " last {}",
-                if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() }
-            ),
-            " web parity: fixed panel, fluid transcript, bottom input".to_string(),
-        ],
-        PanelView::Models => vec![
-            format!(" models | active {} / {}", app.status.provider, app.status.model),
-            format!(" inventory {}", app.status.model_summary),
-            format!(" providers {}", app.status.provider_summary),
-            format!(" config {}", app.status.config_path),
-            " use web app for richer provider inspection".to_string(),
-        ],
-        PanelView::Agents => vec![
-            " Architect: intake, routing, final answer, approval gate".to_string(),
-            " Explorer: read-only files, directories, regex search, git status".to_string(),
-            " Coder: approval-safe diffs and file payloads".to_string(),
-            " Human approval before writes land".to_string(),
-            " Terminal mirrors the browser cockpit without scrollback pollution".to_string(),
-        ],
-        PanelView::Doctor => vec![
-            format!(" doctor {}", app.status.runtime),
-            format!(" active {} / {}", app.status.provider, app.status.model),
-            format!(" workspace {}", app.status.workspace),
-            format!(" config {}", app.status.config_path),
-            " run /doctor to refresh".to_string(),
-        ],
-        PanelView::Config => vec![
-            format!(" active provider {}", app.status.provider),
-            format!(" active model {}", app.status.model),
-            format!(" config {}", app.status.config_path),
-            " model/key setup stays in regular terminal prompts for now".to_string(),
-            " full report: proto-cli config".to_string(),
-        ],
-        PanelView::Help => vec![
-            " chat: type any task or /run <task>".to_string(),
-            " panels: /dashboard /models /agents /doctor /config /help".to_string(),
-            " transcript: mouse wheel, PageUp/PageDown, Ctrl-End, /clear, /last, /diff".to_string(),
-            " session: /quit or Esc".to_string(),
-            " browser app: proto-cli start | terminal app: proto-cli tui".to_string(),
-        ],
+struct PanelRow {
+    label: &'static str,
+    value: String,
+    color: Color,
+    bold: bool,
+}
+
+fn row(label: &'static str, value: impl Into<String>, color: Color, bold: bool) -> PanelRow {
+    PanelRow {
+        label,
+        value: value.into(),
+        color,
+        bold,
     }
+}
+
+fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
+    let mut rows = vec![row(
+        "model",
+        format!("{} / {}    {}", app.status.provider, app.status.model, app.activity),
+        cyan(),
+        true,
+    )];
+    match app.panel {
+        PanelView::Dashboard => {
+            rows.push(row("work", &app.status.workspace, magenta(), true));
+            rows.push(row("models", &app.status.model_summary, cyan(), false));
+            rows.push(row("agents", "Architect routes | Explorer reads | Coder drafts | human approves", yellow(), false));
+            rows.push(row(
+                "last",
+                if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() },
+                muted(),
+                false,
+            ));
+            rows.push(row("mode", "fixed panels, fluid transcript, bottom input", green(), false));
+        }
+        PanelView::Models => {
+            rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
+            rows.push(row("inventory", &app.status.model_summary, magenta(), false));
+            rows.push(row("providers", &app.status.provider_summary, yellow(), false));
+            rows.push(row("config", &app.status.config_path, muted(), false));
+            rows.push(row("tip", "use the web app for richer provider inspection", green(), false));
+        }
+        PanelView::Agents => {
+            rows.push(row("architect", "intake, routing, final answer, approval gate", magenta(), true));
+            rows.push(row("explorer", "read-only files, directories, regex search, git status", cyan(), false));
+            rows.push(row("coder", "approval-safe diffs and file payloads", yellow(), false));
+            rows.push(row("approval", "human confirms side effects before writes land", green(), false));
+            rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
+        }
+        PanelView::Check => {
+            rows.push(row("runtime", &app.status.runtime, magenta(), true));
+            rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), false));
+            rows.push(row("workspace", &app.status.workspace, yellow(), false));
+            rows.push(row("config", &app.status.config_path, muted(), false));
+            rows.push(row("refresh", "run /check to refresh", green(), false));
+        }
+        PanelView::Config => {
+            rows.push(row("provider", &app.status.provider, cyan(), true));
+            rows.push(row("model", &app.status.model, magenta(), false));
+            rows.push(row("config", &app.status.config_path, yellow(), false));
+            rows.push(row("keys", "model/key setup stays in regular terminal prompts for now", muted(), false));
+            rows.push(row("report", "full report: proto-cli config", green(), false));
+        }
+        PanelView::Help => {
+            rows.push(row("chat", "type any task or /run <task>", cyan(), true));
+            rows.push(row("panels", "/dashboard /models /agents /check /config /help", magenta(), false));
+            rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
+            rows.push(row("session", "/quit or Esc", muted(), false));
+            rows.push(row("launch", "web app: proto-cli start | terminal app: proto-cli tui", green(), false));
+        }
+    }
+    rows
+}
+
+fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: usize) -> Result<()> {
+    let label_width = 12usize;
+    let body_x = label_width as u16 + 1;
+    let body_width = width.saturating_sub(body_x + 1).max(10) as usize;
+    let mut y = 1u16;
+    let mut used = 0usize;
+    for row in rows {
+        if used >= max_rows {
+            break;
+        }
+        let wrapped = wrap_lines(&row.value, body_width);
+        for (line_index, line) in wrapped.iter().enumerate() {
+            if used >= max_rows {
+                break;
+            }
+            if line_index == 0 {
+                write_at(
+                    out,
+                    1,
+                    y,
+                    label_width as u16,
+                    &format!(" {} ", row.label.to_uppercase()),
+                    if row.bold { black() } else { row.color },
+                    if row.bold { row.color } else { panel_bg() },
+                    true,
+                )?;
+            }
+            write_at(out, body_x, y, width.saturating_sub(body_x), line, text(), panel_bg(), row.bold)?;
+            y += 1;
+            used += 1;
+        }
+    }
+    Ok(())
+}
+
+fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> Result<()> {
+    write_line(out, y, width, "", muted(), panel_bg(), false)?;
+    let commands = [
+        (PanelView::Dashboard, "/dashboard"),
+        (PanelView::Models, "/models"),
+        (PanelView::Agents, "/agents"),
+        (PanelView::Check, "/check"),
+        (PanelView::Config, "/config"),
+        (PanelView::Help, "/help"),
+    ];
+    let mut x = 1u16;
+    for (panel, label) in commands {
+        if x >= width.saturating_sub(1) {
+            return Ok(());
+        }
+        let active_chip = panel == active;
+        let chip = format!(" {} ", if active_chip { label.to_uppercase() } else { label.to_string() });
+        let remaining = width.saturating_sub(x);
+        let chip_width = (chip.chars().count() as u16).min(remaining);
+        write_at(
+            out,
+            x,
+            y,
+            chip_width,
+            &chip,
+            if active_chip { black() } else { muted() },
+            if active_chip { magenta() } else { surface_bg() },
+            true,
+        )?;
+        x = x.saturating_add(chip_width + 1);
+    }
+    let hint = "Wheel/PageUp scrolls chat  Esc exits";
+    let hint_width = hint.chars().count() as u16;
+    if x + 1 + hint_width <= width {
+        write_at(out, x + 1, y, hint_width, hint, muted(), panel_bg(), false)?;
+    }
+    Ok(())
 }
 
 fn draw_transcript(out: &mut Stdout, width: u16, height: u16, app: &TerminalApp) -> Result<()> {
@@ -690,6 +767,10 @@ fn panel_bg() -> Color {
     Color::Rgb { r: 14, g: 16, b: 24 }
 }
 
+fn surface_bg() -> Color {
+    Color::Rgb { r: 32, g: 38, b: 55 }
+}
+
 fn input_bg() -> Color {
     Color::Rgb { r: 18, g: 21, b: 30 }
 }
@@ -716,6 +797,10 @@ fn magenta() -> Color {
 
 fn yellow() -> Color {
     Color::Rgb { r: 243, g: 198, b: 91 }
+}
+
+fn green() -> Color {
+    Color::Rgb { r: 116, g: 223, b: 159 }
 }
 
 fn red() -> Color {

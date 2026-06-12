@@ -261,9 +261,9 @@ async fn main() -> Result<()> {
             print_header()?;
             show_config()
         }
-        Some("doctor") => {
+        Some("check") => {
             print_header()?;
-            show_doctor()
+            show_check()
         }
         Some("dashboard") | Some("dash") | Some("status") => {
             show_dashboard()
@@ -371,8 +371,8 @@ async fn handle_slash_command(input: &str, term: &Term, state: &mut SessionState
             show_config()?;
             Ok(true)
         }
-        "/doctor" => {
-            show_doctor()?;
+        "/check" => {
+            show_check()?;
             Ok(true)
         }
         "/agents" => {
@@ -416,7 +416,7 @@ async fn command_palette(state: &mut SessionState) -> Result<bool> {
         "Model radar",
         "Choose model",
         "Add API key",
-        "Doctor",
+        "Check",
         "Agent topology",
         "Config",
         "Last response",
@@ -452,8 +452,8 @@ async fn command_palette(state: &mut SessionState) -> Result<bool> {
             add_key(None)?;
             Ok(true)
         }
-        "Doctor" => {
-            show_doctor()?;
+        "Check" => {
+            show_check()?;
             Ok(true)
         }
         "Agent topology" => {
@@ -504,7 +504,7 @@ fn print_cli_help() {
     println!("  proto-cli model              Pick active provider/model");
     println!("  proto-cli key [provider]     Add API key");
     println!("  proto-cli config             Show current config");
-    println!("  proto-cli doctor             Check Python/protolink/providers");
+    println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!();
 }
@@ -516,7 +516,7 @@ fn print_interactive_help() {
         "/models     Model radar for Ollama, LM Studio, OpenAI-compatible, llama.cpp, and APIs".to_string(),
         "/model      Select active provider/model".to_string(),
         "/key        Store a cloud provider key".to_string(),
-        "/doctor     Runtime checks".to_string(),
+        "/check      Runtime checks".to_string(),
         "/agents     Agent topology and tool isolation".to_string(),
         "/last       Re-render the last response".to_string(),
         "/history    Show retained prompt history".to_string(),
@@ -741,7 +741,7 @@ fn show_dashboard() -> Result<()> {
     let commands = vec![
         "/menu opens the command palette".to_string(),
         "/models scans local and cloud model options".to_string(),
-        "/doctor checks runtime wiring".to_string(),
+        "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
     ];
     print_panel("HOTKEYS", &commands, PanelTone::Cyan);
@@ -963,10 +963,10 @@ fn show_config() -> Result<()> {
     Ok(())
 }
 
-fn show_doctor() -> Result<()> {
+fn show_check() -> Result<()> {
     let report = load_doctor()?;
     print_panel(
-        "DOCTOR",
+        "CHECK",
         &[
             format!("Python    : {}", report.python),
             format!("Platform  : {}", report.platform),

@@ -94,7 +94,7 @@ Inside the app you can use slash commands:
 * `/dashboard` - Shows the dashboard status panel.
 * `/models` - Shows model/provider status.
 * `/config` - Shows redacted provider config status.
-* `/doctor` - Refreshes Python, protolink, and active provider status.
+* `/check` - Refreshes Python, protolink, and active provider status.
 * `/agents` - Shows the Architect / Explorer / Coder topology.
 * `/last` - Replays the last agent response.
 * `/run` - Runs a task from a slash command.
@@ -113,13 +113,13 @@ cargo run --manifest-path cli/Cargo.toml -- models
 cargo run --manifest-path cli/Cargo.toml -- model
 cargo run --manifest-path cli/Cargo.toml -- key openai
 cargo run --manifest-path cli/Cargo.toml -- config
-cargo run --manifest-path cli/Cargo.toml -- doctor
+cargo run --manifest-path cli/Cargo.toml -- check
 cargo run --manifest-path cli/Cargo.toml -- agents
 ```
 
 Interactive mode is browser-rendered by default. The top area is a fixed status
 panel, the middle viewport is the chat transcript, and the bottom bar is the
-input editor. `/models`, `/agents`, `/doctor`, `/config`, `/help`, and
+input editor. `/models`, `/agents`, `/check`, `/config`, `/help`, and
 `/dashboard` switch the fixed status panel instead of printing status blocks
 into the chat. Use `protoagent tui` for a fullscreen terminal UI that mirrors
 the browser layout as closely as terminal constraints allow. Set

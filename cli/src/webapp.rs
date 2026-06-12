@@ -86,7 +86,7 @@ fn status_payload() -> Value {
         "workspace": workspace,
         "config": json_call("get_config"),
         "models": json_call("list_models"),
-        "doctor": json_doctor(),
+        "check": json_doctor(),
     })
 }
 
@@ -287,7 +287,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
         <button class="tab active" data-panel="dashboard">Dashboard</button>
         <button class="tab" data-panel="models">Models</button>
         <button class="tab" data-panel="agents">Agents</button>
-        <button class="tab" data-panel="doctor">Doctor</button>
+        <button class="tab" data-panel="check">Check</button>
         <button class="tab" data-panel="help">Help</button>
       </nav>
       <div id="panel" class="panel-grid"></div>
@@ -297,7 +297,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
 
     <form id="composer" class="composer">
       <div class="prompt-marker">&gt;</div>
-      <textarea id="prompt" rows="1" autocomplete="off" spellcheck="false" placeholder="Type a task or /models, /agents, /doctor, /help"></textarea>
+      <textarea id="prompt" rows="1" autocomplete="off" spellcheck="false" placeholder="Type a task or /models, /agents, /check, /help"></textarea>
       <button id="send" type="submit">Send</button>
     </form>
   </main>
@@ -816,10 +816,10 @@ async function runCommand(text) {
     switchPanel('agents', true);
     return;
   }
-  if (command === '/doctor') {
-    addMessage('command', '/doctor', 'Refreshing runtime status.');
+  if (command === '/check') {
+    addMessage('command', '/check', 'Refreshing runtime status.');
     await refreshStatus();
-    switchPanel('doctor', false);
+    switchPanel('check', false);
     return;
   }
   if (command === '/config') {
@@ -928,7 +928,7 @@ function renderPanel() {
   const status = state.status || {};
   const config = status.config || {};
   const models = status.models || {};
-  const doctor = status.doctor || {};
+  const check = status.check || {};
   const provider = config.active_provider || 'unknown';
   const model = config.providers?.[provider]?.model || models.active_model || 'not selected';
   const providers = models.providers || [];
@@ -940,7 +940,7 @@ function renderPanel() {
       ['Active model', `${provider} / ${model || 'not selected'}`],
       ['Workspace', status.workspace || 'unknown'],
       ['Model inventory', `${totalModels} models across ${providers.length} providers, ${readyProviders} ready`],
-      ['Runtime', doctor.error ? doctor.error : doctorLine(doctor)],
+      ['Runtime', check.error ? check.error : checkLine(check)],
     ],
     models: [
       ['Active', `${provider} / ${model || 'not selected'}`],
@@ -954,11 +954,11 @@ function renderPanel() {
       ['Coder', 'Produces approval-safe diffs and file payloads.'],
       ['Approval', 'Side effects require explicit human approval before writes land.'],
     ],
-    doctor: [
-      ['Python', doctor.python || 'unknown'],
-      ['ProtoLink', doctorLine(doctor)],
-      ['Active provider', `${doctor.active_provider || provider} / ${doctor.active_model || model || 'not selected'}`],
-      ['Platform', doctor.platform || 'unknown'],
+    check: [
+      ['Python', check.python || 'unknown'],
+      ['ProtoLink', checkLine(check)],
+      ['Active provider', `${check.active_provider || provider} / ${check.active_model || model || 'not selected'}`],
+      ['Platform', check.platform || 'unknown'],
     ],
     config: [
       ['Config path', config.config_path || 'unknown'],
@@ -968,7 +968,7 @@ function renderPanel() {
     ],
     help: [
       ['Chat', 'Type any task. Shift+Enter inserts a newline. Enter sends.'],
-      ['Panels', '/dashboard /models /agents /doctor /config /help'],
+      ['Panels', '/dashboard /models /agents /check /config /help'],
       ['Transcript', '/clear /last /run <task>'],
       ['Approvals', 'Actions appear below an answer with Apply and Deny controls.'],
     ],
@@ -987,9 +987,9 @@ function renderPanel() {
   });
 }
 
-function doctorLine(doctor) {
-  if (!doctor || doctor.error) return doctor?.error || 'not checked';
-  const proto = doctor.protolink || {};
+function checkLine(check) {
+  if (!check || check.error) return check?.error || 'not checked';
+  const proto = check.protolink || {};
   if (proto.installed && proto.agent_ready) {
     return `ProtoLink ${proto.version || 'unknown'} ready, streaming ${proto.streaming_ready ? 'ready' : 'unavailable'}`;
   }
