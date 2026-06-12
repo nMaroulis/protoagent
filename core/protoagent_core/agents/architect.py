@@ -7,10 +7,13 @@ from typing import Any
 
 from .common import (
     QUIET_LOGGER,
+    conversation_storage,
     create_selected_llm,
     record_side_effect,
     resolve_agent_url,
     set_transport_timeout,
+    session_aware_agent_class,
+    with_workspace_contract,
 )
 
 ARCHITECT_SYSTEM_PROMPT = """You are the ProtoAgent Architect, a local-first coding coordinator.
@@ -31,6 +34,7 @@ Rules:
 - Do not fabricate file contents. Ask Explorer for context first.
 - Prefer small, targeted changes.
 - Use Coder only for diffs and new-file proposals.
+- If the user asks to create a file, do not answer only with a code block. Delegate to Coder so a pending file action is produced.
 - If the user asks for broad work, make a compact plan before delegating.
 - If a request is ambiguous, explore first and make reasonable assumptions.
 """
@@ -46,7 +50,7 @@ def create_architect_agent(
     side_effects: list[dict[str, Any]] | None = None,
 ):
     """Create the user-facing orchestrator agent."""
-    from protolink.agents import Agent
+    Agent = session_aware_agent_class()
 
     agent = Agent(
         card={
@@ -68,7 +72,9 @@ def create_architect_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=ARCHITECT_SYSTEM_PROMPT,
+        system_prompt=with_workspace_contract(ARCHITECT_SYSTEM_PROMPT, workspace, "Architect"),
+        storage=conversation_storage("architect"),
+        state=["conversation"],
         logger=QUIET_LOGGER,
         verbosity=0,
     )

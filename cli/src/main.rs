@@ -5,8 +5,9 @@ use inquire::{Confirm, Password, Select, Text};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::{env, fs};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -39,6 +40,8 @@ struct CoreResponse {
     provider: String,
     #[serde(default)]
     model: String,
+    #[serde(default)]
+    responder: String,
     #[serde(default)]
     workspace: String,
     #[serde(default)]
@@ -258,7 +261,8 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
 
     let prompt = query.to_string();
     let workspace = require_project_dir_string()?;
-    let json = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace))
+    let session_id = project_session_id(&workspace);
+    let json = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace, session_id))
         .await?
         .map_err(|err| anyhow!("Python core error: {err:?}"))?;
 
@@ -293,6 +297,7 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     };
     let mut summary = vec![
         format!("Status      : {}", response.status),
+        format!("Responder   : {}", response_actor(response)),
         format!("Provider    : {} / {}", empty_as_unknown(&response.provider), model),
         format!("Elapsed     : {} ms", response.elapsed_ms),
     ];
@@ -961,6 +966,22 @@ fn empty_as_unknown(value: &str) -> &str {
     }
 }
 
+pub(crate) fn response_actor(response: &CoreResponse) -> String {
+    if response.responder.trim().is_empty() {
+        "Architect".to_string()
+    } else {
+        title_case_agent(&response.responder)
+    }
+}
+
+fn title_case_agent(value: &str) -> String {
+    let mut chars = value.trim().chars();
+    let Some(first) = chars.next() else {
+        return "Agent".to_string();
+    };
+    format!("{}{}", first.to_uppercase(), chars.as_str())
+}
+
 fn call_no_args(function: &str) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
@@ -969,13 +990,13 @@ fn call_no_args(function: &str) -> PyResult<String> {
     })
 }
 
-fn call_process_prompt(prompt: String, workspace: String) -> PyResult<String> {
+fn call_process_prompt(prompt: String, workspace: String, session_id: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module
             .getattr("process_prompt")?
-            .call1((prompt, workspace))?
+            .call1((prompt, workspace, session_id))?
             .extract()
     })
 }
@@ -1097,6 +1118,12 @@ pub(crate) fn project_short_label() -> String {
 
 pub(crate) fn project_config_path() -> PathBuf {
     protoagent_config_dir().join("project.json")
+}
+
+pub(crate) fn project_session_id(workspace: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    workspace.hash(&mut hasher);
+    format!("protoagent-project-{:016x}", hasher.finish())
 }
 
 pub(crate) fn set_active_project(input: &str) -> Result<PathBuf> {

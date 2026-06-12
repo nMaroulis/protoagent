@@ -243,6 +243,18 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             }
             Ok(true)
         }
+        "/trace" => {
+            if let Some(response) = &app.last_response {
+                if response.events.is_empty() {
+                    app.push(Role::Command, "/trace", "No agent trace in the last response.");
+                } else {
+                    app.push(Role::Command, "/trace", &response.events.join("\n"));
+                }
+            } else {
+                app.push(Role::Command, "/trace", "No response in this session yet.");
+            }
+            Ok(true)
+        }
         "/run" => {
             let query = parts.collect::<Vec<_>>().join(" ");
             if query.trim().is_empty() {
@@ -279,14 +291,15 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
             return Ok(());
         }
     };
+    let prompt = query.to_string();
+    let session_id = crate::project_session_id(&workspace);
     app.turn += 1;
     app.last_query = query.to_string();
     app.push(Role::User, "You", query);
     let progress_index = app.messages.len();
     app.push(Role::System, "Working", "Architect routing\nExplorer mapping workspace\nCoder preparing output");
 
-    let prompt = query.to_string();
-    let mut task = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace));
+    let mut task = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace, session_id));
     let spinner = ["|", "/", "-", "\\"];
     let mut tick = 0usize;
 
@@ -719,6 +732,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("panels", "/dashboard /project /models /agents /check /config /help", magenta(), false));
+            rows.push(row("output", "/trace shows last agent path; /diff shows proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("session", "/quit or Esc", muted(), false));
             rows.push(row("launch", "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"", green(), false));
@@ -852,10 +866,17 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
             .map(|(label, _)| label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        let hint = if message.details.iter().any(|(label, _)| label == "Proposed diff") {
+            " (use /diff for proposed diff)"
+        } else if message.details.iter().any(|(label, _)| label.contains("trace")) {
+            " (use /trace for last agent trace)"
+        } else {
+            ""
+        };
         append_wrapped_render_line(
             lines,
             "  | ",
-            &format!("details: {} (use /diff for proposed diff)", labels),
+            &format!("details: {labels}{hint}"),
             yellow(),
             false,
             width,

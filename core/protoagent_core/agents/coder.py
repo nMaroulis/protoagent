@@ -7,10 +7,13 @@ from typing import Any
 from .. import tools
 from .common import (
     QUIET_LOGGER,
+    conversation_storage,
     create_selected_llm,
     record_side_effect,
     resolve_agent_url,
     set_transport_timeout,
+    session_aware_agent_class,
+    with_workspace_contract,
 )
 
 CODER_SYSTEM_PROMPT = """You are the ProtoAgent Coder.
@@ -21,6 +24,10 @@ disk. Return pending actions that require frontend approval.
 
 Before producing a diff, make sure you have enough original content or context
 from Explorer. Keep changes focused and explain assumptions briefly.
+When the user asks to create a file, call create_new_file. Do not merely return
+code for the user to copy. If a tiny script has no explicit path, choose a
+conservative project-relative path such as scripts/<descriptive-name>.py and
+state that assumption in the final response.
 """
 
 
@@ -34,7 +41,7 @@ def create_coder_agent(
     side_effects: list[dict[str, Any]] | None = None,
 ):
     """Create the diff synthesis agent."""
-    from protolink.agents import Agent
+    Agent = session_aware_agent_class()
 
     agent = Agent(
         card={
@@ -54,7 +61,9 @@ def create_coder_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=CODER_SYSTEM_PROMPT,
+        system_prompt=with_workspace_contract(CODER_SYSTEM_PROMPT, workspace, "Coder"),
+        storage=conversation_storage("coder"),
+        state=["conversation"],
         logger=QUIET_LOGGER,
         verbosity=0,
     )

@@ -87,6 +87,15 @@ impl TerminalApp {
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
         self.jump_to_bottom();
+        if !response.events.is_empty() {
+            self.messages.push(TerminalMessage {
+                role: Role::System,
+                label: "Agent Trace".to_string(),
+                body: compact_agent_trace(&response.events),
+                meta: vec![format!("{} event(s)", response.events.len())],
+                details: vec![("Full trace".to_string(), response.events.join("\n"))],
+            });
+        }
         let body = response
             .answer
             .trim()
@@ -94,7 +103,7 @@ impl TerminalApp {
             .if_empty_then("(no answer text)");
         let mut message = TerminalMessage {
             role: Role::Assistant,
-            label: "Assistant".to_string(),
+            label: crate::response_actor(response),
             body: body.to_string(),
             meta: vec![
                 format!("status {}", response.status),
@@ -120,6 +129,9 @@ impl TerminalApp {
         if !response.thought_process.is_empty() {
             message.details.push(("Core notes".to_string(), response.thought_process.clone()));
         }
+        if !response.events.is_empty() {
+            message.details.push(("Agent trace".to_string(), response.events.join("\n")));
+        }
         if !response.diff.trim().is_empty() {
             message.details.push(("Proposed diff".to_string(), response.diff.clone()));
         }
@@ -142,6 +154,19 @@ impl TerminalApp {
     pub(super) fn jump_to_bottom(&mut self) {
         self.scroll_offset = 0;
     }
+}
+
+fn compact_agent_trace(events: &[String]) -> String {
+    let limit = 14usize;
+    let mut rows = events
+        .iter()
+        .take(limit)
+        .map(|event| format!("- {event}"))
+        .collect::<Vec<_>>();
+    if events.len() > limit {
+        rows.push(format!("- ...{} more event(s)", events.len() - limit));
+    }
+    rows.join("\n")
 }
 
 trait EmptyFallback<'a> {

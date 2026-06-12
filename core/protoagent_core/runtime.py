@@ -15,7 +15,11 @@ from .config import load_config, normalize_provider, provider_config
 _FALLBACK_PORT = 19100
 
 
-def run_selected_model(prompt: str, workspace: str | None = None) -> dict[str, Any]:
+def run_selected_model(
+    prompt: str,
+    workspace: str | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     """Run the selected model through the ProtoLink Architect agent.
 
     The CLI enters the core by sending a Task to Architect through ProtoLink's
@@ -29,7 +33,7 @@ def run_selected_model(prompt: str, workspace: str | None = None) -> dict[str, A
     if not model:
         raise RuntimeError(f"No model selected for provider '{provider}'")
 
-    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace))
+    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id))
 
 
 async def _run_agent_deck(
@@ -37,6 +41,7 @@ async def _run_agent_deck(
     provider: str,
     model: str,
     workspace: str | None,
+    session_id: str | None,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink.client import AgentClient
@@ -50,6 +55,8 @@ async def _run_agent_deck(
         f"Registry prepared at {urls['registry']}.",
         f"All LLM-capable agents configured with {provider} / {model}.",
         f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).",
+        f"Active project workspace: {workspace or os.getenv('PROTOAGENT_WORKSPACE', os.getcwd())}.",
+        f"Conversation session: {session_id or 'task-local'}."
     ]
     side_effects: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
@@ -90,6 +97,9 @@ async def _run_agent_deck(
 
         client = AgentClient(url=urls["client"], transport=agent_transport, timeout=_runtime_timeout())
         task = Task.create_infer(prompt=prompt)
+        if session_id:
+            task.metadata["session_id"] = session_id
+            task.metadata["workspace"] = workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())
         if streaming:
             events.append("AgentClient opened a streaming task channel to Architect.")
             try:
@@ -116,6 +126,11 @@ async def _run_agent_deck(
         _collect_side_effects(raw_answer, actions, diffs)
 
         for payload in side_effects:
+            source = str(payload.get("source", "agent")).title() if isinstance(payload, dict) else "Agent"
+            path = ""
+            if isinstance(payload, dict):
+                path = str(payload.get("path") or payload.get("file_target") or "")
+            events.append(f"{source} produced approval metadata{f' for {path}' if path else ''}.")
             _collect_side_effects(_normalize(payload), actions, diffs)
 
         answer = _content_to_text(raw_answer)
@@ -125,6 +140,7 @@ async def _run_agent_deck(
         return {
             "provider": provider,
             "model": model,
+            "responder": "architect",
             "answer": answer,
             "events": events,
             "actions": actions,
@@ -414,14 +430,22 @@ def _collect_side_effects(
     if nested is not None:
         _collect_side_effects(nested, actions, diffs)
 
+    source = str(result.get("source", "")).strip()
     action = result.get("action")
     if isinstance(action, dict):
-        actions.append(action)
+        if action.get("type") == "write_file":
+            enriched = dict(action)
+            if source:
+                enriched.setdefault("source", source)
+            actions.append(enriched)
 
     diff = result.get("diff")
     path = result.get("path") or result.get("file_target") or ""
     if isinstance(diff, str) and diff.strip():
-        diffs.append({"path": str(path), "diff": diff})
+        item = {"path": str(path), "diff": diff}
+        if source:
+            item["source"] = source
+        diffs.append(item)
 
 
 def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:

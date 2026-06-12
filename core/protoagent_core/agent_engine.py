@@ -19,7 +19,7 @@ from .config import (
 from .llm import validate_protolink
 from .models import discover_models
 from .runtime import run_selected_model
-from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
+from .tools import build_context_map, create_new_file, list_directory, read_file, safe_path, workspace_root
 
 
 MAX_TAGGED_FILES = 8
@@ -73,7 +73,11 @@ def doctor(workspace: str | None = None) -> str:
     )
 
 
-def process_prompt(prompt: str, workspace: str | None = None) -> str:
+def process_prompt(
+    prompt: str,
+    workspace: str | None = None,
+    session_id: str | None = None,
+) -> str:
     """Process a user prompt and return structured CLI output as JSON.
 
     By default this calls the selected provider/model. Set
@@ -88,7 +92,7 @@ def process_prompt(prompt: str, workspace: str | None = None) -> str:
         return _json(_fallback_response(prompt, workspace, started, tagged_context))
 
     try:
-        return _json(_model_response(prompt, workspace, started, tagged_context))
+        return _json(_model_response(prompt, workspace, started, tagged_context, session_id))
     except Exception as exc:
         fallback = _fallback_response(prompt, workspace, started, tagged_context)
         fallback["status"] = "fallback"
@@ -176,6 +180,7 @@ def _fallback_response(
         "events": events,
         "provider": provider,
         "model": model,
+        "responder": "architect",
         "workspace": workspace,
         "warning": "; ".join(tagged_context.get("errors", [])),
         "elapsed_ms": int((time.time() - started) * 1000),
@@ -187,15 +192,34 @@ def _model_response(
     workspace: str,
     started: float,
     tagged_context: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the live model path and adapt the result to the CLI response schema."""
     tagged_context = tagged_context or {"items": [], "errors": []}
     runtime_prompt = _prompt_with_tagged_context(prompt, tagged_context)
-    result = run_selected_model(runtime_prompt, workspace)
+    result = run_selected_model(runtime_prompt, workspace, session_id)
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
     action_items = result.get("actions", [])
+    repair_events: list[str] = []
+    answer = result["answer"]
+    if not action_items:
+        repaired = _repair_missing_create_action(prompt, answer, workspace)
+        if repaired.get("success"):
+            action = dict(repaired["action"])
+            action.setdefault("source", "coder")
+            action_items = [action]
+            diff_items = [*diff_items, {"path": repaired["path"], "diff": repaired["diff"], "source": "coder"}]
+            repair_events.append(
+                f"Coder safety net converted code-only create response into approval action for {repaired['path']}."
+            )
+            answer = (
+                answer.rstrip()
+                + f"\n\nPrepared an approval-gated file creation for `{repaired['path']}`."
+            )
+        elif repaired.get("error"):
+            repair_events.append(f"Create-action safety net did not run: {repaired['error']}")
     action_targets = [
         str(action.get("path", ""))
         for action in action_items
@@ -211,12 +235,13 @@ def _model_response(
     return {
         "status": "approval-required" if action_items else "answered",
         "headline": "Architect completed the ProtoLink run.",
-        "answer": result["answer"],
+        "answer": answer,
         "thought_process": (
             f"Request: {prompt}\n\n"
             f"Workspace: {workspace}\n"
             f"Active provider: {result['provider']}\n"
             f"Active model: {result['model']}\n"
+            f"Conversation session: {session_id or 'task-local'}\n"
             f"Likely target: {target_label or '(not selected yet)'}\n"
             f"Tagged context: {_tag_summary(tagged_context)}"
         ),
@@ -224,9 +249,10 @@ def _model_response(
         "diff": diff,
         "requires_approval": bool(action_items),
         "actions": action_items,
-        "events": [*result.get("events", []), *_tag_events(tagged_context)],
+        "events": [*result.get("events", []), *repair_events, *_tag_events(tagged_context)],
         "provider": result["provider"],
         "model": result["model"],
+        "responder": result.get("responder", "architect"),
         "workspace": workspace,
         "warning": "; ".join(tagged_context.get("errors", [])),
         "elapsed_ms": int((time.time() - started) * 1000),
@@ -332,6 +358,81 @@ def _tag_events(tagged_context: dict[str, Any]) -> list[str]:
     ]
     events.extend(f"Tagged context warning: {error}" for error in tagged_context.get("errors", []))
     return events
+
+
+def _repair_missing_create_action(prompt: str, answer: str, workspace: str) -> dict[str, Any]:
+    """Convert obvious code-only create responses into approval-gated actions."""
+    request = _latest_user_request(prompt)
+    if not _looks_like_create_request(request):
+        return {"success": False}
+
+    content = _first_code_block(answer) or _first_code_block(prompt) or _print_script_from_request(request)
+    if not content:
+        return {"success": False, "error": "no code content found"}
+
+    path = (
+        _first_path_candidate(request)
+        or _first_path_candidate(answer)
+        or _first_path_candidate(prompt)
+        or _default_script_path(request, content)
+    )
+    try:
+        proposal = create_new_file(path, content, workspace)
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+    if not proposal.get("success"):
+        return {"success": False, "error": str(proposal.get("error", "proposal failed"))}
+    return proposal
+
+
+def _latest_user_request(prompt: str) -> str:
+    marker = "Current user request:"
+    if marker in prompt:
+        return prompt.rsplit(marker, 1)[-1].strip()
+    return prompt
+
+
+def _looks_like_create_request(text: str) -> bool:
+    lowered = text.lower()
+    return any(word in lowered for word in ("create", "make", "write", "add")) and any(
+        word in lowered for word in ("file", "script", "program")
+    )
+
+
+def _first_code_block(text: str) -> str:
+    match = re.search(r"```(?:[A-Za-z0-9_+.-]+)?\s*\n(.*?)```", text, flags=re.DOTALL)
+    if not match:
+        return ""
+    content = match.group(1).strip("\n")
+    return content + ("\n" if content and not content.endswith("\n") else "")
+
+
+def _print_script_from_request(text: str) -> str:
+    match = re.search(r"prints?\s+['\"]?([A-Za-z0-9 _.-]+)['\"]?", text, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    if not value:
+        return ""
+    return f'print("{value}")\n'
+
+
+def _first_path_candidate(text: str) -> str:
+    candidates = re.findall(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9_+-]+", text)
+    for candidate in candidates:
+        candidate = candidate.strip("`'\"")
+        if candidate and not candidate.startswith(("http://", "https://")):
+            return candidate
+    return ""
+
+
+def _default_script_path(request: str, content: str) -> str:
+    if "print(\"abc\")" in content or "print('abc')" in content or "abc" in request.lower():
+        return "scripts/print_abc.py"
+    words = re.findall(r"[A-Za-z0-9]+", request.lower())
+    stem_words = [word for word in words if word not in {"create", "make", "write", "add", "a", "an", "the", "file", "script", "program", "that"}]
+    stem = "_".join(stem_words[:4]) or "generated_script"
+    return f"scripts/{stem}.py"
 
 
 def _extract_file_targets(prompt: str, files: list[dict[str, Any]]) -> list[str]:

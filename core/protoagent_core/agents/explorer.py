@@ -5,7 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from .. import tools
-from .common import QUIET_LOGGER, create_selected_llm, resolve_agent_url, set_transport_timeout
+from .common import (
+    QUIET_LOGGER,
+    conversation_storage,
+    create_selected_llm,
+    resolve_agent_url,
+    set_transport_timeout,
+    session_aware_agent_class,
+    with_workspace_contract,
+)
 
 EXPLORER_SYSTEM_PROMPT = """You are the ProtoAgent Explorer.
 
@@ -15,6 +23,7 @@ execute arbitrary shell commands.
 
 Return compact markdown with exact file paths and line references when useful.
 Prioritize the smallest context that lets Architect and Coder act safely.
+Always state the project-relative paths you inspected.
 """
 
 
@@ -27,7 +36,7 @@ def create_explorer_agent(
     transport: str = "sse",
 ):
     """Create the read-only repository cartographer."""
-    from protolink.agents import Agent
+    Agent = session_aware_agent_class()
 
     agent = Agent(
         card={
@@ -48,7 +57,9 @@ def create_explorer_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=EXPLORER_SYSTEM_PROMPT,
+        system_prompt=with_workspace_contract(EXPLORER_SYSTEM_PROMPT, workspace, "Explorer"),
+        storage=conversation_storage("explorer"),
+        state=["conversation"],
         logger=QUIET_LOGGER,
         verbosity=0,
     )
