@@ -413,14 +413,14 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                 muted(),
                 false,
             ));
-            rows.push(row("mode", "fixed panels, fluid transcript, bottom input", green(), false));
+            rows.push(row("mode", "fullscreen takeover, fixed panels, fluid transcript, bottom input", green(), false));
         }
         PanelView::Models => {
             rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
             rows.push(row("inventory", &app.status.model_summary, magenta(), false));
             rows.push(row("providers", &app.status.provider_summary, yellow(), false));
             rows.push(row("config", &app.status.config_path, muted(), false));
-            rows.push(row("tip", "use the web app for richer provider inspection", green(), false));
+            rows.push(row("tip", "use /check for runtime wiring and /config for provider setup", green(), false));
         }
         PanelView::Agents => {
             rows.push(row("architect", "intake, routing, final answer, approval gate", magenta(), true));
@@ -448,7 +448,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("panels", "/dashboard /models /agents /check /config /help", magenta(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("session", "/quit or Esc", muted(), false));
-            rows.push(row("launch", "web app: proto-cli start | terminal app: proto-cli tui", green(), false));
+            rows.push(row("launch", "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"", green(), false));
         }
     }
     rows

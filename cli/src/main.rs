@@ -1,31 +1,20 @@
 use anyhow::{anyhow, Result};
 use console::{style, Term};
-use crossterm::{
-    cursor::{MoveToColumn, Show},
-    event::{read, Event, KeyCode, KeyModifiers},
-    execute, queue,
-    terminal::{
-        disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
-    },
-};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Confirm, Password, Select, Text};
 use pyo3::prelude::*;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::env;
-use std::io::{stdout, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-mod webapp;
 mod terminal_ui;
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
 const INPUT_HISTORY_CAPACITY: usize = 10_000;
-const HISTORY_PANEL_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Deserialize)]
 struct CoreResponse {
@@ -151,91 +140,14 @@ struct AgentManifest {
     tools: Vec<String>,
 }
 
-#[derive(Default)]
-struct SessionState {
-    turn: usize,
-    last_query: String,
-    last_response: Option<CoreResponse>,
-    input_history: VecDeque<String>,
-}
-
-impl SessionState {
-    fn remember_input(&mut self, input: &str) {
-        let input = input.trim();
-        if input.is_empty() {
-            return;
-        }
-        if self.input_history.back().map(String::as_str) == Some(input) {
-            return;
-        }
-        if self.input_history.len() >= INPUT_HISTORY_CAPACITY {
-            self.input_history.pop_front();
-        }
-        self.input_history.push_back(input.to_string());
-    }
-}
-
-struct TerminalTakeover {
-    active: bool,
-    interactive: bool,
-}
-
-impl TerminalTakeover {
-    fn enter() -> Self {
-        let interactive = stdout().is_terminal();
-        if env::var("PROTOAGENT_NO_ALT").is_ok() || env::var("PROTOAGENT_ALT_SCREEN").is_err() {
-            if interactive {
-                let mut out = stdout();
-                let _ = execute!(out, Show, SetTitle("ProtoAgent // Local Agent Console"));
-            }
-            return Self {
-                active: false,
-                interactive,
-            };
-        }
-
-        let mut out = stdout();
-        let active = execute!(
-            out,
-            EnterAlternateScreen,
-            Show,
-            SetTitle("ProtoAgent // Local Agent Console"),
-            Clear(ClearType::All)
-        )
-        .is_ok();
-
-        Self {
-            active,
-            interactive,
-        }
-    }
-}
-
-impl Drop for TerminalTakeover {
-    fn drop(&mut self) {
-        let mut out = stdout();
-        if self.active {
-            let _ = execute!(out, Show, LeaveAlternateScreen);
-        } else if self.interactive {
-            let _ = execute!(out, Show);
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     env::set_var("PYTHONDONTWRITEBYTECODE", "1");
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        None | Some("start") | Some("app") | Some("ui") | Some("web") => {
-            if env::var("PROTOAGENT_NO_ALT").is_ok() {
-                legacy_interactive().await
-            } else {
-                let app_args = if args.is_empty() { &[] } else { &args[1..] };
-                webapp::serve(app_args).await
-            }
+        None | Some("start") | Some("cli") | Some("tui") | Some("terminal") | Some("ui") => {
+            terminal_ui::interactive().await
         }
-        Some("cli") | Some("tui") | Some("terminal") => terminal_ui::interactive().await,
         Some("run") => {
             let query = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
             if query.trim().is_empty() {
@@ -283,209 +195,6 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn legacy_interactive() -> Result<()> {
-    let _takeover = TerminalTakeover::enter();
-    let term = Term::stdout();
-    if env::var("PROTOAGENT_ALT_SCREEN").is_ok() {
-        term.clear_screen()?;
-    }
-    let mut state = SessionState::default();
-
-    show_dashboard()?;
-    println!(
-        "{}",
-        style("Press /menu for the command palette. Type a task to launch the agent deck.")
-            .dim()
-            .italic()
-    );
-
-    loop {
-        print_status_strip(&state);
-        let prompt = interactive_prompt(&state);
-        let prompt_width = interactive_prompt_width(&state);
-        let Some(input) = read_primary_input(&prompt, prompt_width, &state.input_history)? else {
-            break;
-        };
-        let input = input.trim();
-        if input.is_empty() {
-            continue;
-        }
-        state.remember_input(input);
-
-        if input.starts_with('/') {
-            match handle_slash_command(input, &term, &mut state).await {
-                Ok(should_continue) => {
-                    if !should_continue {
-                        break;
-                    }
-                }
-                Err(err) => render_error(&err.to_string()),
-            }
-            continue;
-        }
-
-        state.turn += 1;
-        state.last_query = input.to_string();
-        match run_orchestration(input).await {
-            Ok(response) => state.last_response = Some(response),
-            Err(err) => render_error(&err.to_string()),
-        }
-    }
-
-    println!("{}", style("Session restored to your shell.").cyan().bold());
-    Ok(())
-}
-
-async fn handle_slash_command(input: &str, term: &Term, state: &mut SessionState) -> Result<bool> {
-    let mut parts = input.split_whitespace();
-    let command = parts.next().unwrap_or("");
-    match command {
-        "/quit" | "/exit" => Ok(false),
-        "/clear" => {
-            term.clear_screen()?;
-            show_dashboard()?;
-            Ok(true)
-        }
-        "/help" => {
-            print_interactive_help();
-            Ok(true)
-        }
-        "/menu" | "/palette" => command_palette(state).await,
-        "/dashboard" | "/dash" | "/status" => {
-            show_dashboard()?;
-            Ok(true)
-        }
-        "/models" => {
-            show_models()?;
-            Ok(true)
-        }
-        "/model" | "/provider" => {
-            choose_model(None)?;
-            Ok(true)
-        }
-        "/key" => {
-            add_key(parts.next())?;
-            Ok(true)
-        }
-        "/config" => {
-            show_config()?;
-            Ok(true)
-        }
-        "/check" => {
-            show_check()?;
-            Ok(true)
-        }
-        "/agents" => {
-            show_agents()?;
-            Ok(true)
-        }
-        "/last" => {
-            show_last_response(state)?;
-            Ok(true)
-        }
-        "/history" => {
-            show_input_history(state)?;
-            Ok(true)
-        }
-        "/diff" => {
-            show_last_diff(state)?;
-            Ok(true)
-        }
-        "/run" => {
-            let query = parts.collect::<Vec<_>>().join(" ");
-            if query.trim().is_empty() {
-                println!("{}", style("Usage: /run your task").yellow());
-            } else {
-                state.turn += 1;
-                state.last_query = query.clone();
-                state.last_response = Some(run_orchestration(&query).await?);
-            }
-            Ok(true)
-        }
-        _ => {
-            println!("{}", style("Unknown slash command. Try /menu or /help.").yellow());
-            Ok(true)
-        }
-    }
-}
-
-async fn command_palette(state: &mut SessionState) -> Result<bool> {
-    let choices = vec![
-        "Run task",
-        "Dashboard",
-        "Model radar",
-        "Choose model",
-        "Add API key",
-        "Check",
-        "Agent topology",
-        "Config",
-        "Last response",
-        "Input history",
-        "Last diff",
-        "Clear screen",
-        "Quit session",
-    ];
-    let selected = Select::new("Command palette", choices).prompt()?;
-    match selected {
-        "Run task" => {
-            let query = Text::new("Task").prompt()?;
-            if !query.trim().is_empty() {
-                state.turn += 1;
-                state.last_query = query.trim().to_string();
-                state.last_response = Some(run_orchestration(query.trim()).await?);
-            }
-            Ok(true)
-        }
-        "Dashboard" => {
-            show_dashboard()?;
-            Ok(true)
-        }
-        "Model radar" => {
-            show_models()?;
-            Ok(true)
-        }
-        "Choose model" => {
-            choose_model(None)?;
-            Ok(true)
-        }
-        "Add API key" => {
-            add_key(None)?;
-            Ok(true)
-        }
-        "Check" => {
-            show_check()?;
-            Ok(true)
-        }
-        "Agent topology" => {
-            show_agents()?;
-            Ok(true)
-        }
-        "Config" => {
-            show_config()?;
-            Ok(true)
-        }
-        "Last response" => {
-            show_last_response(state)?;
-            Ok(true)
-        }
-        "Input history" => {
-            show_input_history(state)?;
-            Ok(true)
-        }
-        "Last diff" => {
-            show_last_diff(state)?;
-            Ok(true)
-        }
-        "Clear screen" => {
-            Term::stdout().clear_screen()?;
-            show_dashboard()?;
-            Ok(true)
-        }
-        "Quit session" => Ok(false),
-        _ => Ok(true),
-    }
-}
-
 fn print_header() -> Result<()> {
     render_brand_header();
     Ok(())
@@ -494,9 +203,8 @@ fn print_header() -> Result<()> {
 fn print_cli_help() {
     render_brand_header();
     println!("{}", style("Commands").bold().underlined());
-    println!("  proto-cli start              Start the local browser app");
-    println!("  proto-cli app [--port N]     Start the local browser app on an optional port");
-    println!("  proto-cli tui                Start the fullscreen terminal UI");
+    println!("  proto-cli start              Start the fullscreen terminal UI");
+    println!("  proto-cli tui                Alias for the fullscreen terminal UI");
     println!("  proto-cli cli                Alias for the fullscreen terminal UI");
     println!("  proto-cli run \"task\"         Run one task");
     println!("  proto-cli dashboard          Show cockpit status");
@@ -507,24 +215,6 @@ fn print_cli_help() {
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!();
-}
-
-fn print_interactive_help() {
-    let rows = vec![
-        "/menu       Command palette".to_string(),
-        "/dashboard  Cockpit overview".to_string(),
-        "/models     Model radar for Ollama, LM Studio, OpenAI-compatible, llama.cpp, and APIs".to_string(),
-        "/model      Select active provider/model".to_string(),
-        "/key        Store a cloud provider key".to_string(),
-        "/check      Runtime checks".to_string(),
-        "/agents     Agent topology and tool isolation".to_string(),
-        "/last       Re-render the last response".to_string(),
-        "/history    Show retained prompt history".to_string(),
-        "/diff       Re-render the last proposed diff".to_string(),
-        "/clear      Redraw console".to_string(),
-        "/quit       Leave the console".to_string(),
-    ];
-    print_panel("COMMANDS", &rows, PanelTone::Cyan);
 }
 
 async fn run_orchestration(query: &str) -> Result<CoreResponse> {
@@ -1039,52 +729,6 @@ fn print_agent_graph() {
     print_panel("AGENT DECK", &rows, PanelTone::Magenta);
 }
 
-fn show_last_response(state: &SessionState) -> Result<()> {
-    if let Some(response) = &state.last_response {
-        render_response(response)
-    } else {
-        print_panel("LAST RESPONSE", &["No response in this session yet.".to_string()], PanelTone::Yellow);
-        Ok(())
-    }
-}
-
-fn show_last_diff(state: &SessionState) -> Result<()> {
-    if let Some(response) = &state.last_response {
-        if response.diff.trim().is_empty() {
-            print_panel("LAST DIFF", &["No diff in the last response.".to_string()], PanelTone::Yellow);
-        } else {
-            render_diff(&response.diff);
-        }
-    } else {
-        print_panel("LAST DIFF", &["No response in this session yet.".to_string()], PanelTone::Yellow);
-    }
-    Ok(())
-}
-
-fn show_input_history(state: &SessionState) -> Result<()> {
-    if state.input_history.is_empty() {
-        print_panel("INPUT HISTORY", &["No prompt history in this session yet.".to_string()], PanelTone::Yellow);
-        return Ok(());
-    }
-
-    let total = state.input_history.len();
-    let start = total.saturating_sub(HISTORY_PANEL_LIMIT);
-    let mut rows = Vec::new();
-    if start > 0 {
-        rows.push(format!(
-            "Showing last {} of {} retained inputs.",
-            HISTORY_PANEL_LIMIT, INPUT_HISTORY_CAPACITY
-        ));
-    } else {
-        rows.push(format!("Retaining up to {} inputs in this session.", INPUT_HISTORY_CAPACITY));
-    }
-    for (idx, item) in state.input_history.iter().enumerate().skip(start) {
-        rows.push(format!("{:04}  {}", idx + 1, item));
-    }
-    print_panel("INPUT HISTORY", &rows, PanelTone::Cyan);
-    Ok(())
-}
-
 fn load_inventory() -> Result<ModelInventory> {
     let json = call_no_args("list_models").map_err(|err| anyhow!("Python model discovery error: {err:?}"))?;
     Ok(serde_json::from_str(&json)?)
@@ -1098,263 +742,6 @@ fn load_visible_config() -> Result<VisibleConfig> {
 fn load_doctor() -> Result<DoctorReport> {
     let json = call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
     Ok(serde_json::from_str(&json)?)
-}
-
-fn print_status_strip(state: &SessionState) {
-    let active = active_label().unwrap_or_else(|_| "provider: unknown / model: unknown".to_string());
-    let last = if state.last_query.is_empty() {
-        "last: none".to_string()
-    } else {
-        format!("last: {}", truncate_plain(&state.last_query, 34))
-    };
-    println!(
-        "{} {} {}",
-        style(format!("[turn {:02}]", state.turn + 1)).magenta().bold(),
-        style(active).cyan(),
-        style(last).dim()
-    );
-}
-
-fn active_label() -> Result<String> {
-    let config = load_visible_config()?;
-    let provider = config.active_provider;
-    let model = config
-        .providers
-        .get(&provider)
-        .map(|data| data.model.as_str())
-        .unwrap_or("");
-    Ok(format!(
-        "provider: {} / model: {}",
-        provider,
-        if model.is_empty() { "not selected" } else { model }
-    ))
-}
-
-fn interactive_prompt(state: &SessionState) -> String {
-    format!("{} ", style(format!("proto[{:02}]>", state.turn + 1)).bold().magenta())
-}
-
-fn interactive_prompt_width(state: &SessionState) -> u16 {
-    format!("proto[{:02}]> ", state.turn + 1).chars().count() as u16
-}
-
-fn read_primary_input(prompt: &str, prompt_width: u16, history: &VecDeque<String>) -> Result<Option<String>> {
-    if stdout().is_terminal() {
-        execute!(stdout(), Show)?;
-    }
-    if enable_raw_mode().is_err() {
-        return read_primary_input_fallback(prompt);
-    }
-
-    let mut raw = RawModeGuard { active: true };
-    let mut editor = LineEditor::new(prompt, prompt_width, history);
-    editor.render()?;
-
-    loop {
-        let event = read()?;
-        let Event::Key(key) = event else {
-            continue;
-        };
-
-        match key.code {
-            KeyCode::Enter => {
-                let line = editor.line();
-                raw.disable()?;
-                println!();
-                return Ok(Some(line));
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                raw.disable()?;
-                println!();
-                return Ok(None);
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
-                raw.disable()?;
-                println!();
-                return Ok(None);
-            }
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
-            KeyCode::Backspace => editor.backspace(),
-            KeyCode::Delete => editor.delete(),
-            KeyCode::Left => editor.move_left(),
-            KeyCode::Right => editor.move_right(),
-            KeyCode::Home => editor.move_home(),
-            KeyCode::End => editor.move_end(),
-            KeyCode::Up => editor.history_prev(),
-            KeyCode::Down => editor.history_next(),
-            KeyCode::Tab => editor.insert_str("  "),
-            _ => {}
-        }
-        editor.render()?;
-    }
-}
-
-fn read_primary_input_fallback(prompt: &str) -> Result<Option<String>> {
-    print!("{prompt}");
-    stdout().flush()?;
-
-    let mut buffer = String::new();
-    let bytes = std::io::stdin().read_line(&mut buffer)?;
-    if bytes == 0 {
-        return Ok(None);
-    }
-    Ok(Some(buffer.trim_end_matches(['\r', '\n']).to_string()))
-}
-
-struct RawModeGuard {
-    active: bool,
-}
-
-impl RawModeGuard {
-    fn disable(&mut self) -> Result<()> {
-        if self.active {
-            disable_raw_mode()?;
-            self.active = false;
-        }
-        Ok(())
-    }
-}
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        if self.active {
-            let _ = disable_raw_mode();
-        }
-    }
-}
-
-struct LineEditor<'a> {
-    prompt: &'a str,
-    prompt_width: u16,
-    history: &'a VecDeque<String>,
-    buffer: Vec<char>,
-    cursor: usize,
-    history_index: Option<usize>,
-    draft: Vec<char>,
-}
-
-impl<'a> LineEditor<'a> {
-    fn new(prompt: &'a str, prompt_width: u16, history: &'a VecDeque<String>) -> Self {
-        Self {
-            prompt,
-            prompt_width,
-            history,
-            buffer: Vec::new(),
-            cursor: 0,
-            history_index: None,
-            draft: Vec::new(),
-        }
-    }
-
-    fn render(&self) -> Result<()> {
-        let width = actual_terminal_width();
-        let prompt_width = self.prompt_width as usize;
-        let available = width.saturating_sub(prompt_width).max(12);
-        let offset = if self.cursor >= available {
-            self.cursor + 1 - available
-        } else {
-            0
-        };
-        let visible: String = self.buffer.iter().skip(offset).take(available).collect();
-        let cursor_col = self.prompt_width.saturating_add((self.cursor.saturating_sub(offset)) as u16);
-
-        let mut out = stdout();
-        queue!(out, MoveToColumn(0), Clear(ClearType::CurrentLine), Show)?;
-        write!(out, "{}{}", self.prompt, visible)?;
-        queue!(out, MoveToColumn(cursor_col))?;
-        out.flush()?;
-        Ok(())
-    }
-
-    fn line(&self) -> String {
-        self.buffer.iter().collect()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-
-    fn insert(&mut self, ch: char) {
-        self.buffer.insert(self.cursor, ch);
-        self.cursor += 1;
-        self.history_index = None;
-    }
-
-    fn insert_str(&mut self, text: &str) {
-        for ch in text.chars() {
-            self.insert(ch);
-        }
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            self.buffer.remove(self.cursor);
-            self.history_index = None;
-        }
-    }
-
-    fn delete(&mut self) {
-        if self.cursor < self.buffer.len() {
-            self.buffer.remove(self.cursor);
-            self.history_index = None;
-        }
-    }
-
-    fn move_left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    fn move_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.buffer.len());
-    }
-
-    fn move_home(&mut self) {
-        self.cursor = 0;
-    }
-
-    fn move_end(&mut self) {
-        self.cursor = self.buffer.len();
-    }
-
-    fn history_prev(&mut self) {
-        if self.history.is_empty() {
-            return;
-        }
-        let next_index = match self.history_index {
-            Some(index) => index.saturating_sub(1),
-            None => {
-                self.draft = self.buffer.clone();
-                self.history.len() - 1
-            }
-        };
-        self.load_history(next_index);
-    }
-
-    fn history_next(&mut self) {
-        let Some(index) = self.history_index else {
-            return;
-        };
-        if index + 1 < self.history.len() {
-            self.load_history(index + 1);
-        } else {
-            self.history_index = None;
-            self.buffer = self.draft.clone();
-            self.cursor = self.buffer.len();
-        }
-    }
-
-    fn load_history(&mut self, index: usize) {
-        if let Some(value) = self.history.get(index) {
-            self.history_index = Some(index);
-            self.buffer = value.chars().collect();
-            self.cursor = self.buffer.len();
-        }
-    }
-}
-
-fn render_error(message: &str) {
-    print_panel("ERROR", &[message.to_string()], PanelTone::Yellow);
 }
 
 #[derive(Clone, Copy)]
@@ -1407,11 +794,6 @@ fn tone_style(text: &str, tone: PanelTone) -> console::StyledObject<&str> {
 fn terminal_width() -> usize {
     let (_rows, cols) = Term::stdout().size();
     (cols as usize).clamp(72, 118)
-}
-
-fn actual_terminal_width() -> usize {
-    let (_rows, cols) = Term::stdout().size();
-    (cols as usize).max(40)
 }
 
 fn panel_inner_width() -> usize {

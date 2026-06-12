@@ -74,7 +74,7 @@ Navigate to your project directory and wake up the agent. It will automatically 
 # Start an interactive autonomous session
 protoagent start
 
-# Start the terminal UI instead
+# Explicit terminal UI alias
 protoagent tui
 
 # Or pass a direct task
@@ -82,13 +82,13 @@ protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 
 ```
 
-### In-App Commands
+### TUI Commands
 
-`protoagent start` runs a local Rust web app and prints a localhost URL. Open
-that URL in a browser to use a terminal-like interface without terminal redraw,
-scrollback, or color limitations.
+`protoagent start` opens the fullscreen Rust terminal UI. The TUI takes over the
+terminal with a fixed status panel, a dedicated chat viewport, and a bottom input
+editor. Scrolling is handled inside the chat, not by shell scrollback.
 
-Inside the app you can use slash commands:
+Inside the TUI you can use slash commands:
 
 * `/clear` - Clears the browser transcript.
 * `/dashboard` - Shows the dashboard status panel.
@@ -104,7 +104,6 @@ Inside the app you can use slash commands:
 
 ```bash
 cargo run --manifest-path cli/Cargo.toml -- start
-cargo run --manifest-path cli/Cargo.toml -- app --port 4157
 cargo run --manifest-path cli/Cargo.toml -- tui
 cargo run --manifest-path cli/Cargo.toml -- cli
 cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
@@ -117,13 +116,11 @@ cargo run --manifest-path cli/Cargo.toml -- check
 cargo run --manifest-path cli/Cargo.toml -- agents
 ```
 
-Interactive mode is browser-rendered by default. The top area is a fixed status
-panel, the middle viewport is the chat transcript, and the bottom bar is the
-input editor. `/models`, `/agents`, `/check`, `/config`, `/help`, and
+Interactive mode is the fullscreen TUI by default. The top area is a fixed
+status panel, the middle viewport is the chat transcript, and the bottom bar is
+the input editor. `/models`, `/agents`, `/check`, `/config`, `/help`, and
 `/dashboard` switch the fixed status panel instead of printing status blocks
-into the chat. Use `protoagent tui` for a fullscreen terminal UI that mirrors
-the browser layout as closely as terminal constraints allow. Set
-`PROTOAGENT_NO_ALT=1` to use the older inline terminal transcript mode.
+into the chat.
 
 ---
 
