@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::{
-    empty_as_unknown, load_inventory, load_visible_config, truncate_plain, CoreResponse, DoctorReport,
-    ModelInventory, INPUT_HISTORY_CAPACITY,
+    empty_as_unknown, load_inventory, load_visible_config, CoreResponse, DoctorReport, ModelInventory,
+    INPUT_HISTORY_CAPACITY,
 };
 
 pub(super) struct TerminalApp {
@@ -249,9 +249,9 @@ fn doctor_summary(report: &DoctorReport) -> String {
             if report.protolink.streaming_ready { "ready" } else { "unavailable" }
         )
     } else if report.protolink.installed {
-        format!("ProtoLink blocked ({})", truncate_plain(&report.protolink.error, 40))
+        format!("ProtoLink blocked ({})", report.protolink.error)
     } else {
-        format!("ProtoLink missing ({})", truncate_plain(&report.protolink.error, 40))
+        format!("ProtoLink missing ({})", report.protolink.error)
     };
     format!(
         "{} | Python {} | active {} [{}]",

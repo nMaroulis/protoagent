@@ -13,9 +13,7 @@ use std::io::{stdout, Stdout, Write};
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::{
-    call_apply_action, call_process_prompt, empty_as_unknown, load_doctor, truncate_plain, wrap_lines, CoreResponse,
-};
+use crate::{call_apply_action, call_process_prompt, empty_as_unknown, load_doctor, wrap_lines, CoreResponse};
 
 mod input;
 mod state;
@@ -25,7 +23,7 @@ use state::{PanelView, Role, TerminalApp, TerminalMessage};
 
 const HEADER_ROWS: u16 = 9;
 const INPUT_ROWS: u16 = 4;
-const WHEEL_LINES: usize = 3;
+const WHEEL_LINES: usize = 5;
 
 pub(crate) async fn interactive() -> Result<()> {
     let mut terminal = TerminalSurface::enter()?;
@@ -100,7 +98,7 @@ impl TerminalSurface {
     fn render(&mut self, app: &TerminalApp, editor: Option<&InputEditor>) -> Result<()> {
         let (width, height) = size();
         let mut out = stdout();
-        queue!(out, Hide, Clear(ClearType::All))?;
+        queue!(out, Hide)?;
         draw_header(&mut out, width, app)?;
         draw_transcript(&mut out, width, height, app)?;
         let cursor = draw_input(&mut out, width, height, app, editor)?;
@@ -356,6 +354,8 @@ fn apply_actions(actions: &[Value], workspace: &str) -> Result<String> {
 }
 
 fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Result<()> {
+    let controls_row = HEADER_ROWS.saturating_sub(2);
+    let separator_row = HEADER_ROWS.saturating_sub(1);
     write_line(
         out,
         0,
@@ -365,30 +365,39 @@ fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Result<()> {
         magenta(),
         true,
     )?;
-    write_line(
-        out,
-        1,
-        width,
-        &format!(" {} / {}    {}", app.status.provider, app.status.model, app.activity),
-        cyan(),
-        panel_bg(),
-        true,
-    )?;
 
-    let rows = panel_rows(app);
-    for (idx, row) in rows.iter().enumerate().take(5) {
-        write_line(out, (idx + 2) as u16, width, row, muted(), panel_bg(), false)?;
+    for y in 1..separator_row {
+        write_line(out, y, width, "", muted(), panel_bg(), false)?;
     }
+
+    let content_width = width.saturating_sub(2).max(20) as usize;
+    let mut content = Vec::new();
+    append_wrapped_render_line(
+        &mut content,
+        " ",
+        &format!("{} / {}    {}", app.status.provider, app.status.model, app.activity),
+        cyan(),
+        true,
+        content_width,
+    );
+    for row in panel_rows(app) {
+        append_wrapped_render_line(&mut content, " ", &row, muted(), false, content_width);
+    }
+    let available_rows = controls_row.saturating_sub(1) as usize;
+    for (idx, line) in content.iter().take(available_rows).enumerate() {
+        write_line(out, idx as u16 + 1, width, &line.text, line.color, panel_bg(), line.bold)?;
+    }
+
     write_line(
         out,
-        7,
+        controls_row,
         width,
         " /dashboard /models /agents /doctor /config /help    Wheel/PageUp scrolls chat    Esc exits",
         muted(),
         panel_bg(),
         false,
     )?;
-    write_line(out, 8, width, &"-".repeat(width as usize), magenta(), panel_bg(), false)?;
+    write_line(out, separator_row, width, &"-".repeat(width as usize), magenta(), panel_bg(), false)?;
     Ok(())
 }
 
@@ -400,7 +409,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<String> {
             " agents Architect routes | Explorer reads | Coder drafts | human approves".to_string(),
             format!(
                 " last {}",
-                if app.last_query.is_empty() { "none".to_string() } else { truncate_plain(&app.last_query, 72) }
+                if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() }
             ),
             " web parity: fixed panel, fluid transcript, bottom input".to_string(),
         ],
@@ -449,7 +458,7 @@ fn draw_transcript(out: &mut Stdout, width: u16, height: u16, app: &TerminalApp)
         write_line(out, y, width, "", text(), bg(), false)?;
     }
 
-    let content_width = width.saturating_sub(8).max(20) as usize;
+    let content_width = width.saturating_sub(4).max(20) as usize;
     let mut lines = Vec::new();
     for message in &app.messages {
         if !lines.is_empty() {
@@ -481,19 +490,9 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
         color,
         bold: true,
     });
-    for line in wrap_lines(&message.body, width) {
-        lines.push(RenderLine {
-            text: format!("  | {}", line),
-            color: text(),
-            bold: false,
-        });
-    }
+    append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
     if !message.meta.is_empty() {
-        lines.push(RenderLine {
-            text: format!("  | [{}]", message.meta.join("] [")),
-            color: muted(),
-            bold: false,
-        });
+        append_wrapped_render_line(lines, "  | ", &format!("[{}]", message.meta.join("] [")), muted(), false, width);
     }
     if !message.details.is_empty() {
         let labels = message
@@ -502,10 +501,32 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
             .map(|(label, _)| label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+        append_wrapped_render_line(
+            lines,
+            "  | ",
+            &format!("details: {} (use /diff for proposed diff)", labels),
+            yellow(),
+            false,
+            width,
+        );
+    }
+}
+
+fn append_wrapped_render_line(
+    lines: &mut Vec<RenderLine>,
+    prefix: &str,
+    text_value: &str,
+    color: Color,
+    bold: bool,
+    width: usize,
+) {
+    let prefix_width = prefix.chars().count();
+    let wrap_width = width.saturating_sub(prefix_width).max(1);
+    for line in wrap_lines(text_value, wrap_width) {
         lines.push(RenderLine {
-            text: format!("  | details: {} (use /diff for proposed diff)", labels),
-            color: yellow(),
-            bold: false,
+            text: format!("{prefix}{line}"),
+            color,
+            bold,
         });
     }
 }
@@ -528,7 +549,7 @@ fn draw_input(
             " status {}    chat {}    last {}",
             app.activity,
             if app.scroll_offset == 0 { "live".to_string() } else { "scrolled".to_string() },
-            if app.last_query.is_empty() { "none".to_string() } else { truncate_plain(&app.last_query, 52) }
+            if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() }
         ),
         muted(),
         input_bg(),
@@ -548,7 +569,7 @@ fn draw_input(
         SetBackgroundColor(input_bg()),
         Print(prompt),
         SetForegroundColor(text()),
-        Print(truncate_plain(&visible, available))
+        Print(clip_plain(&visible, available))
     )?;
     Ok((2 + prompt.len() as u16 + cursor as u16, top + 1))
 }
@@ -630,7 +651,7 @@ fn write_at(
     background: Color,
     bold: bool,
 ) -> Result<()> {
-    let mut value = truncate_plain(text_value, width as usize);
+    let mut value = clip_plain(text_value, width as usize);
     let len = value.chars().count();
     if len < width as usize {
         value.push_str(&" ".repeat(width as usize - len));
@@ -645,6 +666,10 @@ fn write_at(
         SetAttribute(Attribute::Reset)
     )?;
     Ok(())
+}
+
+fn clip_plain(text: &str, width: usize) -> String {
+    text.chars().take(width).collect()
 }
 
 fn role_color(role: Role) -> Color {
