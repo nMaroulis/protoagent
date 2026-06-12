@@ -14,6 +14,7 @@ pub(super) struct TerminalApp {
     pub(super) last_query: String,
     pub(super) last_response: Option<CoreResponse>,
     pub(super) activity: String,
+    pub(super) scroll_offset: usize,
 }
 
 impl TerminalApp {
@@ -27,6 +28,7 @@ impl TerminalApp {
             last_query: String::new(),
             last_response: None,
             activity: "idle".to_string(),
+            scroll_offset: 0,
         };
         app.refresh(None);
         app.push(Role::System, "Ready", "Type a task. Slash commands change the fixed top panel.");
@@ -49,6 +51,7 @@ impl TerminalApp {
     }
 
     pub(super) fn push(&mut self, role: Role, label: &str, body: &str) {
+        self.jump_to_bottom();
         self.messages.push(TerminalMessage {
             role,
             label: label.to_string(),
@@ -59,6 +62,7 @@ impl TerminalApp {
     }
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
+        self.jump_to_bottom();
         let body = response
             .answer
             .trim()
@@ -101,6 +105,18 @@ impl TerminalApp {
                 .push(("Approval required".to_string(), format!("{} action payload(s) waiting.", response.actions.len())));
         }
         self.messages.push(message);
+    }
+
+    pub(super) fn scroll_up(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_add(amount).min(100_000);
+    }
+
+    pub(super) fn scroll_down(&mut self, amount: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+    }
+
+    pub(super) fn jump_to_bottom(&mut self) {
+        self.scroll_offset = 0;
     }
 }
 

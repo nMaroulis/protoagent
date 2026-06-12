@@ -1,17 +1,17 @@
 use std::collections::VecDeque;
 
-pub(super) struct InputEditor<'a> {
-    history: &'a VecDeque<String>,
+pub(super) struct InputEditor {
+    history: VecDeque<String>,
     buffer: Vec<char>,
     cursor: usize,
     history_index: Option<usize>,
     draft: Vec<char>,
 }
 
-impl<'a> InputEditor<'a> {
-    pub(super) fn new(history: &'a VecDeque<String>) -> Self {
+impl InputEditor {
+    pub(super) fn new(history: &VecDeque<String>) -> Self {
         Self {
-            history,
+            history: history.clone(),
             buffer: Vec::new(),
             cursor: 0,
             history_index: None,

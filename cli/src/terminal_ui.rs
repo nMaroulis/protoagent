@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{read, Event, KeyCode, KeyModifiers},
+    event::{read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute, queue,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{
@@ -25,6 +25,7 @@ use state::{PanelView, Role, TerminalApp, TerminalMessage};
 
 const HEADER_ROWS: u16 = 9;
 const INPUT_ROWS: u16 = 4;
+const WHEEL_LINES: usize = 3;
 
 pub(crate) async fn interactive() -> Result<()> {
     let mut terminal = TerminalSurface::enter()?;
@@ -61,21 +62,37 @@ struct TerminalSurface {
 impl TerminalSurface {
     fn enter() -> Result<Self> {
         enable_raw_mode()?;
-        execute!(
+        let enter_result = execute!(
             stdout(),
+            Clear(ClearType::Purge),
             EnterAlternateScreen,
+            EnableMouseCapture,
             Hide,
             SetTitle("ProtoAgent Terminal"),
-            Clear(ClearType::All)
-        )?;
+            Clear(ClearType::All),
+            Clear(ClearType::Purge)
+        );
+        if let Err(err) = enter_result {
+            let _ = disable_raw_mode();
+            return Err(err.into());
+        }
         Ok(Self { active: true })
     }
 
     fn leave(&mut self) -> Result<()> {
         if self.active {
-            disable_raw_mode()?;
-            execute!(stdout(), ResetColor, Show, LeaveAlternateScreen)?;
+            let leave_result = execute!(
+                stdout(),
+                ResetColor,
+                Show,
+                DisableMouseCapture,
+                Clear(ClearType::All),
+                LeaveAlternateScreen
+            );
+            let raw_result = disable_raw_mode();
             self.active = false;
+            leave_result?;
+            raw_result?;
         }
         Ok(())
     }
@@ -96,30 +113,48 @@ impl TerminalSurface {
         let mut editor = InputEditor::new(&app.input_history);
         loop {
             self.render(app, Some(&editor))?;
-            let Event::Key(key) = read()? else {
-                continue;
-            };
-            match key.code {
-                KeyCode::Enter => return Ok(Some(editor.line())),
-                KeyCode::Esc => return Ok(None),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
-                    return Ok(None);
-                }
-                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
-                KeyCode::Backspace => editor.backspace(),
-                KeyCode::Delete => editor.delete(),
-                KeyCode::Left => editor.move_left(),
-                KeyCode::Right => editor.move_right(),
-                KeyCode::Home => editor.move_home(),
-                KeyCode::End => editor.move_end(),
-                KeyCode::Up => editor.history_prev(),
-                KeyCode::Down => editor.history_next(),
-                KeyCode::Tab => editor.insert_str("  "),
+            match read()? {
+                Event::Key(key) => match key.code {
+                    KeyCode::Enter => return Ok(Some(editor.line())),
+                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
+                        return Ok(None);
+                    }
+                    KeyCode::PageUp => app.scroll_up(chat_page_size()),
+                    KeyCode::PageDown => app.scroll_down(chat_page_size()),
+                    KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => app.scroll_up(100_000),
+                    KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => app.jump_to_bottom(),
+                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
+                    KeyCode::Backspace => editor.backspace(),
+                    KeyCode::Delete => editor.delete(),
+                    KeyCode::Left => editor.move_left(),
+                    KeyCode::Right => editor.move_right(),
+                    KeyCode::Home => editor.move_home(),
+                    KeyCode::End => editor.move_end(),
+                    KeyCode::Up => editor.history_prev(),
+                    KeyCode::Down => editor.history_next(),
+                    KeyCode::Tab => editor.insert_str("  "),
+                    _ => {}
+                },
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => app.scroll_up(WHEEL_LINES),
+                    MouseEventKind::ScrollDown => app.scroll_down(WHEEL_LINES),
+                    _ => {}
+                },
+                Event::Resize(_, _) => {}
                 _ => {}
             }
         }
     }
+}
+
+fn chat_page_size() -> usize {
+    let (_, height) = size();
+    height
+        .saturating_sub(HEADER_ROWS + INPUT_ROWS)
+        .saturating_sub(1)
+        .max(1) as usize
 }
 
 impl Drop for TerminalSurface {
@@ -348,7 +383,7 @@ fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Result<()> {
         out,
         7,
         width,
-        " /dashboard /models /agents /doctor /config /help    Enter sends  Esc exits",
+        " /dashboard /models /agents /doctor /config /help    Wheel/PageUp scrolls chat    Esc exits",
         muted(),
         panel_bg(),
         false,
@@ -400,7 +435,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<String> {
         PanelView::Help => vec![
             " chat: type any task or /run <task>".to_string(),
             " panels: /dashboard /models /agents /doctor /config /help".to_string(),
-            " transcript: /clear /last /diff".to_string(),
+            " transcript: mouse wheel, PageUp/PageDown, Ctrl-End, /clear, /last, /diff".to_string(),
             " session: /quit or Esc".to_string(),
             " browser app: proto-cli start | terminal app: proto-cli tui".to_string(),
         ],
@@ -423,9 +458,18 @@ fn draw_transcript(out: &mut Stdout, width: u16, height: u16, app: &TerminalApp)
         append_message_lines(&mut lines, message, content_width);
     }
     let visible = bottom.saturating_sub(top) as usize;
-    let start = lines.len().saturating_sub(visible);
+    let latest_start = lines.len().saturating_sub(visible);
+    let scroll_offset = app.scroll_offset.min(latest_start);
+    let start = latest_start.saturating_sub(scroll_offset);
     for (idx, line) in lines.iter().skip(start).take(visible).enumerate() {
         write_line(out, top + idx as u16, width, &line.text, line.color, bg(), line.bold)?;
+    }
+    if scroll_offset > 0 && visible > 0 {
+        let marker = format!(
+            "  chat scrolled up {} line(s)  |  wheel down / PageDown / Ctrl-End returns to live",
+            scroll_offset
+        );
+        write_line(out, top, width, &marker, yellow(), bg(), true)?;
     }
     Ok(())
 }
@@ -481,8 +525,9 @@ fn draw_input(
         top + 2,
         width,
         &format!(
-            " status {}    last {}",
+            " status {}    chat {}    last {}",
             app.activity,
+            if app.scroll_offset == 0 { "live".to_string() } else { "scrolled".to_string() },
             if app.last_query.is_empty() { "none".to_string() } else { truncate_plain(&app.last_query, 52) }
         ),
         muted(),
