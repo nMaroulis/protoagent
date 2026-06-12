@@ -31,7 +31,31 @@ impl TerminalApp {
             scroll_offset: 0,
         };
         app.refresh(None);
-        app.push(Role::System, "Ready", "Type a task. Slash commands change the fixed top panel.");
+        if let Some(project) = crate::active_project_dir() {
+            app.push(
+                Role::System,
+                "Project",
+                &format!(
+                    "Opened last project: {}\nType a task to run it in this folder. Type @ to tag files.",
+                    project.to_string_lossy()
+                ),
+            );
+        } else if let Some(project) = crate::stored_project_dir() {
+            app.push(
+                Role::Error,
+                "Project",
+                &format!(
+                    "Last project is missing: {}\nUse /project to choose a folder before running tasks.",
+                    project.to_string_lossy()
+                ),
+            );
+        } else {
+            app.push(
+                Role::System,
+                "Project",
+                "No project selected yet.\nUse /project to choose a folder, or /project . for the launch directory.",
+            );
+        }
         app
     }
 
@@ -133,6 +157,7 @@ impl<'a> EmptyFallback<'a> for &'a str {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum PanelView {
     Dashboard,
+    Project,
     Models,
     Agents,
     Check,
@@ -144,6 +169,7 @@ impl PanelView {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Dashboard => "dashboard",
+            Self::Project => "project",
             Self::Models => "models",
             Self::Agents => "agents",
             Self::Check => "check",
@@ -175,6 +201,9 @@ pub(super) struct StatusSnapshot {
     pub(super) provider: String,
     pub(super) model: String,
     pub(super) workspace: String,
+    pub(super) project_short: String,
+    pub(super) project_config_path: String,
+    pub(super) project_ready: bool,
     pub(super) config_path: String,
     pub(super) model_summary: String,
     pub(super) provider_summary: String,
@@ -186,7 +215,10 @@ impl StatusSnapshot {
         let mut snapshot = Self {
             provider: "unknown".to_string(),
             model: "not selected".to_string(),
-            workspace: crate::workspace_dir_string(),
+            workspace: crate::project_label(),
+            project_short: crate::project_short_label(),
+            project_config_path: crate::project_config_path().to_string_lossy().to_string(),
+            project_ready: crate::active_project_dir().is_some(),
             config_path: "unknown".to_string(),
             model_summary: "model inventory unavailable".to_string(),
             provider_summary: "providers unavailable".to_string(),

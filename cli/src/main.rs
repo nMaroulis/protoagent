@@ -3,10 +3,10 @@ use console::{style, Term};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use inquire::{Confirm, Password, Select, Text};
 use pyo3::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::env;
+use std::{env, fs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -140,6 +140,13 @@ struct AgentManifest {
     tools: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+struct ProjectConfig {
+    active_project: Option<String>,
+    #[serde(default)]
+    recent_projects: Vec<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     env::set_var("PYTHONDONTWRITEBYTECODE", "1");
@@ -172,6 +179,10 @@ async fn main() -> Result<()> {
         Some("config") => {
             print_header()?;
             show_config()
+        }
+        Some("project") | Some("projects") | Some("open") => {
+            print_header()?;
+            handle_project_command(&args[1..])
         }
         Some("check") => {
             print_header()?;
@@ -212,6 +223,9 @@ fn print_cli_help() {
     println!("  proto-cli model              Pick active provider/model");
     println!("  proto-cli key [provider]     Add API key");
     println!("  proto-cli config             Show current config");
+    println!("  proto-cli project            Show or choose active project folder");
+    println!("  proto-cli project set PATH   Set active project folder");
+    println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!();
@@ -243,7 +257,7 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     pb_coder.enable_steady_tick(Duration::from_millis(100));
 
     let prompt = query.to_string();
-    let workspace = workspace_dir_string();
+    let workspace = require_project_dir_string()?;
     let json = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace))
         .await?
         .map_err(|err| anyhow!("Python core error: {err:?}"))?;
@@ -390,9 +404,9 @@ fn show_dashboard() -> Result<()> {
     render_brand_header();
     let inventory = load_inventory();
     let config = load_visible_config();
-    let workspace = workspace_dir_string();
+    let project = project_label();
 
-    let mut rows = vec![format!("Workspace : {}", workspace)];
+    let mut rows = vec![format!("Project   : {}", project)];
     match &config {
         Ok(config) => {
             let provider = &config.active_provider;
@@ -431,10 +445,95 @@ fn show_dashboard() -> Result<()> {
     let commands = vec![
         "/menu opens the command palette".to_string(),
         "/models scans local and cloud model options".to_string(),
+        "/project sets the active project folder".to_string(),
+        "Use @ inside a task to tag project files".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
     ];
     print_panel("HOTKEYS", &commands, PanelTone::Cyan);
+    Ok(())
+}
+
+fn handle_project_command(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        None | Some("show") | Some("status") => show_project(),
+        Some("set") | Some("open") => {
+            let path = args
+                .get(1)
+                .ok_or_else(|| anyhow!("Usage: proto-cli project set PATH"))?;
+            let selected = set_active_project(path)?;
+            print_panel(
+                "PROJECT OPENED",
+                &[
+                    format!("Active : {}", selected.to_string_lossy()),
+                    "Future starts will reopen this project automatically.".to_string(),
+                ],
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+        Some("clear") | Some("unset") => {
+            clear_active_project()?;
+            print_panel(
+                "PROJECT CLEARED",
+                &["No project is selected. Run `proto-cli project set PATH` or use `/project` in the TUI.".to_string()],
+                PanelTone::Yellow,
+            );
+            Ok(())
+        }
+        Some("choose") => choose_project_from_prompt(),
+        Some(path) => {
+            let selected = set_active_project(path)?;
+            print_panel(
+                "PROJECT OPENED",
+                &[
+                    format!("Active : {}", selected.to_string_lossy()),
+                    "Future starts will reopen this project automatically.".to_string(),
+                ],
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+    }
+}
+
+fn show_project() -> Result<()> {
+    let config = load_project_config();
+    let mut rows = vec![
+        format!("Active : {}", project_label()),
+        format!("Config : {}", project_config_path().to_string_lossy()),
+    ];
+    if !config.recent_projects.is_empty() {
+        rows.push("Recent :".to_string());
+        for path in config.recent_projects.iter().take(8) {
+            rows.push(format!("  - {path}"));
+        }
+    }
+    rows.push("Set    : proto-cli project set PATH".to_string());
+    rows.push("TUI    : /project or /project PATH".to_string());
+    rows.push("Tags   : type @ in the TUI to insert a project file reference".to_string());
+    print_panel("PROJECT", &rows, PanelTone::Magenta);
+    Ok(())
+}
+
+fn choose_project_from_prompt() -> Result<()> {
+    let initial = active_project_dir()
+        .unwrap_or_else(default_launch_workspace)
+        .to_string_lossy()
+        .to_string();
+    let entered = Text::new("Project folder")
+        .with_initial_value(&initial)
+        .prompt()?;
+    if entered.trim().is_empty() {
+        print_panel("PROJECT", &["Selection cancelled.".to_string()], PanelTone::Yellow);
+        return Ok(());
+    }
+    let selected = set_active_project(&entered)?;
+    print_panel(
+        "PROJECT OPENED",
+        &[format!("Active : {}", selected.to_string_lossy())],
+        PanelTone::Cyan,
+    );
     Ok(())
 }
 
@@ -954,14 +1053,152 @@ fn repo_root_from(cwd: &Path) -> Option<PathBuf> {
     None
 }
 
-fn workspace_dir_string() -> String {
+pub(crate) fn require_project_dir_string() -> Result<String> {
+    active_project_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .ok_or_else(|| anyhow!("No project selected. Run `proto-cli project set PATH` or use `/project` in the TUI."))
+}
+
+pub(crate) fn active_project_dir() -> Option<PathBuf> {
+    let config = load_project_config();
+    let path = config.active_project?;
+    let path = PathBuf::from(path);
+    if path.is_dir() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn stored_project_dir() -> Option<PathBuf> {
+    load_project_config().active_project.map(PathBuf::from)
+}
+
+pub(crate) fn project_label() -> String {
+    match stored_project_dir() {
+        Some(path) if path.is_dir() => path.to_string_lossy().to_string(),
+        Some(path) => format!("missing: {} - use /project", path.to_string_lossy()),
+        None => "not selected - use /project".to_string(),
+    }
+}
+
+pub(crate) fn project_short_label() -> String {
+    match stored_project_dir() {
+        Some(path) if path.is_dir() => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| path.to_string_lossy().to_string()),
+        Some(_) => "missing project".to_string(),
+        None => "no project".to_string(),
+    }
+}
+
+pub(crate) fn project_config_path() -> PathBuf {
+    protoagent_config_dir().join("project.json")
+}
+
+pub(crate) fn set_active_project(input: &str) -> Result<PathBuf> {
+    let selected = resolve_project_path(input)?;
+    let selected_label = selected.to_string_lossy().to_string();
+    let mut config = load_project_config();
+    config.active_project = Some(selected_label.clone());
+    config.recent_projects.retain(|path| path != &selected_label);
+    config.recent_projects.insert(0, selected_label);
+    config.recent_projects.truncate(12);
+    save_project_config(&config)?;
+    Ok(selected)
+}
+
+pub(crate) fn clear_active_project() -> Result<()> {
+    let mut config = load_project_config();
+    config.active_project = None;
+    save_project_config(&config)
+}
+
+pub(crate) fn default_launch_workspace() -> PathBuf {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if cwd.file_name().and_then(|name| name.to_str()) == Some("cli") {
         if let Some(parent) = cwd.parent() {
             if parent.join("whitepaper.md").exists() {
-                return parent.to_string_lossy().to_string();
+                return parent.to_path_buf();
             }
         }
     }
-    cwd.to_string_lossy().to_string()
+    cwd
+}
+
+fn workspace_dir_string() -> String {
+    active_project_dir()
+        .unwrap_or_else(default_launch_workspace)
+        .to_string_lossy()
+        .to_string()
+}
+
+fn load_project_config() -> ProjectConfig {
+    let path = project_config_path();
+    let Ok(raw) = fs::read_to_string(path) else {
+        return ProjectConfig::default();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn save_project_config(config: &ProjectConfig) -> Result<()> {
+    let path = project_config_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let raw = serde_json::to_string_pretty(config)?;
+    fs::write(path, raw)?;
+    Ok(())
+}
+
+fn resolve_project_path(input: &str) -> Result<PathBuf> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("Project path cannot be empty"));
+    }
+    let expanded = expand_home(trimmed);
+    let path = if expanded.is_absolute() {
+        expanded
+    } else {
+        default_launch_workspace().join(expanded)
+    };
+    let resolved = path
+        .canonicalize()
+        .map_err(|err| anyhow!("Could not open project folder `{}`: {err}", path.to_string_lossy()))?;
+    if !resolved.is_dir() {
+        return Err(anyhow!("Project path is not a folder: {}", resolved.to_string_lossy()));
+    }
+    Ok(resolved)
+}
+
+fn expand_home(input: &str) -> PathBuf {
+    if input == "~" {
+        return home_dir().unwrap_or_else(|| PathBuf::from(input));
+    }
+    if let Some(rest) = input.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(input)
+}
+
+fn protoagent_config_dir() -> PathBuf {
+    if let Ok(value) = env::var("PROTOAGENT_CONFIG_DIR") {
+        if !value.trim().is_empty() {
+            return expand_home(&value);
+        }
+    }
+    home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".protoagent")
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
 }

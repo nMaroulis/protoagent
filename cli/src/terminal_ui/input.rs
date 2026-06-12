@@ -19,6 +19,18 @@ impl InputEditor {
         }
     }
 
+    pub(super) fn with_initial(history: &VecDeque<String>, initial: &str) -> Self {
+        let buffer = initial.chars().collect::<Vec<_>>();
+        let cursor = buffer.len();
+        Self {
+            history: history.clone(),
+            buffer,
+            cursor,
+            history_index: None,
+            draft: Vec::new(),
+        }
+    }
+
     pub(super) fn line(&self) -> String {
         self.buffer.iter().collect()
     }

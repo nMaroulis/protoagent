@@ -68,9 +68,13 @@ ln -s $(pwd)/target/release/proto-cli /usr/local/bin/protoagent
 
 ## 💻 Usage
 
-Navigate to your project directory and wake up the agent. It will automatically detect your local Git context and file structure.
+Choose the project folder first. ProtoAgent remembers the last opened project
+and reopens it on the next start.
 
 ```bash
+# Choose the folder the agent should work inside
+protoagent project set ~/projects/my-app
+
 # Start an interactive autonomous session
 protoagent start
 
@@ -82,6 +86,16 @@ protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 
 ```
 
+Inside the TUI, type a normal sentence to run a task. Use `@` in the input to
+open the project file picker and insert a tagged file reference, for example:
+
+```text
+explain @src/auth.rs and suggest a safer JWT flow
+```
+
+Tagged files are loaded as bounded read-only context before the agent pipeline
+runs.
+
 ### TUI Commands
 
 `protoagent start` opens the fullscreen Rust terminal UI. The TUI takes over the
@@ -90,8 +104,11 @@ editor. Scrolling is handled inside the chat, not by shell scrollback.
 
 Inside the TUI you can use slash commands:
 
-* `/clear` - Clears the browser transcript.
+* `/clear` - Clears the chat transcript.
 * `/dashboard` - Shows the dashboard status panel.
+* `/project` - Choose the active project folder.
+* `/project PATH` - Open a project folder directly.
+* `/project clear` - Clear the active project folder.
 * `/models` - Shows model/provider status.
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
@@ -106,6 +123,9 @@ Inside the TUI you can use slash commands:
 cargo run --manifest-path cli/Cargo.toml -- start
 cargo run --manifest-path cli/Cargo.toml -- tui
 cargo run --manifest-path cli/Cargo.toml -- cli
+cargo run --manifest-path cli/Cargo.toml -- project
+cargo run --manifest-path cli/Cargo.toml -- project set ~/projects/my-app
+cargo run --manifest-path cli/Cargo.toml -- project clear
 cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
 cargo run --manifest-path cli/Cargo.toml -- dashboard
 cargo run --manifest-path cli/Cargo.toml -- models
@@ -118,9 +138,9 @@ cargo run --manifest-path cli/Cargo.toml -- agents
 
 Interactive mode is the fullscreen TUI by default. The top area is a fixed
 status panel, the middle viewport is the chat transcript, and the bottom bar is
-the input editor. `/models`, `/agents`, `/check`, `/config`, `/help`, and
-`/dashboard` switch the fixed status panel instead of printing status blocks
-into the chat.
+the input editor. `/project`, `/models`, `/agents`, `/check`, `/config`,
+`/help`, and `/dashboard` switch the fixed status panel instead of printing
+status blocks into the chat.
 
 ---
 
