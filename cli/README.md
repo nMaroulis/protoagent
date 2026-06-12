@@ -74,6 +74,9 @@ Navigate to your project directory and wake up the agent. It will automatically 
 # Start an interactive autonomous session
 protoagent start
 
+# Start the terminal UI instead
+protoagent tui
+
 # Or pass a direct task
 protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 
@@ -81,26 +84,29 @@ protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
 
 ### In-App Commands
 
-Once the interactive terminal is running, you can use slash commands:
+`protoagent start` runs a local Rust web app and prints a localhost URL. Open
+that URL in a browser to use a terminal-like interface without terminal redraw,
+scrollback, or color limitations.
 
-* `/clear` - Clears the current terminal buffer.
-* `/menu` - Opens the command palette.
-* `/dashboard` - Redraws the full cockpit.
-* `/models` - Shows Ollama, LM Studio, llama.cpp, and cloud provider model options.
-* `/model` - Selects the active provider/model.
-* `/key` - Adds an OpenAI, Anthropic, Gemini, or DeepSeek API key.
-* `/config` - Shows the redacted provider config.
-* `/doctor` - Checks Python, protolink, and the active provider.
+Inside the app you can use slash commands:
+
+* `/clear` - Clears the browser transcript.
+* `/dashboard` - Shows the dashboard status panel.
+* `/models` - Shows model/provider status.
+* `/config` - Shows redacted provider config status.
+* `/doctor` - Refreshes Python, protolink, and active provider status.
 * `/agents` - Shows the Architect / Explorer / Coder topology.
-* `/last` - Re-renders the last agent response.
-* `/history` - Shows the retained prompt history for this session.
-* `/diff` - Re-renders the last proposed diff.
-* `/help`  - Displays all available commands.
+* `/last` - Replays the last agent response.
+* `/run` - Runs a task from a slash command.
+* `/help`  - Shows available commands in the fixed panel.
 
 ### Direct Commands
 
 ```bash
 cargo run --manifest-path cli/Cargo.toml -- start
+cargo run --manifest-path cli/Cargo.toml -- app --port 4157
+cargo run --manifest-path cli/Cargo.toml -- tui
+cargo run --manifest-path cli/Cargo.toml -- cli
 cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
 cargo run --manifest-path cli/Cargo.toml -- dashboard
 cargo run --manifest-path cli/Cargo.toml -- models
@@ -111,10 +117,13 @@ cargo run --manifest-path cli/Cargo.toml -- doctor
 cargo run --manifest-path cli/Cargo.toml -- agents
 ```
 
-Interactive mode runs inline by default so your terminal scrollback keeps the
-agent transcript. The prompt has a visible cursor, basic editing keys, and
-Up/Down navigation through the last 10,000 session inputs. Set
-`PROTOAGENT_ALT_SCREEN=1` to run it in an alternate-screen cockpit.
+Interactive mode is browser-rendered by default. The top area is a fixed status
+panel, the middle viewport is the chat transcript, and the bottom bar is the
+input editor. `/models`, `/agents`, `/doctor`, `/config`, `/help`, and
+`/dashboard` switch the fixed status panel instead of printing status blocks
+into the chat. Use `protoagent tui` for a fullscreen terminal UI that mirrors
+the browser layout as closely as terminal constraints allow. Set
+`PROTOAGENT_NO_ALT=1` to use the older inline terminal transcript mode.
 
 ---
 

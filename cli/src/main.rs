@@ -15,9 +15,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::env;
-use std::io::{stdout, Write};
+use std::io::{stdout, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+mod webapp;
+mod terminal_ui;
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
@@ -174,14 +177,21 @@ impl SessionState {
 
 struct TerminalTakeover {
     active: bool,
+    interactive: bool,
 }
 
 impl TerminalTakeover {
     fn enter() -> Self {
+        let interactive = stdout().is_terminal();
         if env::var("PROTOAGENT_NO_ALT").is_ok() || env::var("PROTOAGENT_ALT_SCREEN").is_err() {
-            let mut out = stdout();
-            let _ = execute!(out, Show, SetTitle("ProtoAgent // Local Agent Console"));
-            return Self { active: false };
+            if interactive {
+                let mut out = stdout();
+                let _ = execute!(out, Show, SetTitle("ProtoAgent // Local Agent Console"));
+            }
+            return Self {
+                active: false,
+                interactive,
+            };
         }
 
         let mut out = stdout();
@@ -194,7 +204,10 @@ impl TerminalTakeover {
         )
         .is_ok();
 
-        Self { active }
+        Self {
+            active,
+            interactive,
+        }
     }
 }
 
@@ -203,7 +216,7 @@ impl Drop for TerminalTakeover {
         let mut out = stdout();
         if self.active {
             let _ = execute!(out, Show, LeaveAlternateScreen);
-        } else {
+        } else if self.interactive {
             let _ = execute!(out, Show);
         }
     }
@@ -214,7 +227,15 @@ async fn main() -> Result<()> {
     env::set_var("PYTHONDONTWRITEBYTECODE", "1");
     let args: Vec<String> = env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        None | Some("start") => interactive().await,
+        None | Some("start") | Some("app") | Some("ui") | Some("web") => {
+            if env::var("PROTOAGENT_NO_ALT").is_ok() {
+                legacy_interactive().await
+            } else {
+                let app_args = if args.is_empty() { &[] } else { &args[1..] };
+                webapp::serve(app_args).await
+            }
+        }
+        Some("cli") | Some("tui") | Some("terminal") => terminal_ui::interactive().await,
         Some("run") => {
             let query = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
             if query.trim().is_empty() {
@@ -262,7 +283,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn interactive() -> Result<()> {
+async fn legacy_interactive() -> Result<()> {
     let _takeover = TerminalTakeover::enter();
     let term = Term::stdout();
     if env::var("PROTOAGENT_ALT_SCREEN").is_ok() {
@@ -473,7 +494,10 @@ fn print_header() -> Result<()> {
 fn print_cli_help() {
     render_brand_header();
     println!("{}", style("Commands").bold().underlined());
-    println!("  proto-cli start              Enter the full-screen agent console");
+    println!("  proto-cli start              Start the local browser app");
+    println!("  proto-cli app [--port N]     Start the local browser app on an optional port");
+    println!("  proto-cli tui                Start the fullscreen terminal UI");
+    println!("  proto-cli cli                Alias for the fullscreen terminal UI");
     println!("  proto-cli run \"task\"         Run one task");
     println!("  proto-cli dashboard          Show cockpit status");
     println!("  proto-cli models             Show detected local/API models");
@@ -1115,7 +1139,9 @@ fn interactive_prompt_width(state: &SessionState) -> u16 {
 }
 
 fn read_primary_input(prompt: &str, prompt_width: u16, history: &VecDeque<String>) -> Result<Option<String>> {
-    execute!(stdout(), Show)?;
+    if stdout().is_terminal() {
+        execute!(stdout(), Show)?;
+    }
     if enable_raw_mode().is_err() {
         return read_primary_input_fallback(prompt);
     }
