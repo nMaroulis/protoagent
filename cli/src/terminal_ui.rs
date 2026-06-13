@@ -19,9 +19,11 @@ use tokio::time::sleep;
 use crate::{call_apply_action, call_process_prompt, empty_as_unknown, load_doctor, wrap_lines, CoreResponse};
 
 mod input;
+mod model_picker;
 mod state;
 
 use input::InputEditor;
+use model_picker::handle_model_command;
 use state::{PanelView, Role, TerminalApp, TerminalMessage};
 
 const HEADER_ROWS: u16 = 9;
@@ -188,7 +190,16 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             Ok(true)
         }
         "/models" => {
-            switch_panel(app, PanelView::Models, command, "Models panel pinned.");
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            if matches!(arg.trim(), "choose" | "set" | "select") {
+                handle_model_command(app, terminal)?;
+            } else {
+                switch_panel(app, PanelView::Models, command, "Models panel pinned.");
+            }
+            Ok(true)
+        }
+        "/model" | "/provider" => {
+            handle_model_command(app, terminal)?;
             Ok(true)
         }
         "/agents" => {
@@ -439,6 +450,109 @@ fn project_prompt(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<O
             _ => {}
         }
     }
+}
+
+fn prompt_line_modal(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    title: &str,
+    rows: &[String],
+    initial: &str,
+) -> Result<Option<String>> {
+    let history = VecDeque::new();
+    let mut editor = InputEditor::with_initial(&history, initial);
+    loop {
+        terminal.render(app, None)?;
+        draw_input_modal(title, rows, &editor)?;
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+        match key.code {
+            KeyCode::Enter => return Ok(Some(editor.line())),
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
+            KeyCode::Backspace => editor.backspace(),
+            KeyCode::Delete => editor.delete(),
+            KeyCode::Left => editor.move_left(),
+            KeyCode::Right => editor.move_right(),
+            KeyCode::Home => editor.move_home(),
+            KeyCode::End => editor.move_end(),
+            _ => {}
+        }
+    }
+}
+
+fn pick_choice_modal(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    title: &str,
+    rows: &[String],
+    choices: &[String],
+    initial: usize,
+) -> Result<Option<usize>> {
+    if choices.is_empty() {
+        return Ok(None);
+    }
+
+    let mut filter = String::new();
+    let mut selected = initial.min(choices.len().saturating_sub(1));
+    loop {
+        let matches = filtered_choices(choices, &filter);
+        selected = selected.min(matches.len().saturating_sub(1));
+        terminal.render(app, None)?;
+        draw_choice_picker_modal(title, rows, &filter, &matches, selected)?;
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                if let Some((original_index, _)) = matches.get(selected) {
+                    return Ok(Some(*original_index));
+                }
+            }
+            KeyCode::Esc => return Ok(None),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
+            KeyCode::Backspace => {
+                filter.pop();
+                selected = 0;
+            }
+            KeyCode::Up => selected = selected.saturating_sub(1),
+            KeyCode::Down => {
+                if selected + 1 < matches.len() {
+                    selected += 1;
+                }
+            }
+            KeyCode::PageUp => selected = selected.saturating_sub(8),
+            KeyCode::PageDown => selected = (selected + 8).min(matches.len().saturating_sub(1)),
+            KeyCode::Home => selected = 0,
+            KeyCode::End => selected = matches.len().saturating_sub(1),
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                filter.push(ch);
+                selected = 0;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn filtered_choices(choices: &[String], filter: &str) -> Vec<(usize, String)> {
+    if filter.trim().is_empty() {
+        return choices
+            .iter()
+            .enumerate()
+            .take(200)
+            .map(|(index, choice)| (index, choice.clone()))
+            .collect();
+    }
+    let needle = filter.to_lowercase();
+    choices
+        .iter()
+        .enumerate()
+        .filter(|(_, choice)| choice.to_lowercase().contains(&needle))
+        .take(200)
+        .map(|(index, choice)| (index, choice.clone()))
+        .collect()
 }
 
 fn pick_project_file(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<Option<String>> {
@@ -702,6 +816,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Models => {
             rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
+            rows.push(row("choose", "/model opens the in-app provider/model picker", green(), true));
             rows.push(row("inventory", &app.status.model_summary, magenta(), false));
             rows.push(row("providers", &app.status.provider_summary, yellow(), false));
             rows.push(row("config", &app.status.config_path, muted(), false));
@@ -731,6 +846,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         PanelView::Help => {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
+            rows.push(row("model", "/model changes active provider/model without leaving the TUI", green(), true));
             rows.push(row("panels", "/dashboard /project /models /agents /check /config /help", magenta(), false));
             rows.push(row("output", "/trace shows last agent path; /diff shows proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
@@ -1013,6 +1129,92 @@ fn draw_input_modal(title: &str, rows: &[String], editor: &InputEditor) -> Resul
         modal_bg(),
         true,
     )?;
+    out.flush()?;
+    Ok(())
+}
+
+fn draw_choice_picker_modal(
+    title: &str,
+    rows: &[String],
+    filter: &str,
+    choices: &[(usize, String)],
+    selected: usize,
+) -> Result<()> {
+    let (width, height) = size();
+    let modal_width = width.saturating_mul(4).saturating_div(5).clamp(52, width.saturating_sub(4));
+    let modal_height = height.saturating_mul(2).saturating_div(3).clamp(11, height.saturating_sub(4));
+    let x = width.saturating_sub(modal_width) / 2;
+    let y = height.saturating_sub(modal_height) / 2;
+    let info_rows = rows
+        .len()
+        .min(modal_height.saturating_sub(8) as usize);
+    let list_start = y + 4 + info_rows as u16;
+    let list_rows = modal_height
+        .saturating_sub(info_rows as u16)
+        .saturating_sub(5) as usize;
+    let inner = modal_width.saturating_sub(4).max(10) as usize;
+    let mut out = stdout();
+
+    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), magenta(), modal_bg(), true)?;
+    write_at(&mut out, x, y + 1, modal_width, &format!(" {title}"), magenta(), modal_bg(), true)?;
+    for idx in 0..info_rows {
+        let row = rows.get(idx).map(String::as_str).unwrap_or("");
+        write_at(&mut out, x, y + idx as u16 + 2, modal_width, row, text(), modal_bg(), false)?;
+    }
+    let filter_y = y + 2 + info_rows as u16;
+    write_at(
+        &mut out,
+        x,
+        filter_y,
+        modal_width,
+        &format!(" Filter : {}", if filter.is_empty() { "(type to filter)" } else { filter }),
+        cyan(),
+        modal_bg(),
+        false,
+    )?;
+    write_at(
+        &mut out,
+        x,
+        filter_y + 1,
+        modal_width,
+        " Enter selects. Esc cancels. Up/Down/Page moves.",
+        yellow(),
+        modal_bg(),
+        false,
+    )?;
+
+    let start = if selected >= list_rows {
+        selected + 1 - list_rows
+    } else {
+        0
+    };
+    for row_index in 0..list_rows {
+        let choice_index = start + row_index;
+        let row_y = list_start + row_index as u16;
+        let Some((_, choice)) = choices.get(choice_index) else {
+            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), bg(), false)?;
+            continue;
+        };
+        let active = choice_index == selected;
+        let marker = if active { ">" } else { " " };
+        write_at(
+            &mut out,
+            x + 1,
+            row_y,
+            modal_width.saturating_sub(2),
+            &format!("{marker} {}", clip_plain(choice, inner.saturating_sub(2))),
+            if active { black() } else { text() },
+            if active { cyan() } else { bg() },
+            active,
+        )?;
+    }
+
+    let footer = if choices.is_empty() {
+        " No matches".to_string()
+    } else {
+        format!(" {} match(es)", choices.len())
+    };
+    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, magenta(), modal_bg(), true)?;
     out.flush()?;
     Ok(())
 }
