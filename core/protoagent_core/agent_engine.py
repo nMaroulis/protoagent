@@ -77,6 +77,7 @@ def process_prompt(
     prompt: str,
     workspace: str | None = None,
     session_id: str | None = None,
+    progress_path: str | None = None,
 ) -> str:
     """Process a user prompt and return structured CLI output as JSON.
 
@@ -86,15 +87,21 @@ def process_prompt(
     started = time.time()
     workspace = str(workspace_root(workspace))
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
+    _emit_progress(progress_path, f"CLI accepted task for workspace {workspace}.")
+    _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
     tagged_context = _tagged_file_context(prompt, workspace)
+    for event in _tag_events(tagged_context):
+        _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
-        return _json(_fallback_response(prompt, workspace, started, tagged_context))
+        _emit_progress(progress_path, "Scaffold mode selected; returning diagnostics without a model call.")
+        return _json(_fallback_response(prompt, workspace, started, tagged_context, progress_path))
 
     try:
-        return _json(_model_response(prompt, workspace, started, tagged_context, session_id))
+        return _json(_model_response(prompt, workspace, started, tagged_context, session_id, progress_path))
     except Exception as exc:
-        fallback = _fallback_response(prompt, workspace, started, tagged_context)
+        _emit_progress(progress_path, f"ProtoLink agent run failed: {exc}")
+        fallback = _fallback_response(prompt, workspace, started, tagged_context, progress_path)
         fallback["status"] = "fallback"
         fallback["headline"] = "ProtoLink agent run failed; showing core diagnostics."
         fallback["warning"] = str(exc)
@@ -131,6 +138,7 @@ def _fallback_response(
     workspace: str,
     started: float,
     tagged_context: dict[str, Any] | None = None,
+    progress_path: str | None = None,
 ) -> dict[str, Any]:
     """Build a diagnostic response when the live ProtoLink run is unavailable."""
     tagged_context = tagged_context or {"items": [], "errors": []}
@@ -155,6 +163,8 @@ def _fallback_response(
     if not model:
         events.append("No active model is selected for the current provider.")
     events.extend(_tag_events(tagged_context))
+    for event in events:
+        _emit_progress(progress_path, event)
 
     thought = (
         f"Request: {prompt}\n\n"
@@ -193,11 +203,12 @@ def _model_response(
     started: float,
     tagged_context: dict[str, Any] | None = None,
     session_id: str | None = None,
+    progress_path: str | None = None,
 ) -> dict[str, Any]:
     """Run the live model path and adapt the result to the CLI response schema."""
     tagged_context = tagged_context or {"items": [], "errors": []}
     runtime_prompt = _prompt_with_tagged_context(prompt, tagged_context)
-    result = run_selected_model(runtime_prompt, workspace, session_id)
+    result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
@@ -214,12 +225,14 @@ def _model_response(
             repair_events.append(
                 f"Coder safety net converted code-only create response into approval action for {repaired['path']}."
             )
+            _emit_progress(progress_path, repair_events[-1])
             answer = (
                 answer.rstrip()
                 + f"\n\nPrepared an approval-gated file creation for `{repaired['path']}`."
             )
         elif repaired.get("error"):
             repair_events.append(f"Create-action safety net did not run: {repaired['error']}")
+            _emit_progress(progress_path, repair_events[-1])
     action_targets = [
         str(action.get("path", ""))
         for action in action_items
@@ -450,3 +463,17 @@ def _extract_file_targets(prompt: str, files: list[dict[str, Any]]) -> list[str]
 def _json(value: dict[str, Any]) -> str:
     """Serialize a response using ASCII-safe JSON for the Rust boundary."""
     return json.dumps(value, ensure_ascii=True)
+
+
+def _emit_progress(progress_path: str | None, message: str) -> None:
+    """Best-effort JSONL progress emitter for the TUI."""
+    if not progress_path:
+        return
+    try:
+        with open(progress_path, "a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps({"ts": time.time(), "event": message}, ensure_ascii=True) + "\n"
+            )
+            handle.flush()
+    except OSError:
+        pass

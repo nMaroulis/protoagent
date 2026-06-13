@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use console::{style, Term};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{ProgressBar, ProgressStyle};
 use inquire::{Confirm, Password, Select, Text};
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,10 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod progress;
 mod terminal_ui;
+
+use progress::{latest_progress_message, ProgressFile};
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
@@ -237,39 +240,53 @@ fn print_cli_help() {
 async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     render_run_banner(query);
 
-    let m = MultiProgress::new();
-    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
-        .tick_chars(">|/-\\");
-
-    let pb_architect = m.add(ProgressBar::new_spinner());
-    pb_architect.set_style(spinner_style.clone());
-    pb_architect.set_prefix("[architect]");
-    pb_architect.set_message("routing request through the Python core");
-    pb_architect.enable_steady_tick(Duration::from_millis(80));
-
-    let pb_explorer = m.add(ProgressBar::new_spinner());
-    pb_explorer.set_style(spinner_style.clone());
-    pb_explorer.set_prefix("[explorer]");
-    pb_explorer.set_message("mapping workspace context");
-    pb_explorer.enable_steady_tick(Duration::from_millis(120));
-
-    let pb_coder = m.add(ProgressBar::new_spinner());
-    pb_coder.set_style(spinner_style);
-    pb_coder.set_prefix("[coder]");
-    pb_coder.set_message("preparing approval-safe output");
-    pb_coder.enable_steady_tick(Duration::from_millis(100));
-
     let prompt = query.to_string();
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
-    let json = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace, session_id))
-        .await?
-        .map_err(|err| anyhow!("Python core error: {err:?}"))?;
 
-    pb_architect.finish_with_message("request routed");
-    pb_explorer.finish_with_message("context mapped");
-    pb_coder.finish_with_message("output assembled");
-    m.clear()?;
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
+        .tick_chars(">|/-\\");
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(spinner_style);
+    pb.set_prefix("[protolink]");
+    pb.set_message("starting ProtoLink runtime");
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let mut progress_file = ProgressFile::new("run");
+    let progress_path = progress_file.path_string();
+    let mut progress_events = Vec::new();
+    let mut task = tokio::task::spawn_blocking(move || {
+        call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
+    });
+
+    let json_result: Result<String> = loop {
+        tokio::select! {
+            result = &mut task => {
+                let raw = match result {
+                    Ok(raw) => raw,
+                    Err(err) => break Err(err.into()),
+                };
+                progress_events.extend(progress_file.read_new());
+                break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
+            }
+            _ = tokio::time::sleep(Duration::from_millis(140)) => {
+                progress_events.extend(progress_file.read_new());
+                pb.set_message(latest_progress_message(&progress_events));
+            }
+        }
+    };
+    progress_events.extend(progress_file.read_new());
+    progress_file.cleanup();
+    let json = match json_result {
+        Ok(json) => {
+            pb.finish_with_message(format!("completed with {} trace event(s)", progress_events.len()));
+            json
+        }
+        Err(err) => {
+            pb.abandon_with_message("task failed");
+            return Err(err);
+        }
+    };
 
     let response: CoreResponse = serde_json::from_str(&json)?;
     render_response(&response)?;
@@ -990,13 +1007,18 @@ fn call_no_args(function: &str) -> PyResult<String> {
     })
 }
 
-fn call_process_prompt(prompt: String, workspace: String, session_id: String) -> PyResult<String> {
+fn call_process_prompt_with_progress(
+    prompt: String,
+    workspace: String,
+    session_id: String,
+    progress_path: String,
+) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module
             .getattr("process_prompt")?
-            .call1((prompt, workspace, session_id))?
+            .call1((prompt, workspace, session_id, progress_path))?
             .extract()
     })
 }

@@ -118,6 +118,26 @@ pub(super) fn draw_modal_shadow(out: &mut Stdout, x: u16, y: u16, width: u16, he
     Ok(())
 }
 
+pub(super) fn draw_modal_sides(out: &mut Stdout, x: u16, y: u16, width: u16, height: u16) -> Result<()> {
+    if width < 2 || height < 4 {
+        return Ok(());
+    }
+    for row in y.saturating_add(2)..y.saturating_add(height).saturating_sub(1) {
+        write_at(out, x, row, 1, "|", modal_border(), modal_bg(), true)?;
+        write_at(
+            out,
+            x.saturating_add(width).saturating_sub(1),
+            row,
+            1,
+            "|",
+            modal_border(),
+            modal_bg(),
+            true,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn modal_title(title: &str, width: u16) -> String {
     let title = format!(" {title}");
     let back = " ← Esc back ";
@@ -154,6 +174,7 @@ pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
         modal_bg(),
         true,
     )?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
 }
@@ -200,6 +221,7 @@ pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEdito
         modal_bg(),
         true,
     )?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
 }
@@ -288,6 +310,7 @@ fn draw_choice_picker_modal(
         format!(" {} match(es)", choices.len())
     };
     write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
 }

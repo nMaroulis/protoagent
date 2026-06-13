@@ -2,7 +2,11 @@ use anyhow::{anyhow, Result};
 use std::time::Duration;
 use tokio::time::sleep;
 
-use crate::{call_process_prompt, empty_as_unknown, load_doctor, CoreResponse};
+use crate::{
+    call_process_prompt_with_progress, empty_as_unknown, load_doctor,
+    progress::{format_live_progress, progress_activity, ProgressFile},
+    CoreResponse,
+};
 
 mod approval;
 mod diff_view;
@@ -193,43 +197,54 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     app.last_query = query.to_string();
     app.push(Role::User, "You", query);
     let progress_index = app.messages.len();
-    app.push(Role::System, "Working", "Architect routing\nExplorer mapping workspace\nCoder preparing output");
+    app.push(Role::System, "Working", &format_live_progress(&[]));
 
-    let mut task = tokio::task::spawn_blocking(move || call_process_prompt(prompt, workspace, session_id));
-    let spinner = ["|", "/", "-", "\\"];
+    let mut progress_file = ProgressFile::new(app.turn);
+    let progress_path = progress_file.path_string();
+    let mut progress_events = Vec::new();
+    let mut task = tokio::task::spawn_blocking(move || {
+        call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
+    });
     let mut tick = 0usize;
 
-    let json = loop {
+    let json_result: Result<String> = loop {
         tokio::select! {
             result = &mut task => {
-                let raw = result?;
-                break raw.map_err(|err| anyhow!("Python core error: {err:?}"))?;
-            }
-            _ = sleep(Duration::from_millis(90)) => {
-                let phase = match tick % 3 {
-                    0 => "Architect routing",
-                    1 => "Explorer mapping",
-                    _ => "Coder composing",
+                let raw = match result {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        progress_file.cleanup();
+                        return Err(err.into());
+                    }
                 };
-                app.activity = format!("{} {}", spinner[tick % spinner.len()], phase);
+                progress_events.extend(progress_file.read_new());
+                break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
+            }
+            _ = sleep(Duration::from_millis(120)) => {
+                progress_events.extend(progress_file.read_new());
+                app.activity = progress_activity(&progress_events, tick);
                 if let Some(message) = app.messages.get_mut(progress_index) {
-                    message.body = format!("{} {}\nstatus stays pinned above; response lands below", spinner[tick % spinner.len()], phase);
+                    message.body = format_live_progress(&progress_events);
                 }
                 terminal.render(app, None)?;
                 tick += 1;
             }
         }
     };
+    progress_events.extend(progress_file.read_new());
+    progress_file.cleanup();
+    let json = json_result?;
 
     let response: CoreResponse = serde_json::from_str(&json)?;
     app.activity = format!("completed in {} ms", response.elapsed_ms);
     if let Some(message) = app.messages.get_mut(progress_index) {
         message.label = "Completed".to_string();
         message.body = format!(
-            "{} / {} | {} ms",
+            "{} / {} | {} ms\n{} live event(s); /trace shows the full agent run",
             empty_as_unknown(&response.provider),
             if response.model.is_empty() { "not selected" } else { response.model.as_str() },
-            response.elapsed_ms
+            response.elapsed_ms,
+            progress_events.len().max(response.events.len())
         );
     }
     app.push_response(&response);

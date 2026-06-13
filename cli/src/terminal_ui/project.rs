@@ -6,7 +6,7 @@ use std::io::{stdout, Write};
 use std::path::Path;
 
 use super::input::InputEditor;
-use super::modal::{draw_input_modal, draw_modal, draw_modal_backdrop, draw_modal_shadow, modal_title};
+use super::modal::{draw_input_modal, draw_modal, draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
 use super::state::{PanelView, Role, TerminalApp};
 use super::theme::{
     black, clip_plain, cyan, modal_bg, modal_border, modal_list_bg, modal_selection_bg, muted, size, text,
@@ -330,6 +330,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         format!(" {} match(es)", files.len())
     };
     write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
 }

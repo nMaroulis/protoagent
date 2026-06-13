@@ -5,7 +5,7 @@ use std::io::{stdout, Write};
 
 use crate::{empty_as_unknown, CoreResponse};
 
-use super::modal::{draw_modal_backdrop, draw_modal_shadow, modal_title};
+use super::modal::{draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
 use super::state::TerminalApp;
 use super::theme::{
     black, clip_plain, cyan, green, modal_bg, modal_border, modal_list_bg, muted, red, size, surface_bg, text,
@@ -225,6 +225,7 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
         modal_bg(),
         true,
     )?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
 }
@@ -406,6 +407,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
         format!(" line {}-{} of {}", start + 1, (start + body_rows).min(lines.len()), lines.len())
     };
     write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(max_scroll)
 }

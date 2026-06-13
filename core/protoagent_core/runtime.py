@@ -3,22 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
+import time
 from contextlib import suppress
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
 
 _FALLBACK_PORT = 19100
+ProgressSink = Callable[[str], None] | None
 
 
 def run_selected_model(
     prompt: str,
     workspace: str | None = None,
     session_id: str | None = None,
+    progress_path: str | None = None,
 ) -> dict[str, Any]:
     """Run the selected model through the ProtoLink Architect agent.
 
@@ -33,7 +37,7 @@ def run_selected_model(
     if not model:
         raise RuntimeError(f"No model selected for provider '{provider}'")
 
-    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id))
+    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id, _progress_writer(progress_path)))
 
 
 async def _run_agent_deck(
@@ -42,6 +46,7 @@ async def _run_agent_deck(
     model: str,
     workspace: str | None,
     session_id: str | None,
+    progress: ProgressSink = None,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink.client import AgentClient
@@ -51,13 +56,18 @@ async def _run_agent_deck(
     urls = _runtime_urls()
     agent_transport = _agent_transport()
     streaming = _streaming_enabled(agent_transport)
-    events: list[str] = [
-        f"Registry prepared at {urls['registry']}.",
-        f"All LLM-capable agents configured with {provider} / {model}.",
-        f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).",
-        f"Active project workspace: {workspace or os.getenv('PROTOAGENT_WORKSPACE', os.getcwd())}.",
-        f"Conversation session: {session_id or 'task-local'}."
-    ]
+    events: list[str] = []
+
+    def emit(message: str) -> None:
+        events.append(message)
+        if progress is not None:
+            progress(message)
+
+    emit(f"Registry prepared at {urls['registry']}.")
+    emit(f"All LLM-capable agents configured with {provider} / {model}.")
+    emit(f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).")
+    emit(f"Active project workspace: {workspace or os.getenv('PROTOAGENT_WORKSPACE', os.getcwd())}.")
+    emit(f"Conversation session: {session_id or 'task-local'}.")
     side_effects: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     diffs: list[dict[str, str]] = []
@@ -69,7 +79,7 @@ async def _run_agent_deck(
     try:
         registry = Registry(url=urls["registry"], transport="http", verbosity=0)
         registry.start(background=True)
-        events.append("Registry started.")
+        emit("Registry started.")
 
         deck = create_agent_deck(
             registry=registry,
@@ -88,12 +98,12 @@ async def _run_agent_deck(
         for name in ("explorer", "coder", "architect"):
             deck[name].start(background=True)
             started_agents.append(deck[name])
-            events.append(f"{name.title()} registered at {deck[name].card.url}.")
+            emit(f"{name.title()} registered at {deck[name].card.url}.")
 
         await asyncio.sleep(float(os.getenv("PROTOAGENT_DISCOVERY_DELAY", "0.15")))
         discovered = await deck["architect"].discover_agents()
         names = ", ".join(sorted(card.name for card in discovered)) or "none"
-        events.append(f"Architect discovery sees: {names}.")
+        emit(f"Architect discovery sees: {names}.")
 
         client = AgentClient(url=urls["client"], transport=agent_transport, timeout=_runtime_timeout())
         task = Task.create_infer(prompt=prompt)
@@ -101,7 +111,8 @@ async def _run_agent_deck(
             task.metadata["session_id"] = session_id
             task.metadata["workspace"] = workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())
         if streaming:
-            events.append("AgentClient opened a streaming task channel to Architect.")
+            emit("AgentClient opened a streaming task channel to Architect.")
+            emit("Architect is processing the user task stream.")
             try:
                 raw_answer = await _send_task_streaming(
                     client=client,
@@ -110,18 +121,21 @@ async def _run_agent_deck(
                     events=events,
                     actions=actions,
                     diffs=diffs,
+                    progress=progress,
                 )
             except NotImplementedError as exc:
-                events.append(f"Streaming unavailable for {agent_transport}: {exc}")
-                events.append("Falling back to request/response task execution.")
+                emit(f"Streaming unavailable for {agent_transport}: {exc}")
+                emit("Falling back to request/response task execution.")
                 raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
             except Exception as exc:
-                events.append(f"Streaming task path failed: {exc}")
-                events.append("Falling back to request/response task execution.")
+                emit(f"Streaming task path failed: {exc}")
+                emit("Falling back to request/response task execution.")
                 raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
         else:
-            events.append("AgentClient sent the user task to Architect.")
+            emit("AgentClient sent the user task to Architect.")
+            emit("Architect is processing the request/response task.")
             raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
+        emit("Architect returned a final task response.")
 
         _collect_side_effects(raw_answer, actions, diffs)
 
@@ -130,7 +144,7 @@ async def _run_agent_deck(
             path = ""
             if isinstance(payload, dict):
                 path = str(payload.get("path") or payload.get("file_target") or "")
-            events.append(f"{source} produced approval metadata{f' for {path}' if path else ''}.")
+            emit(f"{source} produced approval metadata{f' for {path}' if path else ''}.")
             _collect_side_effects(_normalize(payload), actions, diffs)
 
         answer = _content_to_text(raw_answer)
@@ -158,6 +172,24 @@ async def _run_agent_deck(
         if registry is not None:
             with suppress(Exception):
                 registry.stop()
+
+
+def _progress_writer(path: str | None) -> ProgressSink:
+    """Create a best-effort JSONL progress sink for the Rust TUI."""
+    if not path:
+        return None
+
+    def emit(message: str) -> None:
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps({"ts": time.time(), "event": message}, ensure_ascii=True) + "\n"
+                )
+                handle.flush()
+        except OSError:
+            pass
+
+    return emit
 
 
 def _runtime_urls() -> dict[str, str]:
@@ -244,6 +276,7 @@ async def _send_task_streaming(
     events: list[str],
     actions: list[dict[str, Any]],
     diffs: list[dict[str, str]],
+    progress: ProgressSink = None,
 ) -> Any:
     """Consume ProtoLink streaming events and return the final answer payload."""
     final_task: dict[str, Any] | None = None
@@ -253,12 +286,12 @@ async def _send_task_streaming(
     async for event in client.send_task_streaming(agent_url=agent_url, task=task):
         payload = _normalize(event)
         if not isinstance(payload, dict):
-            _append_event(events, f"Stream event: {_content_to_text(payload)}")
+            _append_event(events, f"Stream event: {_content_to_text(payload)}", progress)
             continue
 
         summary = _stream_event_summary(payload)
         if summary:
-            _append_event(events, summary)
+            _append_event(events, summary, progress)
 
         event_type = payload.get("type")
         if event_type == "task_error":
@@ -307,7 +340,7 @@ def _normalize(value: Any) -> Any:
     return value
 
 
-def _append_event(events: list[str], message: str) -> None:
+def _append_event(events: list[str], message: str, progress: ProgressSink = None) -> None:
     """Append a trace event without letting token streams flood the CLI."""
     raw_limit = os.getenv("PROTOAGENT_STREAM_TRACE_LIMIT", "120")
     try:
@@ -316,8 +349,13 @@ def _append_event(events: list[str], message: str) -> None:
         limit = 120
     if len(events) < limit:
         events.append(message)
+        if progress is not None:
+            progress(message)
     elif not events[-1].startswith("Stream trace limit reached"):
-        events.append(f"Stream trace limit reached ({limit}); suppressing further event summaries.")
+        limit_message = f"Stream trace limit reached ({limit}); suppressing further event summaries."
+        events.append(limit_message)
+        if progress is not None:
+            progress(limit_message)
 
 
 def _stream_event_summary(event: dict[str, Any]) -> str:
