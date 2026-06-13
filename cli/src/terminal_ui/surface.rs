@@ -4,7 +4,10 @@ use crossterm::{
     event::{read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute, queue,
     style::ResetColor,
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
+        LeaveAlternateScreen, SetTitle,
+    },
 };
 use std::io::{stdout, Write};
 
@@ -26,6 +29,7 @@ impl TerminalSurface {
             stdout(),
             Clear(ClearType::Purge),
             EnterAlternateScreen,
+            DisableLineWrap,
             EnableMouseCapture,
             Hide,
             SetTitle("ProtoAgent Terminal"),
@@ -46,6 +50,7 @@ impl TerminalSurface {
                 ResetColor,
                 Show,
                 DisableMouseCapture,
+                EnableLineWrap,
                 Clear(ClearType::All),
                 LeaveAlternateScreen
             );

@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossterm::{
     cursor::MoveTo,
     queue,
-    style::{Color, Print, SetBackgroundColor, SetForegroundColor},
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
 };
 use std::io::Stdout;
 
@@ -33,9 +33,10 @@ pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Re
         write_line(out, y, width, "", muted(), panel_bg(), false)?;
     }
 
-    let rows = panel_rows(app);
     let available_rows = controls_row.saturating_sub(1) as usize;
-    draw_panel_rows(out, width, &rows, available_rows)?;
+    draw_model_activity_row(out, width, 1, app)?;
+    let rows = panel_rows(app);
+    draw_panel_rows(out, width, &rows, available_rows.saturating_sub(1), 2)?;
 
     draw_command_bar(out, controls_row, width, app.panel)?;
     write_line(out, separator_row, width, &"-".repeat(width as usize), magenta(), panel_bg(), false)?;
@@ -65,11 +66,7 @@ pub(super) fn draw_transcript(out: &mut Stdout, width: u16, height: u16, app: &T
         write_line(out, top + idx as u16, width, &line.text, line.color, bg(), line.bold)?;
     }
     if scroll_offset > 0 && visible > 0 {
-        let marker = format!(
-            "  chat scrolled up {} line(s)  |  wheel down / PageDown / Ctrl-End returns to live",
-            scroll_offset
-        );
-        write_line(out, top, width, &marker, yellow(), bg(), true)?;
+        draw_scroll_marker(out, top, width, scroll_offset)?;
     }
     Ok(())
 }
@@ -84,20 +81,7 @@ pub(super) fn draw_input(
     let top = height.saturating_sub(INPUT_ROWS);
     write_line(out, top, width, &"-".repeat(width as usize), cyan(), input_bg(), false)?;
     write_line(out, top + 1, width, "", text(), input_bg(), false)?;
-    write_line(
-        out,
-        top + 2,
-        width,
-        &format!(
-            " status {}    chat {}    last {}",
-            format!("{} / {}", app.status.project_short, app.activity),
-            if app.scroll_offset == 0 { "live".to_string() } else { "scrolled".to_string() },
-            if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() }
-        ),
-        muted(),
-        input_bg(),
-        false,
-    )?;
+    draw_bottom_status(out, top + 2, width, app)?;
     write_line(out, top + 3, width, "", muted(), input_bg(), false)?;
 
     let prompt = " > ";
@@ -142,12 +126,7 @@ fn row(label: &'static str, value: impl Into<String>, color: Color, bold: bool) 
 }
 
 fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
-    let mut rows = vec![row(
-        "model",
-        format!("{} / {}    {}", app.status.provider, app.status.model, app.activity),
-        cyan(),
-        true,
-    )];
+    let mut rows = Vec::new();
     match app.panel {
         PanelView::Dashboard => {
             rows.push(row("project", &app.status.workspace, magenta(), app.status.project_ready));
@@ -212,11 +191,32 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
     rows
 }
 
-fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: usize) -> Result<()> {
+fn draw_model_activity_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalApp) -> Result<()> {
+    let label_width = 12usize;
+    let body_x = label_width as u16 + 1;
+    write_at(
+        out,
+        1,
+        y,
+        label_width as u16,
+        " MODEL ",
+        black(),
+        cyan(),
+        true,
+    )?;
+    let mut x = body_x;
+    let model = format!("{} / {}", app.status.provider, app.status.model);
+    draw_text_segment(out, &mut x, y, width, &model, text(), panel_bg(), true)?;
+    draw_text_segment(out, &mut x, y, width, "  ", muted(), panel_bg(), false)?;
+    draw_activity_inline(out, &mut x, y, width, &app.activity, panel_bg())?;
+    Ok(())
+}
+
+fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: usize, start_y: u16) -> Result<()> {
     let label_width = 12usize;
     let body_x = label_width as u16 + 1;
     let body_width = width.saturating_sub(body_x + 1).max(10) as usize;
-    let mut y = 1u16;
+    let mut y = start_y;
     let mut used = 0usize;
     for row in rows {
         if used >= max_rows {
@@ -245,6 +245,212 @@ fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: us
         }
     }
     Ok(())
+}
+
+fn draw_scroll_marker(out: &mut Stdout, y: u16, width: u16, scroll_offset: usize) -> Result<()> {
+    write_line(out, y, width, "", text(), bg(), false)?;
+    let mut x = 2u16;
+    draw_badge(out, &mut x, y, width, "CHAT SCROLLED", black(), yellow(), true)?;
+    draw_text_segment(
+        out,
+        &mut x,
+        y,
+        width,
+        &format!(" {} line(s) up", scroll_offset),
+        yellow(),
+        bg(),
+        true,
+    )?;
+    draw_text_segment(
+        out,
+        &mut x,
+        y,
+        width,
+        "  Wheel down / PageDown / Ctrl-End returns to live",
+        muted(),
+        bg(),
+        false,
+    )?;
+    Ok(())
+}
+
+fn draw_bottom_status(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
+    write_line(out, y, width, "", muted(), input_bg(), false)?;
+    let mut x = 1u16;
+    draw_badge(out, &mut x, y, width, "PROJECT", black(), magenta(), true)?;
+    draw_text_segment(
+        out,
+        &mut x,
+        y,
+        width,
+        &format!(" {}  ", app.status.project_short),
+        text(),
+        input_bg(),
+        true,
+    )?;
+
+    let live = app.scroll_offset == 0;
+    draw_badge(
+        out,
+        &mut x,
+        y,
+        width,
+        if live { "CHAT LIVE" } else { "CHAT SCROLLED" },
+        black(),
+        if live { green() } else { yellow() },
+        true,
+    )?;
+    if !live {
+        draw_text_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            &format!(" +{}  ", app.scroll_offset),
+            yellow(),
+            input_bg(),
+            true,
+        )?;
+    } else {
+        draw_text_segment(out, &mut x, y, width, "  ", muted(), input_bg(), false)?;
+    }
+    draw_activity_inline(out, &mut x, y, width, &app.activity, input_bg())?;
+    Ok(())
+}
+
+fn draw_activity_inline(
+    out: &mut Stdout,
+    x: &mut u16,
+    y: u16,
+    width: u16,
+    activity: &str,
+    background: Color,
+) -> Result<()> {
+    let parsed = parse_activity(activity);
+    if let Some(route) = parsed.route.as_deref() {
+        draw_badge(out, x, y, width, route, text(), surface_bg(), true)?;
+        draw_text_segment(out, x, y, width, " ", muted(), background, false)?;
+    }
+    if let Some(active) = parsed.active.as_deref() {
+        draw_badge(out, x, y, width, active, black(), activity_color(active), true)?;
+        draw_text_segment(out, x, y, width, " ", muted(), background, false)?;
+    }
+    if let Some(spinner) = parsed.spinner.as_deref() {
+        draw_text_segment(out, x, y, width, spinner, cyan(), background, true)?;
+        draw_text_segment(out, x, y, width, " ", muted(), background, false)?;
+    }
+    draw_text_segment(out, x, y, width, &parsed.action, text(), background, false)?;
+    Ok(())
+}
+
+fn draw_badge(
+    out: &mut Stdout,
+    x: &mut u16,
+    y: u16,
+    width: u16,
+    label: &str,
+    fg: Color,
+    background: Color,
+    bold: bool,
+) -> Result<()> {
+    draw_text_segment(out, x, y, width, &format!(" {} ", label), fg, background, bold)
+}
+
+fn draw_text_segment(
+    out: &mut Stdout,
+    x: &mut u16,
+    y: u16,
+    width: u16,
+    text_value: &str,
+    fg: Color,
+    background: Color,
+    bold: bool,
+) -> Result<()> {
+    if *x >= width {
+        return Ok(());
+    }
+    let remaining = width.saturating_sub(*x) as usize;
+    let value = clip_plain(text_value, remaining);
+    let used = value.chars().count() as u16;
+    if used == 0 {
+        return Ok(());
+    }
+    queue!(
+        out,
+        MoveTo(*x, y),
+        SetForegroundColor(fg),
+        SetBackgroundColor(background),
+        SetAttribute(if bold { Attribute::Bold } else { Attribute::Reset }),
+        Print(value),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    *x = (*x).saturating_add(used);
+    Ok(())
+}
+
+struct ActivityView {
+    spinner: Option<String>,
+    route: Option<String>,
+    active: Option<String>,
+    action: String,
+}
+
+fn parse_activity(activity: &str) -> ActivityView {
+    let mut rest = activity.trim();
+    let spinner = match rest.chars().next() {
+        Some(ch) if matches!(ch, '|' | '/' | '-' | '\\') => {
+            rest = rest[ch.len_utf8()..].trim_start();
+            Some(ch.to_string())
+        }
+        _ => None,
+    };
+    let route = take_bracket(&mut rest);
+    let active = take_bracket(&mut rest);
+    let action = if rest.trim().is_empty() {
+        "idle".to_string()
+    } else {
+        rest.trim().to_string()
+    };
+
+    ActivityView {
+        spinner,
+        route,
+        active,
+        action,
+    }
+}
+
+fn take_bracket(rest: &mut &str) -> Option<String> {
+    let value = rest.trim_start();
+    if !value.starts_with('[') {
+        *rest = value;
+        return None;
+    }
+    let end = value.find(']')?;
+    let badge = value[1..end].trim().to_string();
+    *rest = value[end + 1..].trim_start();
+    if badge.is_empty() {
+        None
+    } else {
+        Some(badge)
+    }
+}
+
+fn activity_color(agent: &str) -> Color {
+    if agent.contains("Architect") {
+        magenta()
+    } else if agent.contains("Explorer") {
+        cyan()
+    } else if agent.contains("Coder") {
+        yellow()
+    } else if agent.contains("Registry") {
+        green()
+    } else if agent.contains("CLI") {
+        green()
+    } else {
+        muted()
+    }
 }
 
 fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> Result<()> {

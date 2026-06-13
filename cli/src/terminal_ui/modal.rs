@@ -141,7 +141,7 @@ pub(super) fn draw_modal_sides(out: &mut Stdout, x: u16, y: u16, width: u16, hei
 
 pub(super) fn modal_title(title: &str, width: u16) -> String {
     let title = format!(" {title}");
-    let back = " ← Esc back ";
+    let back = " Esc back ";
     let title_width = title.chars().count();
     let back_width = back.chars().count();
     if title_width + back_width >= width as usize {
@@ -277,7 +277,7 @@ fn draw_choice_picker_modal(
         x,
         filter_y + 1,
         modal_width,
-        " Enter selects. ← Esc back. Up/Down/Page moves.",
+        " Enter selects. Esc back. Up/Down/Page moves.",
         yellow(),
         modal_bg(),
         false,

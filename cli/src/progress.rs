@@ -72,11 +72,7 @@ pub(crate) fn format_live_progress(events: &[String]) -> String {
 
 pub(crate) fn progress_activity(events: &[String], tick: usize) -> String {
     let spinner = ["|", "/", "-", "\\"];
-    format!(
-        "{} {}",
-        spinner[tick % spinner.len()],
-        clip_activity(&activity_summary(events).line())
-    )
+    format!("{} {}", spinner[tick % spinner.len()], activity_summary(events).line())
 }
 
 pub(crate) fn latest_progress_message(events: &[String]) -> String {

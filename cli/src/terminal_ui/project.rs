@@ -293,7 +293,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         x,
         y + 4,
         modal_width,
-        " Enter inserts @file. ← Esc back. Up/Down moves.",
+        " Enter inserts @file. Esc back. Up/Down moves.",
         yellow(),
         modal_bg(),
         false,
