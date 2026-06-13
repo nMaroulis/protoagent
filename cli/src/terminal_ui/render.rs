@@ -163,6 +163,22 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("approval", "human confirms side effects before writes land", green(), false));
             rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
         }
+        PanelView::Sessions => {
+            for (idx, line) in crate::sessions::session_panel_rows().into_iter().take(6).enumerate() {
+                rows.push(row(if idx == 0 { "current" } else { "session" }, line, if idx == 0 { cyan() } else { muted() }, idx == 0));
+            }
+        }
+        PanelView::Timeline => {
+            if let Some(response) = &app.last_response {
+                rows.push(row("summary", crate::timeline::summary(&response.events), cyan(), true));
+                for line in crate::timeline::panel_rows(&response.events, 5) {
+                    rows.push(row("step", line, yellow(), false));
+                }
+            } else {
+                rows.push(row("timeline", "No timeline yet. Run a task first.", muted(), false));
+                rows.push(row("command", "/timeline opens the latest structured agent path", cyan(), false));
+            }
+        }
         PanelView::Check => {
             rows.push(row("runtime", &app.status.runtime, magenta(), true));
             rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), false));
@@ -181,8 +197,8 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model without leaving the TUI", green(), true));
-            rows.push(row("panels", "/dashboard /project /models /agents /check /config /help", magenta(), false));
-            rows.push(row("output", "/trace shows last agent path; /diff shows proposed changes", cyan(), false));
+            rows.push(row("panels", "/dashboard /project /models /agents /sessions /timeline", magenta(), false));
+            rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("session", "/quit or Esc", muted(), false));
             rows.push(row("launch", "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"", green(), false));
@@ -460,6 +476,8 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
         (PanelView::Project, "/project"),
         (PanelView::Models, "/models"),
         (PanelView::Agents, "/agents"),
+        (PanelView::Sessions, "/sessions"),
+        (PanelView::Timeline, "/timeline"),
         (PanelView::Check, "/check"),
         (PanelView::Config, "/config"),
         (PanelView::Help, "/help"),

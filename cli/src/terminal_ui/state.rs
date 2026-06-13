@@ -130,7 +130,9 @@ impl TerminalApp {
             message.details.push(("Core notes".to_string(), response.thought_process.clone()));
         }
         if !response.events.is_empty() {
+            let timeline = crate::timeline::format_timeline(&response.events, 12);
             message.details.push(("Agent trace".to_string(), response.events.join("\n")));
+            message.details.push(("Agent timeline".to_string(), timeline));
         }
         if !response.diff.trim().is_empty() {
             message.details.push(("Proposed diff".to_string(), response.diff.clone()));
@@ -185,6 +187,8 @@ pub(super) enum PanelView {
     Project,
     Models,
     Agents,
+    Sessions,
+    Timeline,
     Check,
     Config,
     Help,
@@ -197,6 +201,8 @@ impl PanelView {
             Self::Project => "project",
             Self::Models => "models",
             Self::Agents => "agents",
+            Self::Sessions => "sessions",
+            Self::Timeline => "timeline",
             Self::Check => "check",
             Self::Config => "config",
             Self::Help => "help",

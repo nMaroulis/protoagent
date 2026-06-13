@@ -21,6 +21,7 @@ mod theme;
 
 use approval::{apply_actions, approval_prompt};
 use diff_view::{diff_review_summary, show_diff_modal};
+use modal::pick_choice_modal;
 use model_picker::handle_model_command;
 use project::handle_project_command;
 use render::truncate_detail;
@@ -88,6 +89,21 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         }
         "/agents" => {
             switch_panel(app, PanelView::Agents, command, "Agents panel pinned.");
+            Ok(true)
+        }
+        "/sessions" | "/session" => {
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            handle_session_command(app, terminal, command, arg.trim())?;
+            Ok(true)
+        }
+        "/timeline" | "/flow" => {
+            app.panel = PanelView::Timeline;
+            app.refresh(None);
+            if let Some(response) = &app.last_response {
+                app.push(Role::Command, command, &crate::timeline::format_timeline(&response.events, 24));
+            } else {
+                app.push(Role::Command, command, "No timeline yet. Run a task first.");
+            }
             Ok(true)
         }
         "/config" => {
@@ -236,6 +252,9 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     let json = json_result?;
 
     let response: CoreResponse = serde_json::from_str(&json)?;
+    if let Err(err) = crate::sessions::record_turn(query, &response) {
+        app.push(Role::Error, "Session history", &err.to_string());
+    }
     app.activity = format!("completed in {} ms", response.elapsed_ms);
     if let Some(message) = app.messages.get_mut(progress_index) {
         message.label = "Completed".to_string();
@@ -263,5 +282,86 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
         }
     }
 
+    Ok(())
+}
+
+fn handle_session_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    arg: &str,
+) -> Result<()> {
+    if matches!(arg, "choose" | "open" | "resume") {
+        choose_session(app, terminal, command)?;
+        return Ok(());
+    }
+    if let Some(name) = arg.strip_prefix("rename ") {
+        let name = name.trim();
+        if name.is_empty() {
+            app.push(Role::Error, command, "Usage: /session rename NAME");
+        } else {
+            match crate::sessions::rename_current(name) {
+                Ok(()) => {
+                    app.panel = PanelView::Sessions;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &format!("Renamed current session to {name}."));
+                }
+                Err(err) => app.push(Role::Error, command, &format!("Could not rename session: {err}")),
+            }
+        }
+        return Ok(());
+    }
+
+    app.panel = PanelView::Sessions;
+    app.refresh(None);
+    app.push(Role::Command, command, &crate::sessions::session_panel_rows().join("\n"));
+    Ok(())
+}
+
+fn choose_session(app: &mut TerminalApp, terminal: &mut TerminalSurface, command: &str) -> Result<()> {
+    let sessions = crate::sessions::recent_sessions();
+    if sessions.is_empty() {
+        app.panel = PanelView::Sessions;
+        app.refresh(None);
+        app.push(Role::Command, command, "No saved sessions yet.");
+        return Ok(());
+    }
+    let choices = sessions
+        .iter()
+        .map(|session| {
+            format!(
+                "{} | {} turn(s) | {}",
+                session.name, session.turns, session.workspace
+            )
+        })
+        .collect::<Vec<_>>();
+    match pick_choice_modal(
+        terminal,
+        app,
+        "Resume Session",
+        &["Choose a saved project session to reopen its workspace.".to_string()],
+        &choices,
+        0,
+    )? {
+        Some(index) => {
+            let selected = &sessions[index];
+            match crate::set_active_project(&selected.workspace) {
+                Ok(_) => {
+                    app.panel = PanelView::Sessions;
+                    app.refresh(None);
+                    app.push(
+                        Role::Command,
+                        command,
+                        &format!(
+                            "Resumed session: {}\nWorkspace: {}\nProtoLink memory key: {}",
+                            selected.name, selected.workspace, selected.id
+                        ),
+                    );
+                }
+                Err(err) => app.push(Role::Error, command, &format!("Could not resume session: {err}")),
+            }
+        }
+        None => app.push(Role::Command, command, "Session selection cancelled."),
+    }
     Ok(())
 }

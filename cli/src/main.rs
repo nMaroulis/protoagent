@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod progress;
+mod sessions;
 mod terminal_ui;
+mod timeline;
 
 use progress::{latest_progress_message, ProgressFile};
 
@@ -201,6 +203,10 @@ async fn main() -> Result<()> {
             print_header()?;
             show_agents()
         }
+        Some("sessions") | Some("session") => {
+            print_header()?;
+            show_sessions()
+        }
         Some("help") | Some("--help") | Some("-h") => {
             print_cli_help();
             Ok(())
@@ -234,6 +240,7 @@ fn print_cli_help() {
     println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
+    println!("  proto-cli sessions           Show saved project sessions");
     println!();
 }
 
@@ -289,6 +296,9 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     };
 
     let response: CoreResponse = serde_json::from_str(&json)?;
+    if let Err(err) = sessions::record_turn(query, &response) {
+        eprintln!("{}", style(format!("session history warning: {err}")).yellow());
+    }
     render_response(&response)?;
 
     if response.requires_approval || !response.actions.is_empty() {
@@ -328,6 +338,7 @@ fn render_response(response: &CoreResponse) -> Result<()> {
 
     if !response.events.is_empty() {
         render_agent_trace(&response.events);
+        render_agent_timeline(&response.events);
     }
 
     if !response.answer.trim().is_empty() {
@@ -375,6 +386,14 @@ fn render_agent_trace(events: &[String]) {
             _ => style("CODE").yellow().bold(),
         };
         println!("  {} {} {}", style(format!("{:02}", idx + 1)).dim(), label, event);
+    }
+    println!();
+}
+
+fn render_agent_timeline(events: &[String]) {
+    println!("{}", style("AGENT TIMELINE").bold().underlined().cyan());
+    for line in timeline::format_timeline(events, 18).lines() {
+        println!("  {}", line);
     }
     println!();
 }
@@ -829,6 +848,14 @@ fn show_agents() -> Result<()> {
             .map(|agent| format!("{} ({}) -> {}", agent.name, agent.role, agent.tools.join(", ")))
             .collect();
         print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
+    }
+    Ok(())
+}
+
+fn show_sessions() -> Result<()> {
+    print_panel("SESSIONS", &sessions::session_panel_rows(), PanelTone::Magenta);
+    for session in sessions::recent_sessions().into_iter().take(5) {
+        print_panel(&session.name, &wrap_lines(&sessions::session_detail(&session), panel_inner_width()), PanelTone::Dim);
     }
     Ok(())
 }

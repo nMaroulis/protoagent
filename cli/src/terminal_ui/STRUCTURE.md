@@ -11,6 +11,7 @@ This folder contains the fullscreen ProtoAgent terminal interface. The code is s
 - runs agent tasks
 - updates `TerminalApp` state
 - delegates rendering, modal flows, approval, model picking, and project picking to focused modules
+- uses shared `../sessions.rs` and `../timeline.rs` for persistent conversation history and structured agent paths
 
 ## Modules
 
@@ -28,6 +29,7 @@ This folder contains the fullscreen ProtoAgent terminal interface. The code is s
 | `approval.rs` | Approval prompt and apply-action execution |
 
 Shared task-progress parsing lives in `../progress.rs` so the fullscreen TUI and `proto-cli run` use the same live trace behavior.
+Session history lives in `../sessions.rs`; timeline parsing lives in `../timeline.rs`.
 
 ## Data Flow
 
@@ -37,7 +39,9 @@ Shared task-progress parsing lives in `../progress.rs` so the fullscreen TUI and
 4. Python writes live ProtoLink trace events to a short-lived JSONL progress file.
 5. `progress.rs` tails those events into the active transcript message while the task runs.
 6. Final responses are stored in `TerminalApp` and rendered by `render.rs`.
-7. File-changing responses go through `approval.rs` before writes are applied.
+7. Completed turns are appended to the project session history in `sessions.rs`.
+8. Agent events are parsed into a structured timeline by `timeline.rs`.
+9. File-changing responses go through `approval.rs` before writes are applied.
 
 ## Maintenance Rules
 
@@ -45,5 +49,7 @@ Shared task-progress parsing lives in `../progress.rs` so the fullscreen TUI and
 - Keep state mutation on `TerminalApp` explicit and close to command/task handling.
 - Keep provider/model logic in `model_picker.rs`.
 - Keep live progress file parsing and formatting in `../progress.rs`.
+- Keep persistent session history in `../sessions.rs`.
+- Keep agent trace-to-timeline parsing in `../timeline.rs`.
 - Keep project filesystem scanning and file tagging in `project.rs`.
 - Do not add side effects outside `approval.rs` unless the command is explicitly meant to mutate local config or project state.
