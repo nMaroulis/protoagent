@@ -5,11 +5,13 @@ use std::io::{stdout, Write};
 
 use crate::{empty_as_unknown, CoreResponse};
 
+use super::modal::{draw_modal_backdrop, draw_modal_shadow, modal_title};
 use super::state::TerminalApp;
-use super::{
-    black, clip_plain, cyan, draw_modal_backdrop, draw_modal_shadow, green, modal_bg, modal_border,
-    modal_list_bg, modal_title, muted, red, size, surface_bg, text, write_at, yellow, TerminalSurface,
+use super::theme::{
+    black, clip_plain, cyan, green, modal_bg, modal_border, modal_list_bg, muted, red, size, surface_bg, text,
+    write_at, yellow,
 };
+use super::TerminalSurface;
 
 #[derive(Default)]
 struct DiffReview {

@@ -2,8 +2,9 @@ use anyhow::Result;
 
 use crate::{call_set_model, load_inventory, ModelInfo, ModelProvider};
 
+use super::modal::{pick_choice_modal, prompt_line_modal};
 use super::state::{PanelView, Role, TerminalApp};
-use super::{pick_choice_modal, prompt_line_modal, TerminalSurface};
+use super::TerminalSurface;
 
 pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut TerminalSurface) -> Result<()> {
     app.panel = PanelView::Models;
