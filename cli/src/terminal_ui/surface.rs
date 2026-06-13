@@ -64,7 +64,11 @@ impl TerminalSurface {
         draw_header(&mut out, width, app)?;
         draw_transcript(&mut out, width, height, app)?;
         let cursor = draw_input(&mut out, width, height, app, editor)?;
-        queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
+        if editor.is_some() {
+            queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
+        } else {
+            queue!(out, Hide, ResetColor)?;
+        }
         out.flush()?;
         Ok(())
     }

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use crossterm::{
-    cursor::{MoveTo, Show},
+    cursor::{Hide, MoveTo, Show},
     event::{read, Event, KeyCode, KeyModifiers},
     queue,
-    style::{Print, SetBackgroundColor, SetForegroundColor},
+    style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
 use std::collections::VecDeque;
 use std::io::{stdout, Stdout, Write};
@@ -100,7 +100,8 @@ pub(super) fn pick_choice_modal(
     }
 }
 
-pub(super) fn draw_modal_backdrop(_out: &mut Stdout, _width: u16, _height: u16) -> Result<()> {
+pub(super) fn draw_modal_backdrop(out: &mut Stdout, _width: u16, _height: u16) -> Result<()> {
+    queue!(out, Hide, ResetColor)?;
     Ok(())
 }
 
@@ -207,9 +208,7 @@ pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEdito
         SetBackgroundColor(input_bg()),
         Print(prompt),
         SetForegroundColor(text()),
-        Print(clip_plain(&visible, available)),
-        MoveTo(x + 2 + prompt.len() as u16 + cursor as u16, input_y),
-        Show
+        Print(clip_plain(&visible, available))
     )?;
     write_at(
         &mut out,
@@ -222,6 +221,12 @@ pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEdito
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
+    queue!(
+        out,
+        MoveTo(x + 2 + prompt.len() as u16 + cursor as u16, input_y),
+        Show,
+        ResetColor
+    )?;
     out.flush()?;
     Ok(())
 }
