@@ -19,9 +19,11 @@ use tokio::time::sleep;
 use crate::{call_apply_action, call_process_prompt, empty_as_unknown, load_doctor, wrap_lines, CoreResponse};
 
 mod input;
+mod diff_view;
 mod model_picker;
 mod state;
 
+use diff_view::{diff_review_summary, draw_approval_modal, show_diff_modal};
 use input::InputEditor;
 use model_picker::handle_model_command;
 use state::{PanelView, Role, TerminalApp, TerminalMessage};
@@ -242,12 +244,17 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             Ok(true)
         }
         "/diff" => {
+            let arg = parts.collect::<Vec<_>>().join(" ");
             if let Some(response) = &app.last_response {
-                if response.diff.trim().is_empty() {
+                let diff = response.diff.clone();
+                if diff.trim().is_empty() {
                     app.push(Role::Command, "/diff", "No diff in the last response.");
+                } else if arg.trim() == "raw" {
+                    let raw = truncate_detail(&diff, 80);
+                    app.push(Role::Command, "/diff raw", &raw);
                 } else {
-                    let diff = truncate_detail(&response.diff, 40);
-                    app.push(Role::Command, "/diff", &diff);
+                    app.push(Role::Command, "/diff", &diff_review_summary(&diff));
+                    show_diff_modal(terminal, app, "Diff Review", &diff)?;
                 }
             } else {
                 app.push(Role::Command, "/diff", "No response in this session yet.");
@@ -353,7 +360,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
 
     if response.requires_approval || !response.actions.is_empty() {
         terminal.render(app, None)?;
-        if approval_prompt(terminal, &response)? {
+        if approval_prompt(terminal, app, &response)? {
             match apply_actions(&response.actions, &response.workspace) {
                 Ok(applied) => app.push(Role::System, "Approval", &applied),
                 Err(err) => app.push(Role::Error, "Approval failed", &err.to_string()),
@@ -704,31 +711,23 @@ fn format_file_tag(path: &str) -> String {
     }
 }
 
-fn approval_prompt(terminal: &mut TerminalSurface, response: &CoreResponse) -> Result<bool> {
+fn approval_prompt(terminal: &mut TerminalSurface, app: &TerminalApp, response: &CoreResponse) -> Result<bool> {
     loop {
-        draw_modal(
-            "Approval required",
-            &[
-                "The agent proposed side effects.".to_string(),
-                format!("Workspace: {}", empty_as_unknown(&response.workspace)),
-                format!("Actions: {}", response.actions.len()),
-                "Press y to apply, n or Esc to deny.".to_string(),
-            ],
-        )?;
+        terminal.render(app, None)?;
+        draw_approval_modal(response)?;
         let Event::Key(key) = read()? else {
             continue;
         };
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(true),
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => return Ok(false),
-            _ => terminal.render_placeholder()?,
+            KeyCode::Char('v') | KeyCode::Char('V') | KeyCode::Char('d') | KeyCode::Char('D')
+                if !response.diff.trim().is_empty() =>
+            {
+                show_diff_modal(terminal, app, "Approval Diff", &response.diff)?;
+            }
+            _ => {}
         }
-    }
-}
-
-impl TerminalSurface {
-    fn render_placeholder(&mut self) -> Result<()> {
-        Ok(())
     }
 }
 
@@ -1062,6 +1061,35 @@ fn draw_input(
     Ok((2 + prompt.len() as u16 + cursor as u16, top + 1))
 }
 
+fn draw_modal_backdrop(_out: &mut Stdout, _width: u16, _height: u16) -> Result<()> {
+    Ok(())
+}
+
+fn draw_modal_shadow(out: &mut Stdout, x: u16, y: u16, width: u16, height: u16) -> Result<()> {
+    let (screen_width, screen_height) = size();
+    let shadow_x = x.saturating_add(2);
+    let shadow_y = y.saturating_add(1);
+    let shadow_width = width.min(screen_width.saturating_sub(shadow_x));
+    if shadow_width == 0 {
+        return Ok(());
+    }
+    for row in shadow_y..shadow_y.saturating_add(height).min(screen_height) {
+        write_at(out, shadow_x, row, shadow_width, "", muted(), modal_shadow_bg(), false)?;
+    }
+    Ok(())
+}
+
+fn modal_title(title: &str, width: u16) -> String {
+    let title = format!(" {title}");
+    let back = " ← Esc back ";
+    let title_width = title.chars().count();
+    let back_width = back.chars().count();
+    if title_width + back_width >= width as usize {
+        return clip_plain(&format!("{title} {back}"), width as usize);
+    }
+    format!("{}{}{}", title, " ".repeat(width as usize - title_width - back_width), back)
+}
+
 fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     let (width, height) = size();
     let modal_width = width.saturating_mul(2).saturating_div(3).clamp(42, width.saturating_sub(4));
@@ -1069,8 +1097,10 @@ fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let mut out = stdout();
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), yellow(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &format!(" {title}"), yellow(), modal_bg(), true)?;
+    draw_modal_backdrop(&mut out, width, height)?;
+    draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
+    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..modal_height.saturating_sub(4) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
         write_at(&mut out, x, y + idx + 2, modal_width, row, text(), modal_bg(), false)?;
@@ -1081,7 +1111,7 @@ fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
         y + modal_height - 1,
         modal_width,
         &"=".repeat(modal_width as usize),
-        yellow(),
+        modal_border(),
         modal_bg(),
         true,
     )?;
@@ -1097,8 +1127,10 @@ fn draw_input_modal(title: &str, rows: &[String], editor: &InputEditor) -> Resul
     let y = height.saturating_sub(modal_height) / 2;
     let inner_width = modal_width.saturating_sub(4).max(8) as usize;
     let mut out = stdout();
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), yellow(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &format!(" {title}"), yellow(), modal_bg(), true)?;
+    draw_modal_backdrop(&mut out, width, height)?;
+    draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
+    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..modal_height.saturating_sub(5) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
         write_at(&mut out, x, y + idx + 2, modal_width, row, text(), modal_bg(), false)?;
@@ -1125,7 +1157,7 @@ fn draw_input_modal(title: &str, rows: &[String], editor: &InputEditor) -> Resul
         y + modal_height - 1,
         modal_width,
         &"=".repeat(modal_width as usize),
-        yellow(),
+        modal_border(),
         modal_bg(),
         true,
     )?;
@@ -1155,8 +1187,10 @@ fn draw_choice_picker_modal(
     let inner = modal_width.saturating_sub(4).max(10) as usize;
     let mut out = stdout();
 
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), magenta(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &format!(" {title}"), magenta(), modal_bg(), true)?;
+    draw_modal_backdrop(&mut out, width, height)?;
+    draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
+    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..info_rows {
         let row = rows.get(idx).map(String::as_str).unwrap_or("");
         write_at(&mut out, x, y + idx as u16 + 2, modal_width, row, text(), modal_bg(), false)?;
@@ -1177,7 +1211,7 @@ fn draw_choice_picker_modal(
         x,
         filter_y + 1,
         modal_width,
-        " Enter selects. Esc cancels. Up/Down/Page moves.",
+        " Enter selects. ← Esc back. Up/Down/Page moves.",
         yellow(),
         modal_bg(),
         false,
@@ -1192,7 +1226,7 @@ fn draw_choice_picker_modal(
         let choice_index = start + row_index;
         let row_y = list_start + row_index as u16;
         let Some((_, choice)) = choices.get(choice_index) else {
-            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), bg(), false)?;
+            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
             continue;
         };
         let active = choice_index == selected;
@@ -1204,7 +1238,7 @@ fn draw_choice_picker_modal(
             modal_width.saturating_sub(2),
             &format!("{marker} {}", clip_plain(choice, inner.saturating_sub(2))),
             if active { black() } else { text() },
-            if active { cyan() } else { bg() },
+            if active { modal_selection_bg() } else { modal_list_bg() },
             active,
         )?;
     }
@@ -1214,7 +1248,7 @@ fn draw_choice_picker_modal(
     } else {
         format!(" {} match(es)", choices.len())
     };
-    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, magenta(), modal_bg(), true)?;
+    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
     out.flush()?;
     Ok(())
 }
@@ -1229,8 +1263,10 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
     let inner = modal_width.saturating_sub(4).max(10) as usize;
     let mut out = stdout();
 
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), magenta(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, " Tag File With @", magenta(), modal_bg(), true)?;
+    draw_modal_backdrop(&mut out, width, height)?;
+    draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
+    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(&mut out, x, y + 1, modal_width, &modal_title("Tag File With @", modal_width), black(), modal_border(), true)?;
     write_at(
         &mut out,
         x,
@@ -1256,7 +1292,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         x,
         y + 4,
         modal_width,
-        " Enter inserts @file. Esc cancels. Up/Down moves.",
+        " Enter inserts @file. ← Esc back. Up/Down moves.",
         yellow(),
         modal_bg(),
         false,
@@ -1271,7 +1307,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         let file_index = start + row_index;
         let row_y = y + 5 + row_index as u16;
         let Some(path) = files.get(file_index) else {
-            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), bg(), false)?;
+            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
             continue;
         };
         let active = file_index == selected;
@@ -1283,7 +1319,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
             modal_width.saturating_sub(2),
             &format!("{marker} {}", clip_plain(path, inner.saturating_sub(2))),
             if active { black() } else { text() },
-            if active { cyan() } else { bg() },
+            if active { modal_selection_bg() } else { modal_list_bg() },
             active,
         )?;
     }
@@ -1292,7 +1328,7 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
     } else {
         format!(" {} match(es)", files.len())
     };
-    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, magenta(), modal_bg(), true)?;
+    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
     out.flush()?;
     Ok(())
 }
@@ -1394,8 +1430,24 @@ fn input_bg() -> Color {
     Color::Rgb { r: 18, g: 21, b: 30 }
 }
 
+fn modal_shadow_bg() -> Color {
+    Color::Rgb { r: 0, g: 0, b: 0 }
+}
+
 fn modal_bg() -> Color {
-    Color::Rgb { r: 28, g: 24, b: 42 }
+    Color::Rgb { r: 18, g: 23, b: 35 }
+}
+
+fn modal_list_bg() -> Color {
+    Color::Rgb { r: 10, g: 14, b: 23 }
+}
+
+fn modal_selection_bg() -> Color {
+    Color::Rgb { r: 111, g: 229, b: 235 }
+}
+
+fn modal_border() -> Color {
+    Color::Rgb { r: 246, g: 207, b: 93 }
 }
 
 fn text() -> Color {
