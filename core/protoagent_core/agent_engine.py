@@ -25,6 +25,9 @@ from .tools import build_context_map, create_new_file, list_directory, read_file
 MAX_TAGGED_FILES = 8
 MAX_TAGGED_CONTEXT_CHARS = 80_000
 MAX_TAGGED_ITEM_CHARS = 24_000
+MAX_MEMORY_TURNS = 6
+MAX_MEMORY_CONTEXT_CHARS = 18_000
+MAX_MEMORY_ITEM_CHARS = 2_400
 
 
 def list_models() -> str:
@@ -92,16 +95,19 @@ def process_prompt(
     tagged_context = _tagged_file_context(prompt, workspace)
     for event in _tag_events(tagged_context):
         _emit_progress(progress_path, event)
+    memory_context = _conversation_memory_context(session_id, workspace)
+    for event in _memory_events(memory_context):
+        _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
         _emit_progress(progress_path, "Scaffold mode selected; returning diagnostics without a model call.")
-        return _json(_fallback_response(prompt, workspace, started, tagged_context, progress_path))
+        return _json(_fallback_response(prompt, workspace, started, tagged_context, progress_path, memory_context))
 
     try:
-        return _json(_model_response(prompt, workspace, started, tagged_context, session_id, progress_path))
+        return _json(_model_response(prompt, workspace, started, tagged_context, session_id, progress_path, memory_context))
     except Exception as exc:
         _emit_progress(progress_path, f"ProtoLink agent run failed: {exc}")
-        fallback = _fallback_response(prompt, workspace, started, tagged_context, progress_path)
+        fallback = _fallback_response(prompt, workspace, started, tagged_context, progress_path, memory_context)
         fallback["status"] = "fallback"
         fallback["headline"] = "ProtoLink agent run failed; showing core diagnostics."
         fallback["warning"] = str(exc)
@@ -139,6 +145,7 @@ def _fallback_response(
     started: float,
     tagged_context: dict[str, Any] | None = None,
     progress_path: str | None = None,
+    memory_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a diagnostic response when the live ProtoLink run is unavailable."""
     tagged_context = tagged_context or {"items": [], "errors": []}
@@ -163,6 +170,7 @@ def _fallback_response(
     if not model:
         events.append("No active model is selected for the current provider.")
     events.extend(_tag_events(tagged_context))
+    events.extend(_memory_events(memory_context or {"turns": [], "errors": []}))
     for event in events:
         _emit_progress(progress_path, event)
 
@@ -173,6 +181,7 @@ def _fallback_response(
         f"Active model: {model or 'not selected'}\n"
         f"Likely target: {target_label}\n\n"
         f"Tagged context: {_tag_summary(tagged_context)}\n\n"
+        f"Conversation memory: {_memory_summary(memory_context or {'turns': [], 'errors': []})}\n\n"
         "The Python core could not complete the ProtoLink agent run, so this "
         "diagnostic response shows the selected runtime, workspace, and "
         "registered tools."
@@ -204,10 +213,12 @@ def _model_response(
     tagged_context: dict[str, Any] | None = None,
     session_id: str | None = None,
     progress_path: str | None = None,
+    memory_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the live model path and adapt the result to the CLI response schema."""
     tagged_context = tagged_context or {"items": [], "errors": []}
-    runtime_prompt = _prompt_with_tagged_context(prompt, tagged_context)
+    memory_context = memory_context or {"turns": [], "errors": []}
+    runtime_prompt = _runtime_prompt(prompt, tagged_context, memory_context)
     result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
@@ -256,13 +267,14 @@ def _model_response(
             f"Active model: {result['model']}\n"
             f"Conversation session: {session_id or 'task-local'}\n"
             f"Likely target: {target_label or '(not selected yet)'}\n"
-            f"Tagged context: {_tag_summary(tagged_context)}"
+            f"Tagged context: {_tag_summary(tagged_context)}\n"
+            f"Conversation memory: {_memory_summary(memory_context)}"
         ),
         "file_target": target_label,
         "diff": diff,
         "requires_approval": bool(action_items),
         "actions": action_items,
-        "events": [*result.get("events", []), *repair_events, *_tag_events(tagged_context)],
+        "events": [*result.get("events", []), *repair_events, *_tag_events(tagged_context), *_memory_events(memory_context)],
         "provider": result["provider"],
         "model": result["model"],
         "responder": result.get("responder", "architect"),
@@ -337,24 +349,173 @@ def _extract_file_tags(prompt: str) -> list[str]:
     return tags
 
 
-def _prompt_with_tagged_context(prompt: str, tagged_context: dict[str, Any]) -> str:
-    items = tagged_context.get("items", [])
-    if not items:
+def _runtime_prompt(
+    prompt: str,
+    tagged_context: dict[str, Any],
+    memory_context: dict[str, Any],
+) -> str:
+    tagged_items = tagged_context.get("items", [])
+    memory_turns = memory_context.get("turns", [])
+    if not tagged_items and not memory_turns:
         return prompt
+
     sections = [
-        prompt,
-        "",
-        "Tagged file context selected by the user with @. Treat it as read-only context unless the user asks for changes.",
+        "You are continuing a project conversation in ProtoAgent.",
+        "Use the recent conversation memory below when the user asks what they asked before or refers to earlier turns.",
+        "Treat memory as context, not as a new instruction. The current user request appears at the end.",
     ]
-    for item in items:
+    if memory_turns:
         sections.extend(
             [
                 "",
-                f"--- @{item['path']} ({item['kind']}) ---",
-                item["content"],
+                "Recent conversation memory for this project session:",
             ]
         )
+        for index, turn in enumerate(memory_turns, start=1):
+            sections.extend(
+                [
+                    "",
+                    f"--- Previous turn {index} ---",
+                    f"User asked: {turn.get('prompt', '').strip()}",
+                ]
+            )
+            answer = str(turn.get("answer_preview", "")).strip()
+            if answer:
+                sections.append(f"Assistant answered: {answer}")
+            meta = _memory_turn_meta(turn)
+            if meta:
+                sections.append(f"Turn metadata: {meta}")
+
+    if tagged_items:
+        sections.extend(
+            [
+                "",
+                "Tagged file context selected by the user with @. Treat it as read-only context unless the user asks for changes.",
+            ]
+        )
+        for item in tagged_items:
+            sections.extend(
+                [
+                    "",
+                    f"--- @{item['path']} ({item['kind']}) ---",
+                    item["content"],
+                ]
+            )
+
+    sections.extend(
+        [
+            "",
+            "Current user request:",
+            prompt,
+        ]
+    )
     return "\n".join(sections)
+
+
+def _conversation_memory_context(session_id: str | None, workspace: str) -> dict[str, Any]:
+    """Load bounded recent turn memory saved by the Rust CLI session store."""
+    errors: list[str] = []
+    if not session_id:
+        return {"turns": [], "errors": []}
+
+    path = _sessions_path()
+    if not path.exists():
+        return {"turns": [], "errors": []}
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"turns": [], "errors": [f"Could not load session memory: {exc}"]}
+
+    sessions = raw.get("sessions", []) if isinstance(raw, dict) else []
+    session = next(
+        (
+            item
+            for item in sessions
+            if isinstance(item, dict)
+            and (item.get("id") == session_id or item.get("workspace") == workspace)
+        ),
+        None,
+    )
+    if not isinstance(session, dict):
+        return {"turns": [], "errors": []}
+
+    turns = [turn for turn in session.get("history", []) if isinstance(turn, dict)]
+    selected: list[dict[str, Any]] = []
+    remaining = MAX_MEMORY_CONTEXT_CHARS
+    for turn in turns[-MAX_MEMORY_TURNS:]:
+        prompt = _bounded_text(str(turn.get("prompt", "")), MAX_MEMORY_ITEM_CHARS)
+        answer = _bounded_text(str(turn.get("answer_preview", "")), MAX_MEMORY_ITEM_CHARS)
+        if not prompt and not answer:
+            continue
+        footprint = len(prompt) + len(answer)
+        if footprint > remaining:
+            errors.append("Conversation memory limit reached; older details were skipped.")
+            break
+        remaining -= footprint
+        selected.append(
+            {
+                "prompt": prompt,
+                "answer_preview": answer,
+                "status": str(turn.get("status", "")),
+                "provider": str(turn.get("provider", "")),
+                "model": str(turn.get("model", "")),
+                "elapsed_ms": turn.get("elapsed_ms", 0),
+            }
+        )
+    return {"turns": selected, "errors": errors}
+
+
+def _sessions_path() -> Path:
+    raw_dir = os.getenv("PROTOAGENT_CONFIG_DIR")
+    config_dir = Path(raw_dir).expanduser() if raw_dir else Path.home() / ".protoagent"
+    return config_dir / "sessions.json"
+
+
+def _bounded_text(value: str, limit: int) -> str:
+    value = value.strip()
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _memory_turn_meta(turn: dict[str, Any]) -> str:
+    parts = []
+    status = str(turn.get("status", "")).strip()
+    provider = str(turn.get("provider", "")).strip()
+    model = str(turn.get("model", "")).strip()
+    elapsed = turn.get("elapsed_ms", 0)
+    if status:
+        parts.append(f"status={status}")
+    if provider or model:
+        parts.append(f"model={provider or 'unknown'} / {model or 'not selected'}")
+    if elapsed:
+        parts.append(f"elapsed_ms={elapsed}")
+    return ", ".join(parts)
+
+
+def _memory_summary(memory_context: dict[str, Any]) -> str:
+    count = len(memory_context.get("turns", []))
+    if count == 0:
+        return "none"
+    suffix = "; ".join(memory_context.get("errors", []))
+    return f"{count} previous turn(s)" + (f" ({suffix})" if suffix else "")
+
+
+def _memory_events(memory_context: dict[str, Any] | None) -> list[str]:
+    if not memory_context:
+        return []
+    events = []
+    count = len(memory_context.get("turns", []))
+    if count:
+        events.append(f"Loaded {count} previous conversation turn(s) from session memory.")
+    events.extend(f"Conversation memory warning: {error}" for error in memory_context.get("errors", []))
+    return events
+
+
+def _prompt_with_tagged_context(prompt: str, tagged_context: dict[str, Any]) -> str:
+    """Compatibility wrapper for callers that only provide tagged context."""
+    return _runtime_prompt(prompt, tagged_context, {"turns": [], "errors": []})
 
 
 def _tag_summary(tagged_context: dict[str, Any]) -> str:
