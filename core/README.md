@@ -3,11 +3,12 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Install ProtoLink 0.5.8 or newer with the HTTP/SSE transport and LLM extras so
-the embedded Agent runtime can import streaming agents and provider clients:
+Install ProtoLink 0.6.0 or newer with the HTTP/SSE transport and LLM extras so
+the embedded Agent runtime can import streaming agents, lifecycle-aware task
+status events, and provider clients:
 
 ```bash
-pip install "protolink[http,llms]>=0.5.8"
+pip install "protolink[http,llms]>=0.6.0"
 ```
 
 ## Layout
@@ -24,7 +25,8 @@ pip install "protolink[http,llms]>=0.5.8"
 The CLI invokes the selected provider/model through ProtoLink agents by
 default. The selected model is used to create fresh LLM instances for the
 Architect, Explorer, and Coder on each run. Agents use ProtoLink's SSE
-JSON-RPC task stream by default, while the Registry remains on plain HTTP.
+JSON-RPC lifecycle-aware task stream by default, while the Registry remains on
+plain HTTP.
 
 Useful runtime switches:
 

@@ -41,7 +41,7 @@ If you haven't already, initialize the Python environment in the monorepo root:
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.5.8"
+pip install "protolink[http,llms]>=0.6.0"
 
 ```
 
