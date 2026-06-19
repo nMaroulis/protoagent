@@ -62,7 +62,7 @@ cd protoagent
 # Initialize the Brain
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.0"
+pip install "protolink[http,llms]>=0.6.1"
 
 ```
 
@@ -98,8 +98,8 @@ To pipe the local orchestration engine directly into your code editor via ACP, a
 
 ## 🛡️ Safety First: The Human-in-the-Loop Protocol
 
-ProtoAgent strictly respects your system boundaries. The core engine is mathematically sandboxed from side effects.
+ProtoAgent strictly respects your system boundaries. Workspace writes are prepared as typed Protolink runtime actions before execution.
 
-> **Immutable Rule:** Any destructive tool call (e.g., `write_file`, `execute_shell`) emitted by the local LLM generates a `requires_approval: true` flag. The frontends (CLI or ACP) are hardcoded to halt execution and require a physical keystroke confirmation before making any changes to your machine.
+> **Immutable Rule:** Coder tools declare `workspace.write`. A `CapabilityPolicy` requires approval, the `RunAction` carries a `text/x-diff` preview artifact, and the Rust CLI returns a correlated `ApprovalDecision` before Protolink executes the write. During a running TUI task, Esc or Ctrl-C requests Protolink task cancellation.
 
 Local doesn't just mean free; it means total control.

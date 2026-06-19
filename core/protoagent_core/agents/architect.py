@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from protolink import Agent
 
 from .common import (
     QUIET_LOGGER,
     conversation_storage,
     create_selected_llm,
-    record_side_effect,
     resolve_agent_url,
     set_transport_timeout,
-    session_aware_agent_class,
     with_workspace_contract,
 )
 
@@ -25,16 +22,16 @@ refer to the other agents by name: "explorer" and "coder".
 Workflow:
 1. For greetings, small talk, and direct non-code questions, answer with a final response.
 2. For repository questions, use the Context Loom pack already present in the prompt, then delegate to Explorer if more evidence is needed.
-3. For file changes, ask Explorer for exact context, then ask Coder for diff synthesis.
-4. When a proposed write is ready, create an approval checkpoint with request_user_approval.
-5. Final answers should be concise and mention whether approval is required.
+3. For file changes, ask Explorer for exact context, then ask Coder for a policy-gated modification.
+4. Coder's write tools create policy-gated actions; Protolink pauses them for application approval before execution.
+5. Final answers should be concise and report whether the requested change was applied, denied, or canceled.
 
 Rules:
 - Never edit files directly.
 - Do not fabricate file contents. Trust Context Loom only as scoped evidence; ask Explorer for direct context when details are missing.
 - Prefer small, targeted changes.
-- Use Coder only for diffs and new-file proposals.
-- If the user asks to create a file, do not answer only with a code block. Delegate to Coder so a pending file action is produced.
+- Use Coder only for policy-gated file changes.
+- If the user asks to create a file, do not answer only with a code block. Delegate to Coder so its authorized tool can perform the change.
 - If the user asks for broad work, make a compact plan before delegating.
 - If a request is ambiguous, explore first and make reasonable assumptions.
 """
@@ -47,11 +44,8 @@ def create_architect_agent(
     workspace: str | None = None,
     url: str | None = None,
     transport: str = "sse",
-    side_effects: list[dict[str, Any]] | None = None,
 ):
     """Create the user-facing orchestrator agent."""
-    Agent = session_aware_agent_class()
-
     agent = Agent(
         card={
             "name": "architect",
@@ -79,28 +73,5 @@ def create_architect_agent(
         verbosity=0,
     )
     set_transport_timeout(agent.transport, 600)
-
-    @agent.tool(
-        name="request_user_approval",
-        description="Create a frontend approval checkpoint for proposed file changes.",
-        input_schema={"summary": str, "file_target": str, "diff": str},
-    )
-    def request_user_approval(summary: str, file_target: str, diff: str) -> dict[str, Any]:
-        payload = {
-            "success": True,
-            "summary": summary,
-            "file_target": file_target,
-            "diff": diff,
-            "requires_approval": True,
-            "workspace": workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd()),
-            "action": {
-                "type": "approval_checkpoint",
-                "path": file_target,
-                "summary": summary,
-                "diff": diff,
-            },
-        }
-        record_side_effect(side_effects, {"source": "architect", **payload})
-        return payload
 
     return agent

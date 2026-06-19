@@ -27,7 +27,7 @@ from .context import (
 from .llm import validate_protolink
 from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
-from .tools import build_context_map, create_new_file, list_directory, read_file, safe_path, workspace_root
+from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
 
 
 MAX_TAGGED_FILES = 8
@@ -178,30 +178,6 @@ def process_prompt(
         return _json(fallback)
 
 
-def apply_action(action_json: str, workspace: str | None = None) -> str:
-    """Apply a user-approved action payload inside the workspace."""
-    action = json.loads(action_json)
-    workspace = str(workspace_root(workspace))
-    action_type = action.get("type")
-    if action_type != "write_file":
-        raise ValueError(f"Unsupported action type: {action_type}")
-    path = action.get("path")
-    content = action.get("content")
-    if not path or content is None:
-        raise ValueError("write_file action requires path and content")
-
-    target = safe_path(path, workspace)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
-    return _json(
-        {
-            "success": True,
-            "path": str(target.relative_to(workspace_root(workspace))),
-            "bytes_written": len(content.encode("utf-8")),
-        }
-    )
-
-
 def _fallback_response(
     prompt: str,
     workspace: str,
@@ -260,9 +236,11 @@ def _fallback_response(
         "thought_process": thought,
         "file_target": target_label,
         "diff": "",
-        "requires_approval": False,
-        "actions": [],
         "events": events,
+        "run_events": [],
+        "approval_requests": [],
+        "approval_decisions": [],
+        "run_context": {},
         "provider": provider,
         "model": model,
         "responder": "architect",
@@ -291,32 +269,8 @@ def _model_response(
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
-    action_items = result.get("actions", [])
-    repair_events: list[str] = []
     answer = result["answer"]
-    if not action_items:
-        repaired = _repair_missing_create_action(prompt, answer, workspace)
-        if repaired.get("success"):
-            action = dict(repaired["action"])
-            action.setdefault("source", "coder")
-            action_items = [action]
-            diff_items = [*diff_items, {"path": repaired["path"], "diff": repaired["diff"], "source": "coder"}]
-            repair_events.append(
-                f"Coder safety net converted code-only create response into approval action for {repaired['path']}."
-            )
-            _emit_progress(progress_path, repair_events[-1])
-            answer = (
-                answer.rstrip()
-                + f"\n\nPrepared an approval-gated file creation for `{repaired['path']}`."
-            )
-        elif repaired.get("error"):
-            repair_events.append(f"Create-action safety net did not run: {repaired['error']}")
-            _emit_progress(progress_path, repair_events[-1])
-    action_targets = [
-        str(action.get("path", ""))
-        for action in action_items
-        if isinstance(action, dict) and action.get("path")
-    ]
+    action_targets = [str(path) for path in result.get("targets", []) if path]
     diff_targets = [
         str(item.get("path", ""))
         for item in diff_items
@@ -324,8 +278,9 @@ def _model_response(
     ]
     target_label = ", ".join(sorted(set([*targets, *action_targets, *diff_targets]))) if [*targets, *action_targets, *diff_targets] else ""
     diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
+    runtime_status = str(result.get("status") or "completed")
     return {
-        "status": "approval-required" if action_items else "answered",
+        "status": "canceled" if runtime_status == "canceled" else "answered",
         "headline": "Architect completed the ProtoLink run.",
         "answer": answer,
         "thought_process": (
@@ -341,15 +296,16 @@ def _model_response(
         ),
         "file_target": target_label,
         "diff": diff,
-        "requires_approval": bool(action_items),
-        "actions": action_items,
         "events": [
             *result.get("events", []),
-            *repair_events,
             *_context_events(loom_context),
             *_tag_events(tagged_context),
             *_memory_events(memory_context),
         ],
+        "run_events": result.get("run_events", []),
+        "approval_requests": result.get("approval_requests", []),
+        "approval_decisions": result.get("approval_decisions", []),
+        "run_context": result.get("run_context", {}),
         "provider": result["provider"],
         "model": result["model"],
         "responder": result.get("responder", "architect"),
@@ -647,81 +603,6 @@ def _tag_events(tagged_context: dict[str, Any]) -> list[str]:
     ]
     events.extend(f"Tagged context warning: {error}" for error in tagged_context.get("errors", []))
     return events
-
-
-def _repair_missing_create_action(prompt: str, answer: str, workspace: str) -> dict[str, Any]:
-    """Convert obvious code-only create responses into approval-gated actions."""
-    request = _latest_user_request(prompt)
-    if not _looks_like_create_request(request):
-        return {"success": False}
-
-    content = _first_code_block(answer) or _first_code_block(prompt) or _print_script_from_request(request)
-    if not content:
-        return {"success": False, "error": "no code content found"}
-
-    path = (
-        _first_path_candidate(request)
-        or _first_path_candidate(answer)
-        or _first_path_candidate(prompt)
-        or _default_script_path(request, content)
-    )
-    try:
-        proposal = create_new_file(path, content, workspace)
-    except Exception as exc:
-        return {"success": False, "error": str(exc)}
-    if not proposal.get("success"):
-        return {"success": False, "error": str(proposal.get("error", "proposal failed"))}
-    return proposal
-
-
-def _latest_user_request(prompt: str) -> str:
-    marker = "Current user request:"
-    if marker in prompt:
-        return prompt.rsplit(marker, 1)[-1].strip()
-    return prompt
-
-
-def _looks_like_create_request(text: str) -> bool:
-    lowered = text.lower()
-    return any(word in lowered for word in ("create", "make", "write", "add")) and any(
-        word in lowered for word in ("file", "script", "program")
-    )
-
-
-def _first_code_block(text: str) -> str:
-    match = re.search(r"```(?:[A-Za-z0-9_+.-]+)?\s*\n(.*?)```", text, flags=re.DOTALL)
-    if not match:
-        return ""
-    content = match.group(1).strip("\n")
-    return content + ("\n" if content and not content.endswith("\n") else "")
-
-
-def _print_script_from_request(text: str) -> str:
-    match = re.search(r"prints?\s+['\"]?([A-Za-z0-9 _.-]+)['\"]?", text, flags=re.IGNORECASE)
-    if not match:
-        return ""
-    value = match.group(1).strip()
-    if not value:
-        return ""
-    return f'print("{value}")\n'
-
-
-def _first_path_candidate(text: str) -> str:
-    candidates = re.findall(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9_+-]+", text)
-    for candidate in candidates:
-        candidate = candidate.strip("`'\"")
-        if candidate and not candidate.startswith(("http://", "https://")):
-            return candidate
-    return ""
-
-
-def _default_script_path(request: str, content: str) -> str:
-    if "print(\"abc\")" in content or "print('abc')" in content or "abc" in request.lower():
-        return "scripts/print_abc.py"
-    words = re.findall(r"[A-Za-z0-9]+", request.lower())
-    stem_words = [word for word in words if word not in {"create", "make", "write", "add", "a", "an", "the", "file", "script", "program", "that"}]
-    stem = "_".join(stem_words[:4]) or "generated_script"
-    return f"scripts/{stem}.py"
 
 
 def _extract_file_targets(prompt: str, files: list[dict[str, Any]]) -> list[str]:

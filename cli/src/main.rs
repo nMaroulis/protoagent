@@ -16,7 +16,7 @@ mod sessions;
 mod terminal_ui;
 mod timeline;
 
-use progress::{latest_progress_message, ProgressFile};
+use progress::{latest_progress_message, ProgressFile, RuntimeApproval};
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
@@ -36,11 +36,15 @@ struct CoreResponse {
     #[serde(default)]
     diff: String,
     #[serde(default)]
-    requires_approval: bool,
-    #[serde(default)]
-    actions: Vec<Value>,
-    #[serde(default)]
     events: Vec<String>,
+    #[serde(default)]
+    run_events: Vec<Value>,
+    #[serde(default)]
+    approval_requests: Vec<Value>,
+    #[serde(default)]
+    approval_decisions: Vec<Value>,
+    #[serde(default)]
+    run_context: Value,
     #[serde(default)]
     provider: String,
     #[serde(default)]
@@ -298,6 +302,23 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
             }
             _ = tokio::time::sleep(Duration::from_millis(140)) => {
                 progress_events.extend(progress_file.read_new());
+                if let Some(approval) = progress_file.take_approval_request() {
+                    let approved = pb.suspend(|| -> Result<bool> {
+                        render_runtime_approval(&approval);
+                        if !approval.diff.trim().is_empty() {
+                            render_diff(&approval.diff);
+                        }
+                        Ok(Confirm::new("Authorize this Protolink action?")
+                            .with_default(false)
+                            .prompt()?)
+                    })?;
+                    progress_file.decide(&approval, approved)?;
+                    progress_events.push(format!(
+                        "Approval {}: {}.",
+                        if approved { "approved" } else { "denied" },
+                        approval.description
+                    ));
+                }
                 pb.set_message(latest_progress_message(&progress_events));
             }
         }
@@ -321,18 +342,6 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     }
     render_response(&response)?;
 
-    if response.requires_approval || !response.actions.is_empty() {
-        render_approval_gate(&response);
-        let approve = Confirm::new("Apply the proposed action payloads?")
-            .with_default(false)
-            .prompt()?;
-        if approve {
-            apply_actions(&response.actions, &response.workspace)?;
-        } else {
-            println!("{}", style("Approval denied. No files changed.").yellow().bold());
-        }
-    }
-
     Ok(response)
 }
 
@@ -353,6 +362,19 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     }
     if !response.warning.is_empty() {
         summary.push(format!("Warning     : {}", response.warning));
+    }
+    if !response.run_events.is_empty() {
+        summary.push(format!("Run events  : {} normalized", response.run_events.len()));
+    }
+    if !response.approval_requests.is_empty() {
+        summary.push(format!(
+            "Approvals   : {} request(s), {} decision(s)",
+            response.approval_requests.len(),
+            response.approval_decisions.len()
+        ));
+    }
+    if let Some(run_id) = response.run_context.get("run_id").and_then(Value::as_str) {
+        summary.push(format!("Run ID      : {run_id}"));
     }
     print_panel("RUN SUMMARY", &summary, PanelTone::Magenta);
 
@@ -379,13 +401,6 @@ fn render_response(response: &CoreResponse) -> Result<()> {
         render_diff(&response.diff);
     }
 
-    if !response.actions.is_empty() {
-        print_panel(
-            "PENDING ACTIONS",
-            &[format!("{} approval payload(s) waiting at the gate", response.actions.len())],
-            PanelTone::Yellow,
-        );
-    }
     Ok(())
 }
 
@@ -434,31 +449,18 @@ fn render_diff(diff: &str) {
     println!();
 }
 
-fn render_approval_gate(response: &CoreResponse) {
+fn render_runtime_approval(approval: &RuntimeApproval) {
     let mut rows = vec![
-        "Human approval required before side effects are applied.".to_string(),
-        format!("Workspace : {}", empty_as_unknown(&response.workspace)),
-        format!("Actions   : {}", response.actions.len()),
+        "Protolink paused this action before execution.".to_string(),
+        format!("Run        : {}", empty_as_unknown(&approval.run_id)),
+        format!("Action     : {}", empty_as_unknown(&approval.action_name)),
+        format!("Capability : {}", empty_as_unknown(&approval.capabilities())),
+        format!("Target     : {}", empty_as_unknown(&approval.target)),
     ];
-    if !response.file_target.is_empty() {
-        rows.push(format!("Target    : {}", response.file_target));
+    if !approval.description.is_empty() {
+        rows.push(format!("Intent     : {}", approval.description));
     }
-    print_panel("APPROVAL GATE", &rows, PanelTone::Yellow);
-}
-
-fn apply_actions(actions: &[Value], workspace: &str) -> Result<()> {
-    for action in actions {
-        let action_json = serde_json::to_string(action)?;
-        let result = call_apply_action(action_json, workspace.to_string())
-            .map_err(|err| anyhow!("Python apply error: {err:?}"))?;
-        let parsed: Value = serde_json::from_str(&result)?;
-        let path = parsed
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or("(unknown path)");
-        println!("{} {}", style("applied:").green().bold(), path);
-    }
-    Ok(())
+    print_panel("POLICY APPROVAL", &rows, PanelTone::Yellow);
 }
 
 fn show_dashboard() -> Result<()> {
@@ -1516,17 +1518,6 @@ fn call_context_pack(query: String, workspace: String) -> PyResult<String> {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module.getattr("context_pack")?.call1((query, workspace))?.extract()
-    })
-}
-
-fn call_apply_action(action_json: String, workspace: String) -> PyResult<String> {
-    Python::attach(|py| {
-        prepare_python_path(py)?;
-        let module = py.import("protoagent_core.agent_engine")?;
-        module
-            .getattr("apply_action")?
-            .call1((action_json, workspace))?
-            .extract()
     })
 }
 

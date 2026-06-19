@@ -103,8 +103,8 @@ pub(crate) fn record_turn(prompt: &str, response: &CoreResponse) -> Result<()> {
         model: response.model.clone(),
         responder: response.responder.clone(),
         elapsed_ms: response.elapsed_ms,
-        event_count: response.events.len(),
-        requires_approval: response.requires_approval || !response.actions.is_empty(),
+        event_count: response.run_events.len().max(response.events.len()),
+        requires_approval: !response.approval_requests.is_empty(),
         file_target: response.file_target.clone(),
         timeline: timeline::build_timeline(&response.events),
     });

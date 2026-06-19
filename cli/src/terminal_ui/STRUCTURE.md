@@ -26,7 +26,7 @@ This folder contains the fullscreen ProtoAgent terminal interface. The code is s
 | `project.rs` | `/project` flow, project folder selection, `@file` tagging |
 | `model_picker.rs` | `/model` provider/model selection flow |
 | `diff_view.rs` | Diff parsing, diff review modal, approval diff summary |
-| `approval.rs` | Approval prompt and apply-action execution |
+| `approval.rs` | Protolink approval-request presentation and decisions |
 
 Shared task-progress parsing lives in `../progress.rs` so the fullscreen TUI and `proto-cli run` use the same live trace behavior.
 Session history lives in `../sessions.rs`; timeline parsing lives in `../timeline.rs`.
@@ -36,12 +36,12 @@ Session history lives in `../sessions.rs`; timeline parsing lives in `../timelin
 1. `surface.rs` reads user input and returns a line to `terminal_ui.rs`.
 2. `terminal_ui.rs` routes slash commands or task prompts.
 3. Task prompts call the Python core through `call_process_prompt_with_progress`.
-4. Python writes live ProtoLink trace events to a short-lived JSONL progress file.
-5. `progress.rs` tails those events into the active transcript message while the task runs.
+4. Python normalizes ProtoLink task events into `RunEvent` records and writes them to a short-lived JSONL progress file.
+5. `progress.rs` tails those records and exchanges typed approval/cancellation control files while the task runs.
 6. Final responses are stored in `TerminalApp` and rendered by `render.rs`.
 7. Completed turns are appended to the project session history in `sessions.rs`.
 8. Agent events are parsed into a structured timeline by `timeline.rs`.
-9. File-changing responses go through `approval.rs` before writes are applied.
+9. Coder writes execute only after Protolink policy calls the Rust approval bridge and receives a correlated decision.
 
 ## Maintenance Rules
 
@@ -52,4 +52,4 @@ Session history lives in `../sessions.rs`; timeline parsing lives in `../timelin
 - Keep persistent session history in `../sessions.rs`.
 - Keep agent trace-to-timeline parsing in `../timeline.rs`.
 - Keep project filesystem scanning and file tagging in `project.rs`.
-- Do not add side effects outside `approval.rs` unless the command is explicitly meant to mutate local config or project state.
+- Keep side-effect authorization in Protolink policies and application approval handlers.

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use crossterm::event::{poll, read, Event, KeyCode, KeyModifiers};
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -19,7 +20,7 @@ mod state;
 mod surface;
 mod theme;
 
-use approval::{apply_actions, approval_prompt};
+use approval::approval_prompt;
 use diff_view::{diff_review_summary, show_diff_modal};
 use modal::pick_choice_modal;
 use model_picker::{handle_key_command, handle_model_command};
@@ -243,6 +244,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
         call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
     });
     let mut tick = 0usize;
+    let mut cancellation_requested = false;
 
     let json_result: Result<String> = loop {
         tokio::select! {
@@ -259,9 +261,32 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
             }
             _ = sleep(Duration::from_millis(120)) => {
                 progress_events.extend(progress_file.read_new());
+                if let Some(approval) = progress_file.take_approval_request() {
+                    terminal.render(app, None)?;
+                    let approved = approval_prompt(terminal, app, &approval)?;
+                    progress_file.decide(&approval, approved)?;
+                    let decision = if approved { "approved" } else { "denied" };
+                    progress_events.push(format!(
+                        "Approval {decision}: {}.",
+                        if approval.description.is_empty() { approval.action_name } else { approval.description }
+                    ));
+                    app.push(
+                        Role::System,
+                        "Policy decision",
+                        &format!("{} was {decision} before execution.", approval.target),
+                    );
+                }
+                if !cancellation_requested && poll_task_cancellation()? {
+                    progress_file.request_cancel("Canceled from the ProtoAgent TUI")?;
+                    cancellation_requested = true;
+                    progress_events.push("Cancellation requested from the TUI.".to_string());
+                }
                 app.activity = progress_activity(&progress_events, tick);
                 if let Some(message) = app.messages.get_mut(progress_index) {
-                    message.body = format_live_progress(&progress_events);
+                    message.body = format!(
+                        "{}\n\nEsc or Ctrl-C cancels this task.",
+                        format_live_progress(&progress_events)
+                    );
                 }
                 terminal.render(app, None)?;
                 tick += 1;
@@ -295,19 +320,18 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
         app.refresh(None);
     }
 
-    if response.requires_approval || !response.actions.is_empty() {
-        terminal.render(app, None)?;
-        if approval_prompt(terminal, app, &response)? {
-            match apply_actions(&response.actions, &response.workspace) {
-                Ok(applied) => app.push(Role::System, "Approval", &applied),
-                Err(err) => app.push(Role::Error, "Approval failed", &err.to_string()),
-            }
-        } else {
-            app.push(Role::System, "Approval", "Denied. No files changed.");
-        }
-    }
-
     Ok(())
+}
+
+fn poll_task_cancellation() -> Result<bool> {
+    if !poll(Duration::from_millis(0))? {
+        return Ok(false);
+    }
+    let Event::Key(key) = read()? else {
+        return Ok(false);
+    };
+    Ok(matches!(key.code, KeyCode::Esc)
+        || matches!(key.code, KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL)))
 }
 
 fn handle_session_command(

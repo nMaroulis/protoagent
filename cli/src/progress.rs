@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -7,6 +8,18 @@ const MAX_VISIBLE_EVENTS: usize = 8;
 pub(crate) struct ProgressFile {
     path: PathBuf,
     seen_lines: usize,
+    seen_approvals: HashSet<String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeApproval {
+    pub(crate) request_id: String,
+    pub(crate) run_id: String,
+    pub(crate) action_name: String,
+    pub(crate) description: String,
+    pub(crate) target: String,
+    pub(crate) diff: String,
+    request: Value,
 }
 
 impl ProgressFile {
@@ -15,8 +28,17 @@ impl ProgressFile {
             "protoagent-progress-{}-{token}.jsonl",
             std::process::id()
         ));
-        let _ = fs::remove_file(&path);
-        Self { path, seen_lines: 0 }
+        let approval_request_path = control_path(&path, "approval-request");
+        let approval_decision_path = control_path(&path, "approval-decision");
+        let cancel_path = control_path(&path, "cancel");
+        for candidate in [&path, &approval_request_path, &approval_decision_path, &cancel_path] {
+            let _ = fs::remove_file(candidate);
+        }
+        Self {
+            path,
+            seen_lines: 0,
+            seen_approvals: HashSet::new(),
+        }
     }
 
     pub(crate) fn path_string(&self) -> String {
@@ -39,20 +61,173 @@ impl ProgressFile {
             let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
                 break;
             };
-            if let Some(event) = value.get("event").and_then(Value::as_str) {
-                let event = event.trim();
-                if !event.is_empty() {
-                    events.push(event.to_string());
-                }
+            let event = value
+                .get("run_event")
+                .and_then(run_event_summary)
+                .or_else(|| value.get("event").and_then(Value::as_str).map(str::to_string));
+            if let Some(event) = event
+                .map(|event| event.trim().to_string())
+                .filter(|event| !event.is_empty())
+            {
+                events.push(event);
             }
             self.seen_lines += 1;
         }
         events
     }
 
-    pub(crate) fn cleanup(&self) {
-        let _ = fs::remove_file(&self.path);
+    pub(crate) fn take_approval_request(&mut self) -> Option<RuntimeApproval> {
+        let text = fs::read_to_string(self.approval_request_path()).ok()?;
+        let request = serde_json::from_str::<Value>(&text).ok()?;
+        let approval = RuntimeApproval::from_value(request)?;
+        if !self.seen_approvals.insert(approval.request_id.clone()) {
+            return None;
+        }
+        Some(approval)
     }
+
+    pub(crate) fn decide(&self, approval: &RuntimeApproval, approved: bool) -> std::io::Result<()> {
+        let decision = serde_json::json!({
+            "approved": approved,
+            "request_id": approval.request_id,
+            "reason": if approved { "Approved in ProtoAgent" } else { "Denied in ProtoAgent" },
+            "decided_by": "protoagent-user",
+            "metadata": {"interface": "rust-cli"}
+        });
+        write_json_atomic(&self.approval_decision_path(), &decision)
+    }
+
+    pub(crate) fn request_cancel(&self, reason: &str) -> std::io::Result<()> {
+        write_json_atomic(
+            &self.cancel_path(),
+            &serde_json::json!({"reason": reason, "source": "rust-tui"}),
+        )
+    }
+
+    pub(crate) fn cleanup(&self) {
+        for candidate in [
+            self.path.clone(),
+            self.approval_request_path(),
+            self.approval_decision_path(),
+            self.cancel_path(),
+        ] {
+            let _ = fs::remove_file(candidate);
+        }
+    }
+
+    fn approval_request_path(&self) -> PathBuf {
+        control_path(&self.path, "approval-request")
+    }
+
+    fn approval_decision_path(&self) -> PathBuf {
+        control_path(&self.path, "approval-decision")
+    }
+
+    fn cancel_path(&self) -> PathBuf {
+        control_path(&self.path, "cancel")
+    }
+}
+
+impl RuntimeApproval {
+    fn from_value(request: Value) -> Option<Self> {
+        let request_id = value_string(&request, &["request_id"]);
+        if request_id.is_empty() {
+            return None;
+        }
+        let action = request.get("action")?;
+        let payload = action.get("payload").unwrap_or(&Value::Null);
+        let arguments = payload.get("arguments").unwrap_or(&Value::Null);
+        let metadata = action.get("metadata").unwrap_or(&Value::Null);
+        let target = value_string(metadata, &["path"])
+            .if_empty_then(|| value_string(arguments, &["path"]));
+        let diff = action
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|artifact| {
+                artifact.get("media_type").and_then(Value::as_str) == Some("text/x-diff")
+            })
+            .flat_map(|artifact| {
+                artifact
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|part| part.get("content").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(Self {
+            request_id,
+            run_id: value_string(&request, &["run_id"]),
+            action_name: value_string(action, &["name"]),
+            description: value_string(action, &["description"]),
+            target,
+            diff,
+            request,
+        })
+    }
+
+    pub(crate) fn capabilities(&self) -> String {
+        self.request
+            .get("action")
+            .and_then(|action| action.get("capabilities"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    }
+}
+
+trait EmptyString {
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String;
+}
+
+impl EmptyString for String {
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
+        if self.is_empty() { fallback() } else { self }
+    }
+}
+
+fn control_path(path: &PathBuf, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}.{suffix}.json", path.to_string_lossy()))
+}
+
+fn write_json_atomic(path: &PathBuf, value: &Value) -> std::io::Result<()> {
+    let temporary = PathBuf::from(format!(
+        "{}.{}.tmp",
+        path.to_string_lossy(),
+        std::process::id()
+    ));
+    fs::write(&temporary, serde_json::to_vec(value)?)?;
+    fs::rename(temporary, path)
+}
+
+fn run_event_summary(value: &Value) -> Option<String> {
+    let summary = value.get("summary").and_then(Value::as_str)?.trim();
+    if summary.is_empty() {
+        return value.get("type").and_then(Value::as_str).map(str::to_string);
+    }
+    let agent = value.get("agent_name").and_then(Value::as_str).unwrap_or("").trim();
+    if agent.is_empty() || summary.to_ascii_lowercase().starts_with(&agent.to_ascii_lowercase()) {
+        Some(summary.to_string())
+    } else {
+        Some(format!("{agent}: {summary}"))
+    }
+}
+
+fn value_string(value: &Value, path: &[&str]) -> String {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key).unwrap_or(&Value::Null);
+    }
+    current.as_str().unwrap_or("").to_string()
 }
 
 pub(crate) fn format_live_progress(events: &[String]) -> String {
@@ -160,7 +335,7 @@ fn active_agent(event: &str) -> Option<String> {
     if event.starts_with("Explorer ") {
         return Some("Explorer".to_string());
     }
-    if event.starts_with("Coder ") || event.starts_with("Coder safety net") {
+    if event.starts_with("Coder ") {
         return Some("Coder".to_string());
     }
     if event.starts_with("Registry") {
@@ -234,7 +409,7 @@ fn action_label(event: &str, active: &str) -> String {
     if event.starts_with("Resolving tagged") || event.starts_with("Loaded tagged") {
         return "loading tagged context".to_string();
     }
-    if event.starts_with("Coder safety net") || event.contains("approval action") {
+    if event.contains("Approval required") || event.starts_with("Approval ") {
         return "preparing approval".to_string();
     }
     if event.contains("failed") || event.contains("error") {
@@ -348,7 +523,9 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_live_progress, latest_progress_message};
+    use super::{format_live_progress, latest_progress_message, ProgressFile};
+    use serde_json::{json, Value};
+    use std::fs;
 
     #[test]
     fn keeps_last_delegation_route_for_agent_work() {
@@ -374,5 +551,65 @@ mod tests {
         let progress = format_live_progress(&events);
         assert!(progress.contains("[SEND]"));
         assert!(progress.contains("[TOOL]"));
+    }
+
+    #[test]
+    fn prefers_normalized_run_event_summaries() {
+        let mut progress = ProgressFile::new("normalized-event-test");
+        fs::write(
+            &progress.path,
+            serde_json::to_string(&json!({
+                "event": "legacy fallback",
+                "run_event": {
+                    "type": "action.started",
+                    "agent_name": "coder",
+                    "summary": "Action started: replace_file"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(progress.read_new(), vec!["coder: Action started: replace_file"]);
+        progress.cleanup();
+    }
+
+    #[test]
+    fn exchanges_typed_approval_and_cancel_controls() {
+        let mut progress = ProgressFile::new("runtime-control-test");
+        let request = json!({
+            "request_id": "approval_123",
+            "run_id": "run_123",
+            "action": {
+                "name": "replace_file",
+                "description": "Replace src/lib.rs",
+                "capabilities": ["workspace.write"],
+                "payload": {"arguments": {"path": "src/lib.rs"}},
+                "metadata": {"path": "src/lib.rs"},
+                "artifacts": [{
+                    "media_type": "text/x-diff",
+                    "parts": [{"type": "text", "content": "--- a/src/lib.rs\n+++ b/src/lib.rs\n"}]
+                }]
+            }
+        });
+        fs::write(progress.approval_request_path(), serde_json::to_vec(&request).unwrap()).unwrap();
+
+        let approval = progress.take_approval_request().unwrap();
+        assert_eq!(approval.target, "src/lib.rs");
+        assert_eq!(approval.capabilities(), "workspace.write");
+        assert!(approval.diff.contains("+++ b/src/lib.rs"));
+        progress.decide(&approval, true).unwrap();
+        progress.request_cancel("test cancellation").unwrap();
+
+        let decision: Value = serde_json::from_slice(
+            &fs::read(progress.approval_decision_path()).unwrap(),
+        )
+        .unwrap();
+        let cancellation: Value =
+            serde_json::from_slice(&fs::read(progress.cancel_path()).unwrap()).unwrap();
+        assert_eq!(decision["request_id"], "approval_123");
+        assert_eq!(decision["approved"], true);
+        assert_eq!(cancellation["reason"], "test cancellation");
+        progress.cleanup();
     }
 }

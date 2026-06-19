@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from protolink import Agent, CapabilityPolicy
+
 from ..context import build_context_pack as loom_context_pack
 from .. import tools
 from .common import (
@@ -12,7 +14,6 @@ from .common import (
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
-    session_aware_agent_class,
     with_workspace_contract,
 )
 
@@ -37,8 +38,6 @@ def create_explorer_agent(
     transport: str = "sse",
 ):
     """Create the read-only repository cartographer."""
-    Agent = session_aware_agent_class()
-
     agent = Agent(
         card={
             "name": "explorer",
@@ -62,34 +61,47 @@ def create_explorer_agent(
         storage=conversation_storage("explorer"),
         state=["conversation"],
         logger=QUIET_LOGGER,
+        policy=CapabilityPolicy({"workspace.read": "allow"}),
         verbosity=0,
     )
     set_transport_timeout(agent.transport, 600)
 
-    @agent.tool(name="read_file", description="Read a UTF-8 text file with line numbers.")
+    @agent.tool(
+        name="read_file",
+        description="Read a UTF-8 text file with line numbers.",
+        capabilities=["workspace.read"],
+    )
     def read_file(path: str) -> dict[str, Any]:
         return tools.read_file(path, workspace)
 
-    @agent.tool(name="list_directory", description="List files and folders in a workspace path.")
+    @agent.tool(
+        name="list_directory",
+        description="List files and folders in a workspace path.",
+        capabilities=["workspace.read"],
+    )
     def list_directory(path: str = ".") -> dict[str, Any]:
         return tools.list_directory(path, workspace)
 
     @agent.tool(
         name="search_regex",
         description="Search workspace files using a regular expression.",
-        input_schema={"pattern": str, "path": str, "file_filter": str},
+        capabilities=["workspace.read"],
     )
     def search_regex(pattern: str, path: str = ".", file_filter: str = ".*") -> dict[str, Any]:
         return tools.search_regex(pattern, path, file_filter, workspace)
 
-    @agent.tool(name="get_git_status", description="Return git status --short for the workspace.")
+    @agent.tool(
+        name="get_git_status",
+        description="Return git status --short for the workspace.",
+        capabilities=["workspace.read"],
+    )
     def get_git_status() -> dict[str, Any]:
         return tools.get_git_status(workspace)
 
     @agent.tool(
         name="build_context_pack",
         description="Build a Context Loom evidence pack for a focused repository question.",
-        input_schema={"query": str},
+        capabilities=["workspace.read"],
     )
     def build_context_pack(query: str) -> dict[str, Any]:
         return loom_context_pack(query, workspace)

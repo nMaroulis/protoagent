@@ -17,7 +17,7 @@ def create_agent_deck(
     workspace: str | None = None,
     urls: dict[str, str] | None = None,
     transport: str = "sse",
-    side_effects: list[dict[str, Any]] | None = None,
+    approval_handler=None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -42,7 +42,7 @@ def create_agent_deck(
         workspace=workspace,
         url=urls.get("coder"),
         transport=transport,
-        side_effects=side_effects,
+        approval_handler=approval_handler,
     )
     architect = create_architect_agent(
         registry=registry,
@@ -51,7 +51,6 @@ def create_agent_deck(
         workspace=workspace,
         url=urls.get("architect"),
         transport=transport,
-        side_effects=side_effects,
     )
     return {
         "explorer": explorer,
@@ -67,7 +66,7 @@ def agent_manifest() -> dict[str, Any]:
             {
                 "name": "architect",
                 "role": "orchestrator",
-                "tools": ["request_user_approval"],
+                "tools": [],
             },
             {
                 "name": "explorer",

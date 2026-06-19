@@ -192,7 +192,7 @@ def generate_unified_diff(
     original_content: str | None = None,
     workspace: str | None = None,
 ) -> dict[str, Any]:
-    """Generate an approval-gated unified diff for a file replacement."""
+    """Generate a unified-diff preview for a file replacement."""
     target = safe_path(path, workspace)
     if original_content is None:
         if target.exists():
@@ -216,21 +216,35 @@ def generate_unified_diff(
         "success": True,
         "path": rel,
         "diff": diff,
-        "requires_approval": True,
-        "action": {
-            "type": "write_file",
-            "path": rel,
-            "content": updated_content,
-        },
     }
 
 
 def create_new_file(path: str, content: str, workspace: str | None = None) -> dict[str, Any]:
-    """Prepare an approval-gated diff for creating a new file."""
+    """Prepare a unified-diff preview for creating a new file."""
     target = safe_path(path, workspace)
     if target.exists():
         return {"success": False, "error": f"File already exists: {path}"}
     return generate_unified_diff(path, content, original_content="", workspace=workspace)
+
+
+def write_file(
+    path: str,
+    content: str,
+    workspace: str | None = None,
+    *,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Write a UTF-8 file after the caller has authorized the operation."""
+    target = safe_path(path, workspace)
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"File already exists: {path}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return {
+        "success": True,
+        "path": to_relative(target, workspace),
+        "bytes_written": len(content.encode("utf-8")),
+    }
 
 
 def build_context_map(workspace: str | None = None, max_files: int = 80) -> dict[str, Any]:

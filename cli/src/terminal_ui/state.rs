@@ -138,13 +138,20 @@ impl TerminalApp {
             message.details.push(("Agent trace".to_string(), response.events.join("\n")));
             message.details.push(("Agent timeline".to_string(), timeline));
         }
+        if !response.run_events.is_empty() {
+            message.meta.push(format!("{} normalized event(s)", response.run_events.len()));
+            if let Ok(events) = serde_json::to_string_pretty(&response.run_events) {
+                message.details.push(("Normalized RunEvents".to_string(), events));
+            }
+        }
         if !response.diff.trim().is_empty() {
             message.details.push(("Proposed diff".to_string(), response.diff.clone()));
         }
-        if !response.actions.is_empty() {
-            message
-                .details
-                .push(("Approval required".to_string(), format!("{} action payload(s) waiting.", response.actions.len())));
+        if !response.approval_requests.is_empty() {
+            message.meta.push(format!("{} approval(s)", response.approval_requests.len()));
+            if let Ok(approvals) = serde_json::to_string_pretty(&response.approval_decisions) {
+                message.details.push(("Approval decisions".to_string(), approvals));
+            }
         }
         self.messages.push(message);
     }

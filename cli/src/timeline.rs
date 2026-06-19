@@ -134,9 +134,21 @@ fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
         return Some(item("DONE", &actor, "CLI", "returned final answer", ""));
     }
 
-    if event.contains("approval metadata") || event.contains("approval action") {
+    if event.contains("Approval required") || event.starts_with("Approval ") || event.contains(": Approval ") {
         let actor = agent_prefix(event).unwrap_or_else(|| "Coder".to_string());
-        return Some(item("APPROVAL", &actor, "Human", "prepared approval gate", ""));
+        let action = if event.to_ascii_lowercase().contains("approved") {
+            "approved runtime action"
+        } else if event.to_ascii_lowercase().contains("denied") {
+            "denied runtime action"
+        } else {
+            "requested runtime approval"
+        };
+        return Some(item("APPROVAL", &actor, "Human", action, ""));
+    }
+
+    if event.contains("Policy decision:") {
+        let actor = agent_prefix(event).unwrap_or_else(|| "Runtime".to_string());
+        return Some(item("POLICY", &actor, "Policy", "evaluated runtime action", clean_sentence_tail(event)));
     }
 
     if let Some(actor) = agent_prefix(event) {

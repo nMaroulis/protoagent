@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import socket
-import time
 from contextlib import suppress
 from dataclasses import asdict, is_dataclass
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any
 
 from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
+from .runtime_bridge import RuntimeBridge
 
 _FALLBACK_PORT = 19100
-ProgressSink = Callable[[str], None] | None
 
 
 def run_selected_model(
@@ -37,7 +36,11 @@ def run_selected_model(
     if not model:
         raise RuntimeError(f"No model selected for provider '{provider}'")
 
-    return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id, _progress_writer(progress_path)))
+    bridge = RuntimeBridge(progress_path)
+    try:
+        return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id, bridge))
+    finally:
+        bridge.cleanup()
 
 
 async def _run_agent_deck(
@@ -46,35 +49,47 @@ async def _run_agent_deck(
     model: str,
     workspace: str | None,
     session_id: str | None,
-    progress: ProgressSink = None,
+    bridge: RuntimeBridge,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
+    from protolink import InMemoryEventSink, RunContext, Task
     from protolink.client import AgentClient
     from protolink.discovery import Registry
-    from protolink.core.task import Task
 
     urls = _runtime_urls()
     agent_transport = _agent_transport()
     streaming = _streaming_enabled(agent_transport)
     events: list[str] = []
+    sink = InMemoryEventSink()
+    project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
+    task = Task.create_infer(prompt=prompt)
+    context = RunContext(
+        session_id=session_id,
+        workspace_uri=Path(project).as_uri(),
+        permissions={
+            "workspace.read": "allow",
+            "workspace.write": "allow",
+        },
+        metadata={"application": "protoagent", "interface": "rust-cli"},
+    )
+    context.trace_id = context.run_id
+    context.attach_to_task(task)
 
     def emit(message: str) -> None:
         events.append(message)
-        if progress is not None:
-            progress(message)
+        bridge.emit(message)
 
     emit(f"Registry prepared at {urls['registry']}.")
     emit(f"All LLM-capable agents configured with {provider} / {model}.")
     emit(f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).")
-    emit(f"Active project workspace: {workspace or os.getenv('PROTOAGENT_WORKSPACE', os.getcwd())}.")
+    emit(f"Active project workspace: {project}.")
     emit(f"Conversation session: {session_id or 'task-local'}.")
-    side_effects: list[dict[str, Any]] = []
-    actions: list[dict[str, Any]] = []
-    diffs: list[dict[str, str]] = []
+    emit(f"Run context: {context.run_id}.")
     registry = None
     client = None
     deck: dict[str, Any] = {}
     started_agents: list[Any] = []
+    cancellation_monitor: asyncio.Task[None] | None = None
 
     try:
         registry = Registry(url=urls["registry"], transport="http", verbosity=0)
@@ -92,7 +107,7 @@ async def _run_agent_deck(
                 "architect": urls["architect"],
             },
             transport=agent_transport,
-            side_effects=side_effects,
+            approval_handler=bridge.approval_handler,
         )
 
         for name in ("explorer", "coder", "architect"):
@@ -106,61 +121,72 @@ async def _run_agent_deck(
         emit(f"Architect discovery sees: {names}.")
 
         client = AgentClient(url=urls["client"], transport=agent_transport, timeout=_runtime_timeout())
-        task = Task.create_infer(prompt=prompt)
-        if session_id:
-            task.metadata["session_id"] = session_id
-            task.metadata["workspace"] = workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())
+        cancellation_monitor = asyncio.create_task(
+            _monitor_cancellation(
+                bridge=bridge,
+                client=client,
+                agent_url=deck["architect"].card.url,
+                task_id=task.id,
+                emit=emit,
+            )
+        )
         if streaming:
             emit("AgentClient opened a streaming task channel to Architect.")
             emit("Architect is processing the user task stream.")
             try:
-                raw_answer = await _send_task_streaming(
+                delivery = await _send_task_streaming(
                     client=client,
                     agent_url=deck["architect"].card.url,
                     task=task,
+                    context=context,
+                    sink=sink,
                     events=events,
-                    actions=actions,
-                    diffs=diffs,
-                    progress=progress,
+                    bridge=bridge,
                 )
             except NotImplementedError as exc:
                 emit(f"Streaming unavailable for {agent_transport}: {exc}")
                 emit("Falling back to request/response task execution.")
-                raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
-            except Exception as exc:
-                emit(f"Streaming task path failed: {exc}")
-                emit("Falling back to request/response task execution.")
-                raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
+                delivery = await _send_task_once(client, deck["architect"].card.url, task)
         else:
             emit("AgentClient sent the user task to Architect.")
             emit("Architect is processing the request/response task.")
-            raw_answer = await _send_task_once(client, deck["architect"].card.url, task)
+            delivery = await _send_task_once(client, deck["architect"].card.url, task)
+
+        status = str(delivery.get("status") or "completed")
+        raw_answer = delivery.get("content")
+        final_context = _context_from_delivery(delivery) or context
         emit("Architect returned a final task response.")
-
-        _collect_side_effects(raw_answer, actions, diffs)
-
-        for payload in side_effects:
-            source = str(payload.get("source", "agent")).title() if isinstance(payload, dict) else "Agent"
-            path = ""
-            if isinstance(payload, dict):
-                path = str(payload.get("path") or payload.get("file_target") or "")
-            emit(f"{source} produced approval metadata{f' for {path}' if path else ''}.")
-            _collect_side_effects(_normalize(payload), actions, diffs)
 
         answer = _content_to_text(raw_answer)
         if not answer:
-            answer = "(model returned an empty response)"
+            answer = (
+                f"Task canceled: {final_context.cancel_reason or bridge.cancel_reason() or 'canceled by user'}"
+                if status == "canceled"
+                else "(model returned an empty response)"
+            )
+
+        previews = _approval_previews(bridge.approval_requests)
+        events.extend(_approval_event_summaries(bridge.approval_requests, bridge.approval_decisions))
 
         return {
             "provider": provider,
             "model": model,
             "responder": "architect",
             "answer": answer,
+            "status": status,
             "events": events,
-            "actions": actions,
-            "diffs": _dedupe_diffs(diffs),
+            "run_events": sink.to_list(),
+            "diffs": previews["diffs"],
+            "targets": previews["targets"],
+            "approval_requests": bridge.approval_requests,
+            "approval_decisions": bridge.approval_decisions,
+            "run_context": final_context.to_dict(),
         }
     finally:
+        if cancellation_monitor is not None:
+            cancellation_monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await cancellation_monitor
         if client is not None:
             transport = getattr(client, "_transport", None)
             if transport is not None and hasattr(transport, "stop"):
@@ -172,24 +198,6 @@ async def _run_agent_deck(
         if registry is not None:
             with suppress(Exception):
                 registry.stop()
-
-
-def _progress_writer(path: str | None) -> ProgressSink:
-    """Create a best-effort JSONL progress sink for the Rust TUI."""
-    if not path:
-        return None
-
-    def emit(message: str) -> None:
-        try:
-            with open(path, "a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps({"ts": time.time(), "event": message}, ensure_ascii=True) + "\n"
-                )
-                handle.flush()
-        except OSError:
-            pass
-
-    return emit
 
 
 def _runtime_urls() -> dict[str, str]:
@@ -265,7 +273,11 @@ def _streaming_enabled(transport: str) -> bool:
 async def _send_task_once(client, agent_url: str, task) -> Any:
     """Send a task through ProtoLink's request/response client path."""
     result_task = await client.send_task(agent_url=agent_url, task=task)
-    return _normalize(result_task.get_last_part_content())
+    return {
+        "content": _normalize(result_task.get_last_part_content()),
+        "status": getattr(result_task.state, "value", result_task.state),
+        "task": _normalize(result_task),
+    }
 
 
 async def _send_task_streaming(
@@ -273,31 +285,35 @@ async def _send_task_streaming(
     client,
     agent_url: str,
     task,
+    context,
+    sink,
     events: list[str],
-    actions: list[dict[str, Any]],
-    diffs: list[dict[str, str]],
-    progress: ProgressSink = None,
+    bridge: RuntimeBridge,
 ) -> Any:
     """Consume ProtoLink streaming events and return the final answer payload."""
     final_task: dict[str, Any] | None = None
     final_content: Any = None
     artifact_content: Any = None
+    final_status = "completed"
 
     async for event in client.send_task_streaming(agent_url=agent_url, task=task):
         payload = _normalize(event)
         if not isinstance(payload, dict):
-            _append_event(events, f"Stream event: {_content_to_text(payload)}", progress)
+            _append_event(events, f"Stream event: {_content_to_text(payload)}", bridge)
             continue
 
-        summary = _stream_event_summary(payload)
+        run_event = await sink.emit_task_event(event, context=context)
+        run_event_data = run_event.to_dict()
+        summary = _run_event_summary(run_event_data)
         if summary:
-            _append_event(events, summary, progress)
+            _append_event(events, summary, bridge, run_event=run_event_data)
 
         event_type = payload.get("type")
         if event_type == "task_error":
             raise RuntimeError(payload.get("error_message") or "Agent stream returned an error")
 
         if event_type == "task_status_update":
+            final_status = str(payload.get("new_state") or final_status)
             metadata = payload.get("metadata", {})
             if payload.get("final") and isinstance(metadata, dict) and isinstance(metadata.get("task"), dict):
                 final_task = metadata["task"]
@@ -306,25 +322,22 @@ async def _send_task_streaming(
         if event_type == "task_artifact_update":
             artifact = payload.get("artifact")
             artifact_content = _item_last_part_content(artifact)
-            _collect_side_effects(artifact_content, actions, diffs)
             continue
 
         if event_type == "task_llm_stream":
             content = payload.get("content")
-            metadata = payload.get("metadata", {})
-            if isinstance(metadata, dict):
-                _collect_side_effects(metadata.get("result"), actions, diffs)
-            _collect_side_effects(content, actions, diffs)
             if payload.get("llm_event_type") == "llm_final" or payload.get("final"):
                 final_content = content
 
+    content = final_content
     if final_task:
         task_content = _task_last_part_content(final_task)
         if task_content is not None:
-            return _normalize(task_content)
-    if artifact_content is not None:
-        return _normalize(artifact_content)
-    return _normalize(final_content)
+            content = task_content
+        final_status = str(final_task.get("state") or final_status)
+    elif artifact_content is not None:
+        content = artifact_content
+    return {"content": _normalize(content), "status": final_status, "task": final_task}
 
 
 def _normalize(value: Any) -> Any:
@@ -340,7 +353,13 @@ def _normalize(value: Any) -> Any:
     return value
 
 
-def _append_event(events: list[str], message: str, progress: ProgressSink = None) -> None:
+def _append_event(
+    events: list[str],
+    message: str,
+    bridge: RuntimeBridge,
+    *,
+    run_event: dict[str, Any] | None = None,
+) -> None:
     """Append a trace event without letting token streams flood the CLI."""
     raw_limit = os.getenv("PROTOAGENT_STREAM_TRACE_LIMIT", "120")
     try:
@@ -349,64 +368,55 @@ def _append_event(events: list[str], message: str, progress: ProgressSink = None
         limit = 120
     if len(events) < limit:
         events.append(message)
-        if progress is not None:
-            progress(message)
+        bridge.emit(message, run_event=run_event)
     elif not events[-1].startswith("Stream trace limit reached"):
         limit_message = f"Stream trace limit reached ({limit}); suppressing further event summaries."
         events.append(limit_message)
-        if progress is not None:
-            progress(limit_message)
+        bridge.emit(limit_message)
 
 
-def _stream_event_summary(event: dict[str, Any]) -> str:
-    """Build a compact human-readable summary for a ProtoLink stream event."""
-    event_type = event.get("type", "")
-    if event_type == "task_status_update":
-        previous = event.get("previous_state") or "none"
-        current = event.get("new_state") or "unknown"
-        suffix = " (final)" if event.get("final") else ""
-        return f"Task state: {previous} -> {current}{suffix}."
-    if event_type == "task_progress":
-        message = event.get("message") or "progress update"
-        return f"Progress: {message}."
-    if event_type == "task_artifact_update":
-        return "Architect emitted a task artifact."
-    if event_type == "task_error":
-        return f"Task error: {event.get('error_message') or 'unknown error'}."
-    if event_type != "task_llm_stream":
+def _run_event_summary(event: dict[str, Any]) -> str:
+    """Return the stable RunEvent summary while suppressing token chunks."""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    if payload.get("llm_event_type") == "llm_chunk":
         return ""
+    return str(event.get("summary") or event.get("type") or "runtime event")
 
-    agent = event.get("agent_name") or "agent"
-    kind = event.get("llm_event_type") or "event"
-    step = event.get("step")
-    step_label = f" step {step}" if step is not None else ""
-    metadata = event.get("metadata", {}) if isinstance(event.get("metadata"), dict) else {}
 
-    if kind == "llm_chunk":
-        return ""
-    if kind == "llm_step":
-        return f"{agent}{step_label}: LLM step started."
-    if kind == "llm_response":
-        mode = "streamed" if metadata.get("streaming") else "received"
-        return f"{agent}{step_label}: LLM response {mode}."
-    if kind == "llm_action":
-        return f"{agent}{step_label}: selected action {metadata.get('action', 'unknown')}."
-    if kind == "tool_start":
-        return f"{agent}{step_label}: calling tool {metadata.get('tool', 'unknown')}."
-    if kind == "tool_result":
-        return f"{agent}{step_label}: tool {metadata.get('tool', 'unknown')} returned."
-    if kind == "agent_call_start":
-        return (
-            f"{agent}{step_label}: delegating to "
-            f"{metadata.get('agent', 'unknown')} ({metadata.get('action', 'infer')})."
-        )
-    if kind == "agent_call_result":
-        return f"{agent}{step_label}: delegation from {metadata.get('agent', 'unknown')} returned."
-    if kind == "llm_final":
-        return f"{agent}{step_label}: final response produced."
-    if kind in {"llm_parse_error", "llm_error", "tool_error", "agent_call_error"}:
-        return f"{agent}{step_label}: {kind.replace('_', ' ')}: {metadata.get('message', 'unknown error')}."
-    return f"{agent}{step_label}: {kind.replace('_', ' ')}."
+def _context_from_delivery(delivery: dict[str, Any]):
+    """Read the final serialized RunContext returned by Protolink."""
+    from protolink import RunContext
+
+    task = delivery.get("task")
+    if not isinstance(task, dict):
+        return None
+    metadata = task.get("metadata")
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("run_context"), dict):
+        return None
+    return RunContext.from_dict(metadata["run_context"])
+
+
+async def _monitor_cancellation(
+    *,
+    bridge: RuntimeBridge,
+    client,
+    agent_url: str,
+    task_id: str,
+    emit,
+) -> None:
+    """Forward a Rust cancellation signal through Protolink's control plane."""
+    while True:
+        reason = bridge.cancel_reason()
+        if not reason:
+            await asyncio.sleep(0.08)
+            continue
+        try:
+            await client.cancel_task(agent_url=agent_url, task_id=task_id, reason=reason)
+        except Exception:
+            await asyncio.sleep(0.08)
+            continue
+        emit(f"Cancellation accepted for task {task_id}: {reason}.")
+        return
 
 
 def _task_last_part_content(task_payload: dict[str, Any]) -> Any:
@@ -451,39 +461,45 @@ def _content_to_text(content: Any) -> str:
     return str(content).strip()
 
 
-def _collect_side_effects(
-    result: Any,
-    actions: list[dict[str, Any]],
-    diffs: list[dict[str, str]],
-) -> None:
-    """Collect approval actions and diffs from nested tool payloads."""
-    if isinstance(result, list):
-        for item in result:
-            _collect_side_effects(item, actions, diffs)
-        return
-    if not isinstance(result, dict):
-        return
+def _approval_previews(requests: list[dict[str, Any]]) -> dict[str, list[Any]]:
+    """Extract displayable previews from typed approval request artifacts."""
+    targets: list[str] = []
+    diffs: list[dict[str, str]] = []
+    for request in requests:
+        action = request.get("action") if isinstance(request.get("action"), dict) else {}
+        metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
+        payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        path = str(metadata.get("path") or arguments.get("path") or "")
+        if path:
+            targets.append(path)
+        for artifact in action.get("artifacts") or []:
+            if not isinstance(artifact, dict) or artifact.get("media_type") != "text/x-diff":
+                continue
+            for part in artifact.get("parts") or []:
+                if not isinstance(part, dict) or not isinstance(part.get("content"), str):
+                    continue
+                diff = part["content"]
+                if diff.strip():
+                    diffs.append({"path": path, "diff": diff, "source": "coder"})
+    return {"targets": sorted(set(targets)), "diffs": _dedupe_diffs(diffs)}
 
-    nested = result.get("result")
-    if nested is not None:
-        _collect_side_effects(nested, actions, diffs)
 
-    source = str(result.get("source", "")).strip()
-    action = result.get("action")
-    if isinstance(action, dict):
-        if action.get("type") == "write_file":
-            enriched = dict(action)
-            if source:
-                enriched.setdefault("source", source)
-            actions.append(enriched)
-
-    diff = result.get("diff")
-    path = result.get("path") or result.get("file_target") or ""
-    if isinstance(diff, str) and diff.strip():
-        item = {"path": str(path), "diff": diff}
-        if source:
-            item["source"] = source
-        diffs.append(item)
+def _approval_event_summaries(
+    requests: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+) -> list[str]:
+    """Build concise history entries from typed approval records."""
+    by_request = {str(item.get("request_id") or ""): item for item in decisions}
+    summaries = []
+    for request in requests:
+        request_id = str(request.get("request_id") or "")
+        action = request.get("action") if isinstance(request.get("action"), dict) else {}
+        name = str(action.get("description") or action.get("name") or "runtime action")
+        decision = by_request.get(request_id, {})
+        outcome = "approved" if decision.get("approved") else "denied"
+        summaries.append(f"Approval {outcome}: {name}.")
+    return summaries
 
 
 def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:

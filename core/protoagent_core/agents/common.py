@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 from ..config import normalize_provider
 from ..llm import create_llm_from_config
@@ -36,66 +35,6 @@ class QuietLogger:
 
 
 QUIET_LOGGER = QuietLogger()
-
-
-class SessionAwareAgentMixin:
-    """Propagate ProtoAgent conversation sessions through agent delegation."""
-
-    async def call_llm(self, infer_part, task=None, **kwargs):
-        previous = getattr(self, "_protoagent_session_id", None)
-        if task is not None:
-            session_id = task.metadata.get("session_id")
-            if session_id:
-                self._protoagent_session_id = session_id
-        try:
-            return await super().call_llm(infer_part, task=task, **kwargs)
-        finally:
-            if previous is None:
-                if hasattr(self, "_protoagent_session_id"):
-                    delattr(self, "_protoagent_session_id")
-            else:
-                self._protoagent_session_id = previous
-
-    async def _handle_agent_call(self, agent_name: str, action: str, payload: dict[str, Any]) -> Any:
-        from protolink.core.message import Message
-        from protolink.core.part import Part
-        from protolink.core.task import Task
-
-        agent_url = await self._resolve_agent_url(agent_name)
-        if agent_url == self.card.url:
-            raise ValueError(
-                f"Self-delegation is not allowed. You are '{self.card.name}' ({self.card.url}) and cannot delegate tasks to yourself."
-            )
-
-        if action == "tool_call":
-            tool_name = payload.get("tool")
-            args = payload.get("args", {})
-            if not tool_name:
-                raise ValueError(f"tool_call agent_call must specify 'tool' field. Received payload: {payload}")
-            task = Task.create(Message(role="agent", parts=[Part.tool_call(tool_name=tool_name, args=args)]))
-        elif action == "infer":
-            task = Task.create(Message.infer(prompt=payload.get("prompt", "")))
-        else:
-            raise ValueError(f"Unknown agent_call action: {action}")
-
-        session_id = getattr(self, "_protoagent_session_id", None)
-        if session_id:
-            task.metadata["session_id"] = session_id
-            task.metadata["parent_agent"] = self.card.name
-            task.metadata["delegated_agent"] = agent_name
-
-        result_task = await self.call_agent(agent_url, task)
-        return result_task.get_last_part_content()
-
-
-def session_aware_agent_class():
-    """Return an Agent class that preserves session metadata during delegation."""
-    from protolink.agents import Agent
-
-    class SessionAwareAgent(SessionAwareAgentMixin, Agent):
-        pass
-
-    return SessionAwareAgent
 
 
 def create_selected_llm(provider: str, model: str | None = None):
@@ -149,9 +88,3 @@ def with_workspace_contract(system_prompt: str, workspace: str | None, role: str
         "- If no path is specified, choose a conservative project-relative path only when the request is obvious; otherwise ask one concise clarification.\n"
         f"- You are the {role}; identify your role when handing work to another agent or producing the final response.\n"
     )
-
-
-def record_side_effect(side_effects: list[dict[str, Any]] | None, payload: dict[str, Any]) -> None:
-    """Record tool-produced payloads for the Rust CLI surface."""
-    if side_effects is not None:
-        side_effects.append(payload)

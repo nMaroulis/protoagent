@@ -41,7 +41,7 @@ If you haven't already, initialize the Python environment in the monorepo root:
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.0"
+pip install "protolink[http,llms]>=0.6.1"
 
 ```
 
@@ -95,6 +95,10 @@ explain @src/auth.rs and suggest a safer JWT flow
 
 Tagged files are loaded as bounded read-only context before the agent pipeline
 runs.
+
+Workspace writes pause inside Protolink's policy boundary and open a typed
+approval modal with the action's diff artifact. Press Esc or Ctrl-C while a
+task is running to request live task cancellation.
 
 ### TUI Commands
 

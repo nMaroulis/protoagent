@@ -3,7 +3,7 @@ use crossterm::event::{read, Event, KeyCode, KeyModifiers};
 use crossterm::style::Color;
 use std::io::{stdout, Write};
 
-use crate::{empty_as_unknown, CoreResponse};
+use crate::progress::RuntimeApproval;
 
 use super::modal::{draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
 use super::state::TerminalApp;
@@ -120,10 +120,10 @@ pub(super) fn show_diff_modal(
     }
 }
 
-pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
+pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let (width, height) = size();
     let modal_width = width.saturating_mul(4).saturating_div(5).clamp(54, width.saturating_sub(4));
-    let modal_height = 12u16.min(height.saturating_sub(4)).max(9);
+    let modal_height = 14u16.min(height.saturating_sub(4)).max(11);
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let mut out = stdout();
@@ -131,13 +131,22 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
 
     write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title("Approval Gate", modal_width), black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &modal_title("Policy Approval", modal_width),
+        black(),
+        modal_border(),
+        true,
+    )?;
     write_at(
         &mut out,
         x,
         y + 2,
         modal_width,
-        " The agent proposed file changes. Review before applying.",
+        " Protolink paused this action before execution.",
         text(),
         modal_bg(),
         false,
@@ -147,7 +156,7 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
         x,
         y + 3,
         modal_width,
-        &format!(" Workspace : {}", empty_as_unknown(&response.workspace)),
+        &format!(" Action    : {}", approval.action_name),
         muted(),
         modal_bg(),
         false,
@@ -157,15 +166,15 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
         x,
         y + 4,
         modal_width,
-        &format!(" Actions   : {}", response.actions.len()),
+        &format!(" Capability: {}", approval.capabilities()),
         cyan(),
         modal_bg(),
         true,
     )?;
-    let target = if response.file_target.is_empty() {
+    let target = if approval.target.is_empty() {
         "not reported"
     } else {
-        response.file_target.as_str()
+        approval.target.as_str()
     };
     write_at(
         &mut out,
@@ -177,10 +186,10 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
         modal_bg(),
         false,
     )?;
-    let diff_summary = if response.diff.trim().is_empty() {
+    let diff_summary = if approval.diff.trim().is_empty() {
         "no diff payload attached".to_string()
     } else {
-        compact_diff_stats(&parse_diff(&response.diff))
+        compact_diff_stats(&parse_diff(&approval.diff))
     };
     write_at(
         &mut out,
@@ -197,7 +206,18 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
         x,
         y + 7,
         modal_width,
-        " Decision  : apply only when the patch matches your intent.",
+        &format!(" Request   : {} / {}", approval.run_id, approval.request_id),
+        muted(),
+        modal_bg(),
+        false,
+    )?;
+
+    write_at(
+        &mut out,
+        x,
+        y + 8,
+        modal_width,
+        &format!(" Intent    : {}", clip_plain(&approval.description, modal_width.saturating_sub(14) as usize)),
         muted(),
         modal_bg(),
         false,
@@ -207,7 +227,7 @@ pub(super) fn draw_approval_modal(response: &CoreResponse) -> Result<()> {
     let mut button_x = x + 2;
     draw_button(&mut out, button_x, button_y, 14, "[Y] APPLY", black(), green())?;
     button_x += 16;
-    if response.diff.trim().is_empty() {
+    if approval.diff.trim().is_empty() {
         draw_button(&mut out, button_x, button_y, 18, "[V] NO DIFF", muted(), surface_bg())?;
     } else {
         draw_button(&mut out, button_x, button_y, 18, "[V] REVIEW DIFF", black(), yellow())?;
