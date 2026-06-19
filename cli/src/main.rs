@@ -203,6 +203,14 @@ async fn main() -> Result<()> {
             print_header()?;
             show_agents()
         }
+        Some("context") | Some("loom") => {
+            print_header()?;
+            handle_context_command(&args[1..])
+        }
+        Some("index") => {
+            print_header()?;
+            handle_index_command(&args[1..])
+        }
         Some("sessions") | Some("session") => {
             print_header()?;
             show_sessions()
@@ -240,6 +248,8 @@ fn print_cli_help() {
     println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
+    println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
+    println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
     println!("  proto-cli sessions           Show saved project sessions");
     println!();
 }
@@ -488,6 +498,7 @@ fn show_dashboard() -> Result<()> {
         "/models scans local and cloud model options".to_string(),
         "/project sets the active project folder".to_string(),
         "Use @ inside a task to tag project files".to_string(),
+        "/context shows Context Loom evidence".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
     ];
@@ -852,6 +863,65 @@ fn show_agents() -> Result<()> {
     Ok(())
 }
 
+fn handle_context_command(args: &[String]) -> Result<()> {
+    let query = args.join(" ");
+    if query.trim().is_empty() {
+        show_context_status()
+    } else {
+        show_context_pack(query.trim())
+    }
+}
+
+fn handle_index_command(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("refresh") | Some("rebuild") => {
+            let workspace = require_project_dir_string()?;
+            let text = refresh_context_text(workspace)?;
+            print_panel(
+                "CONTEXT LOOM INDEX",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+        None | Some("status") => show_context_status(),
+        Some(other) => Err(anyhow!("Unknown index command: {other}. Use `proto-cli index refresh`.")),
+    }
+}
+
+fn show_context_status() -> Result<()> {
+    let workspace = require_project_dir_string()?;
+    let text = context_status_text(workspace)?;
+    print_panel(
+        "CONTEXT LOOM",
+        &text.lines().map(str::to_string).collect::<Vec<_>>(),
+        PanelTone::Magenta,
+    );
+    Ok(())
+}
+
+fn show_context_pack(query: &str) -> Result<()> {
+    let workspace = require_project_dir_string()?;
+    let raw = call_context_pack(query.to_string(), workspace)
+        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let value: Value = serde_json::from_str(&raw)?;
+    print_panel(
+        "CONTEXT LOOM PACK",
+        &context_pack_rows(&value),
+        PanelTone::Magenta,
+    );
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        for item in items.iter().take(6) {
+            let title = item
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("context item");
+            print_panel(title, &context_item_rows(item), PanelTone::Dim);
+        }
+    }
+    Ok(())
+}
+
 fn show_sessions() -> Result<()> {
     print_panel("SESSIONS", &sessions::session_panel_rows(), PanelTone::Magenta);
     for session in sessions::recent_sessions().into_iter().take(5) {
@@ -865,9 +935,12 @@ fn print_agent_graph() {
         "[USER]".to_string(),
         "   |".to_string(),
         "   v".to_string(),
+        "[CONTEXT LOOM] deterministic workspace index and evidence pack".to_string(),
+        "   |".to_string(),
+        "   v".to_string(),
         "[ARCHITECT] intent, routing, approval gate".to_string(),
         "   |".to_string(),
-        "   +--> [EXPLORER] read_file, list_directory, search_regex, git status".to_string(),
+        "   +--> [EXPLORER] context pack, read_file, list_directory, search_regex, git status".to_string(),
         "   |".to_string(),
         "   +--> [CODER] generate_unified_diff, create_new_file".to_string(),
         "   |".to_string(),
@@ -890,6 +963,148 @@ fn load_visible_config() -> Result<VisibleConfig> {
 fn load_doctor() -> Result<DoctorReport> {
     let json = call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
     Ok(serde_json::from_str(&json)?)
+}
+
+pub(crate) fn context_status_text(workspace: String) -> Result<String> {
+    let raw = call_context_status(workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let value: Value = serde_json::from_str(&raw)?;
+    Ok(context_status_rows(&value).join("\n"))
+}
+
+pub(crate) fn refresh_context_text(workspace: String) -> Result<String> {
+    let raw = call_refresh_context(workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let value: Value = serde_json::from_str(&raw)?;
+    Ok(context_status_rows(&value).join("\n"))
+}
+
+pub(crate) fn context_pack_text(query: String, workspace: String) -> Result<String> {
+    let raw = call_context_pack(query, workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let value: Value = serde_json::from_str(&raw)?;
+    let mut rows = context_pack_rows(&value);
+    if let Some(items) = value.get("items").and_then(Value::as_array) {
+        for item in items.iter().take(6) {
+            rows.push(String::new());
+            rows.extend(context_item_rows(item));
+        }
+    }
+    Ok(rows.join("\n"))
+}
+
+fn context_status_rows(value: &Value) -> Vec<String> {
+    vec![
+        format!("Name       : {}", value_str(value, "name")),
+        format!("Workspace  : {}", value_str(value, "workspace")),
+        format!("Index      : {}", value_str(value, "index_path")),
+        format!("Files      : {}", value_u64(value, "files_indexed")),
+        format!("Indexed at : {}", empty_as_unknown(&value_str(value, "indexed_at"))),
+        format!(
+            "Duration   : {} ms",
+            value_u64_any(value, &["duration_ms", "last_duration_ms"])
+        ),
+        format!("Updated    : {}", value_u64(value, "files_updated")),
+        format!("Removed    : {}", value_u64(value, "files_removed")),
+        format!("Skipped    : {}", value_u64(value, "files_skipped")),
+    ]
+}
+
+fn context_pack_rows(value: &Value) -> Vec<String> {
+    let index = value.get("index").unwrap_or(&Value::Null);
+    let item_count = value
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0);
+    let terms = value
+        .get("terms")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .take(16)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    vec![
+        format!("Query      : {}", value_str(value, "query")),
+        format!("Workspace  : {}", value_str(value, "workspace")),
+        format!("Items      : {}", item_count),
+        format!("Terms      : {}", if terms.is_empty() { "none" } else { terms.as_str() }),
+        format!(
+            "Index      : {} file(s), {} ms",
+            value_u64(index, "files_indexed"),
+            value_u64_any(index, &["duration_ms", "last_duration_ms"])
+        ),
+        format!(
+            "Git        : {} changed path(s)",
+            value
+                .get("git")
+                .and_then(|git| git.get("status"))
+                .and_then(Value::as_array)
+                .map(|items| items.len())
+                .unwrap_or(0)
+        ),
+    ]
+}
+
+fn context_item_rows(item: &Value) -> Vec<String> {
+    let mut rows = vec![
+        format!("Path     : {}", value_str(item, "path")),
+        format!("Language : {}", value_str(item, "language")),
+        format!("Score    : {}", value_u64(item, "score")),
+        format!("Reason   : {}", value_str(item, "reason")),
+        format!("Evidence : {}", value_array_strings(item, "evidence", 4).join("; ")),
+    ];
+    let symbols = value_array_strings(item, "symbols", 10);
+    if !symbols.is_empty() {
+        rows.push(format!("Symbols  : {}", symbols.join(", ")));
+    }
+    let headings = value_array_strings(item, "headings", 6);
+    if !headings.is_empty() {
+        rows.push(format!("Headings : {}", headings.join(", ")));
+    }
+    let line_range = value_str(item, "line_range");
+    if !line_range.is_empty() {
+        rows.push(format!("Lines    : {}", line_range));
+    }
+    let snippet = value_str(item, "snippet");
+    if !snippet.trim().is_empty() {
+        rows.push("Snippet  :".to_string());
+        rows.extend(wrap_lines(&snippet, panel_inner_width()).into_iter().take(12));
+    }
+    rows
+}
+
+fn value_str(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn value_u64(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn value_u64_any(value: &Value, keys: &[&str]) -> u64 {
+    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_u64)).unwrap_or(0)
+}
+
+fn value_array_strings(value: &Value, key: &str, limit: usize) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .take(limit)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Copy)]
@@ -1074,6 +1289,30 @@ fn call_doctor(workspace: String) -> PyResult<String> {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module.getattr("doctor")?.call1((workspace,))?.extract()
+    })
+}
+
+fn call_context_status(workspace: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("context_status")?.call1((workspace,))?.extract()
+    })
+}
+
+fn call_refresh_context(workspace: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("refresh_context")?.call1((workspace,))?.extract()
+    })
+}
+
+fn call_context_pack(query: String, workspace: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("context_pack")?.call1((query, workspace))?.extract()
     })
 }
 

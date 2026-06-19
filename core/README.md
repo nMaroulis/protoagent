@@ -17,6 +17,7 @@ pip install "protolink[http,llms]>=0.6.0"
 - `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It starts a local Registry, registers the agent deck, and sends user tasks to Architect with `AgentClient`.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider config and API-key storage at `~/.protoagent/config.json`.
+- `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
 - `protoagent_core/agents/` - ProtoLink Architect, Explorer, and Coder factories, split by agent.
 - `protoagent_core/tools.py` - Read-only exploration tools plus diff/new-file proposal tools.
 
@@ -27,6 +28,11 @@ default. The selected model is used to create fresh LLM instances for the
 Architect, Explorer, and Coder on each run. Agents use ProtoLink's SSE
 JSON-RPC lifecycle-aware task stream by default, while the Registry remains on
 plain HTTP.
+
+Before each model run, Context Loom refreshes a deterministic local index and
+injects a bounded Context Pack into the Architect prompt. Explorer also exposes
+`build_context_pack` as a ProtoLink tool so the agent mesh can ask for a
+focused evidence pack during a run.
 
 Useful runtime switches:
 

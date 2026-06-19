@@ -72,7 +72,7 @@ def agent_manifest() -> dict[str, Any]:
             {
                 "name": "explorer",
                 "role": "context",
-                "tools": ["read_file", "list_directory", "search_regex", "get_git_status"],
+                "tools": ["build_context_pack", "read_file", "list_directory", "search_regex", "get_git_status"],
             },
             {
                 "name": "coder",

@@ -113,6 +113,9 @@ Inside the TUI you can use slash commands:
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
 * `/agents` - Shows the Architect / Explorer / Coder topology.
+* `/context` - Shows Context Loom index status for the active project.
+* `/context QUERY` - Builds a source-cited Context Pack without running a model.
+* `/index refresh` - Refreshes the local Context Loom SQLite index.
 * `/last` - Replays the last agent response.
 * `/run` - Runs a task from a slash command.
 * `/help`  - Shows available commands in the fixed panel.
@@ -134,13 +137,16 @@ cargo run --manifest-path cli/Cargo.toml -- key openai
 cargo run --manifest-path cli/Cargo.toml -- config
 cargo run --manifest-path cli/Cargo.toml -- check
 cargo run --manifest-path cli/Cargo.toml -- agents
+cargo run --manifest-path cli/Cargo.toml -- context
+cargo run --manifest-path cli/Cargo.toml -- context "runtime streaming task handling"
+cargo run --manifest-path cli/Cargo.toml -- index refresh
 ```
 
 Interactive mode is the fullscreen TUI by default. The top area is a fixed
 status panel, the middle viewport is the chat transcript, and the bottom bar is
-the input editor. `/project`, `/models`, `/agents`, `/check`, `/config`,
-`/help`, and `/dashboard` switch the fixed status panel instead of printing
-status blocks into the chat.
+the input editor. `/project`, `/models`, `/agents`, `/context`, `/check`,
+`/config`, `/help`, and `/dashboard` switch the fixed status panel instead of
+printing status blocks into the chat.
 
 ---
 

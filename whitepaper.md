@@ -54,32 +54,104 @@ The Coder is a highly specialized, hyper-focused engineering engine. It does not
 
 ---
 
-## Four: The Standard Execution Flow
+## Four: Context Loom (The Local Context Fabric)
+
+The missing layer in most local coding agents is not another chat prompt. It is
+a deterministic context substrate that can decide what a small model should see
+before the model is asked to reason. ProtoAgent calls this substrate **Context
+Loom**.
+
+Context Loom is a local, inspectable workspace intelligence layer. It indexes
+the active project into a compact code graph made of files, symbols, imports,
+documentation headings, git state, and recent session signals. At task time, it
+does not dump the repository into the context window. It weaves a bounded
+**Context Pack**: a source-cited packet of evidence that the Architect, Explorer,
+and Coder can consume through normal `protolink` task flow.
+
+This differs from two common industry patterns:
+
+* **Monolithic context loading:** large cloud agents often rely on enormous
+  context windows and implicit repository awareness. This can work with frontier
+  models, but it is expensive, opaque, and brittle for local models.
+* **Pure tool wandering:** shell-first agents repeatedly call file and search
+  tools to discover context from scratch. This is transparent, but it burns
+  steps and can leave smaller models stuck in exploration loops.
+
+Context Loom combines the strengths of both approaches. It gives the system a
+local memory of the workspace, but every included file and snippet carries an
+explicit reason. A Context Pack is intentionally small enough for 7B-8B models,
+yet rich enough to preserve the engineering facts that matter.
+
+Technically, Context Loom is built around four primitives:
+
+1. **Project Index:** a local SQLite index for text files, language hints,
+   symbols, imports, headings, content fingerprints, and update timestamps.
+2. **Context Graph:** a deterministic relationship map linking files to the
+   symbols they define, dependencies they import, docs they expose, tests they
+   imply, and recent git changes.
+3. **Context Pack:** a bounded, task-specific evidence packet containing
+   relevant files, short line-numbered snippets, symbols, dependency hints,
+   git status, and inclusion reasons.
+4. **Evidence Ledger:** a human-readable explanation of why each item was
+   selected, visible from the CLI and replayable in the agent trace.
+
+The Context Pack format is deliberately structured:
+
+```json
+{
+  "name": "Context Loom",
+  "query": "Refactor the runtime task stream handling",
+  "items": [
+    {
+      "path": "core/protoagent_core/runtime.py",
+      "role": "runtime mesh",
+      "reason": "path and symbol match for streaming task dispatch",
+      "symbols": ["run_selected_model", "_send_task_streaming"],
+      "line_range": "109-132",
+      "snippet": "109 | task = Task.create_infer(prompt=prompt) ..."
+    }
+  ]
+}
+```
+
+Because this is deterministic and local-first, it is compatible with small
+models and privacy-preserving workflows. Because it is structured and
+source-cited, it is also compatible with stronger models that can use the pack
+as a high-signal scratchpad instead of re-discovering the repository every turn.
+
+The strategic contribution is not "RAG for code." The contribution is
+**visible context reasoning**: ProtoAgent can show the developer exactly what it
+believes is relevant before it writes a diff. This makes local autonomous coding
+auditable in a way that hidden embedding retrieval and giant context windows are
+not.
+
+## Five: The Standard Execution Flow
 
 When a user runs a command in the terminal (e.g., `protoagent run "Extract the hardcoded strings in main.rs into a config file"`), the following $A2A$ flow executes:
 
 ```
-[User Input] ➔ [Architect] ➔ Dispatches [Explorer] ➔ Scans Files & Builds Map
-                                                          │
-[User Approval] 🏃 [Architect] ⮠ Receives Diff ⮤ [Coder] ◄─┘
+[User Input] -> [Context Loom] -> [Architect] -> [Explorer verifies/expands]
+                                                        |
+[User Approval] <- [Architect receives diff] <- [Coder] <- Context Pack
 
 ```
 
-1. **Intake:** The **Architect** receives the prompt and initializes the execution state.
-2. **Contextualization:** The Architect delegates to the **Explorer**, asking it to map the layout of `main.rs` and any existing configuration files.
-3. **Scouting:** The Explorer executes read tools and returns a structured, high-density Context Map to the Architect.
-4. **Synthesis:** The Architect passes the localized task and the clean Context Map directly to the **Coder**.
-5. **Diff Generation:** The Coder outputs a strict unified diff using its generation tools.
-6. **Handoff & Verification:** The Architect receives the raw diff, verifies its target alignment, and fires a `requires_approval` flag to the user interface (Rust CLI or Zed ACP server), halting execution until the human explicitly permits the file modification.
+1. **Intake:** The CLI receives the user prompt and asks Context Loom for an initial Context Pack.
+2. **Weaving:** Context Loom refreshes the local index, scores files and symbols against the prompt, and records an Evidence Ledger for every included item.
+3. **Planning:** The **Architect** receives the prompt plus the Context Pack and initializes the execution state.
+4. **Contextualization:** The Architect delegates to the **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
+5. **Synthesis:** The Architect passes the localized task and compact evidence to the **Coder**.
+6. **Diff Generation:** The Coder outputs a strict unified diff using its generation tools.
+7. **Handoff & Verification:** The Architect receives the raw diff, verifies its target alignment, and fires a `requires_approval` flag to the user interface (Rust CLI or Zed ACP server), halting execution until the human explicitly permits the file modification.
 
 ---
 
-## Five: Tool Abstraction and MCP
+## Six: Tool Abstraction and MCP
 
 Because of strict tool isolation, ProtoAgent treats external capabilities as plug-and-play modules. If a Model Context Protocol (MCP) server is detected (e.g., a PostgreSQL database tool), the Architect automatically assigns those read-only tools to the Explorer. The Coder never needs to know the database exists; it only receives the clear schemas the Explorer extracts and passes forward.
 
 ---
 
-## Six: Conclusion
+## Seven: Conclusion
 
-By fracturing the monolithic system prompt into isolated, specialized roles (**Architect**, **Explorer**, **Coder**), ProtoAgent achieves enterprise-grade autonomous reasoning on completely free, local environments. It bypasses the cognitive limits of smaller parameter models, ensuring developers can run hundreds of iterative coding loops daily without the friction, cost, or privacy concerns of cloud API limits.
+By fracturing the monolithic system prompt into isolated, specialized roles (**Architect**, **Explorer**, **Coder**) and feeding them through **Context Loom**, ProtoAgent achieves enterprise-grade autonomous reasoning on completely free, local environments. It bypasses the cognitive limits of smaller parameter models, ensuring developers can run hundreds of iterative coding loops daily without the friction, cost, or privacy concerns of cloud API limits.

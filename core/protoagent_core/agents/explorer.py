@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..context import build_context_pack as loom_context_pack
 from .. import tools
 from .common import (
     QUIET_LOGGER,
@@ -18,8 +19,8 @@ from .common import (
 EXPLORER_SYSTEM_PROMPT = """You are the ProtoAgent Explorer.
 
 Build dense context maps for coding tasks. You may read files, list directories,
-search with regexes, and inspect git status. You must never modify files or
-execute arbitrary shell commands.
+search with regexes, ask Context Loom for a source-cited pack, and inspect git
+status. You must never modify files or execute arbitrary shell commands.
 
 Return compact markdown with exact file paths and line references when useful.
 Prioritize the smallest context that lets Architect and Coder act safely.
@@ -84,5 +85,13 @@ def create_explorer_agent(
     @agent.tool(name="get_git_status", description="Return git status --short for the workspace.")
     def get_git_status() -> dict[str, Any]:
         return tools.get_git_status(workspace)
+
+    @agent.tool(
+        name="build_context_pack",
+        description="Build a Context Loom evidence pack for a focused repository question.",
+        input_schema={"query": str},
+    )
+    def build_context_pack(query: str) -> dict[str, Any]:
+        return loom_context_pack(query, workspace)
 
     return agent

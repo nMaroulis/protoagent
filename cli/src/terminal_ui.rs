@@ -3,9 +3,9 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    call_process_prompt_with_progress, empty_as_unknown, load_doctor,
+    call_process_prompt_with_progress, context_pack_text, context_status_text, empty_as_unknown, load_doctor,
     progress::{format_live_progress, progress_activity, ProgressFile},
-    CoreResponse,
+    refresh_context_text, CoreResponse,
 };
 
 mod approval;
@@ -89,6 +89,16 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         }
         "/agents" => {
             switch_panel(app, PanelView::Agents, command, "Agents panel pinned.");
+            Ok(true)
+        }
+        "/context" | "/loom" => {
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            handle_context_command(app, terminal, command, arg.trim())?;
+            Ok(true)
+        }
+        "/index" => {
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            handle_index_command(app, terminal, command, arg.trim())?;
             Ok(true)
         }
         "/sessions" | "/session" => {
@@ -315,6 +325,72 @@ fn handle_session_command(
     app.panel = PanelView::Sessions;
     app.refresh(None);
     app.push(Role::Command, command, &crate::sessions::session_panel_rows().join("\n"));
+    Ok(())
+}
+
+fn handle_context_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    arg: &str,
+) -> Result<()> {
+    let Some(workspace) = crate::active_project_dir().map(|path| path.to_string_lossy().to_string()) else {
+        app.panel = PanelView::Project;
+        app.refresh(None);
+        app.push(Role::Error, command, "Choose a project with /project before using Context Loom.");
+        return Ok(());
+    };
+    app.panel = PanelView::Context;
+    app.activity = if arg.is_empty() {
+        "checking Context Loom".to_string()
+    } else {
+        "weaving Context Loom pack".to_string()
+    };
+    terminal.render(app, None)?;
+    let result = if arg.is_empty() {
+        context_status_text(workspace)
+    } else {
+        context_pack_text(arg.to_string(), workspace)
+    };
+    match result {
+        Ok(text) => {
+            app.refresh(None);
+            app.push(Role::Command, command, &text);
+        }
+        Err(err) => app.push(Role::Error, command, &format!("Context Loom failed: {err}")),
+    }
+    app.activity = "idle".to_string();
+    Ok(())
+}
+
+fn handle_index_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    arg: &str,
+) -> Result<()> {
+    let Some(workspace) = crate::active_project_dir().map(|path| path.to_string_lossy().to_string()) else {
+        app.panel = PanelView::Project;
+        app.refresh(None);
+        app.push(Role::Error, command, "Choose a project with /project before refreshing Context Loom.");
+        return Ok(());
+    };
+    app.panel = PanelView::Context;
+    app.activity = "refreshing Context Loom index".to_string();
+    terminal.render(app, None)?;
+    let result = if matches!(arg, "" | "refresh" | "rebuild") {
+        refresh_context_text(workspace)
+    } else {
+        Err(anyhow!("Usage: /index refresh"))
+    };
+    match result {
+        Ok(text) => {
+            app.refresh(None);
+            app.push(Role::Command, command, &text);
+        }
+        Err(err) => app.push(Role::Error, command, &format!("Index refresh failed: {err}")),
+    }
+    app.activity = "idle".to_string();
     Ok(())
 }
 

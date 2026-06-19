@@ -158,10 +158,18 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Agents => {
             rows.push(row("architect", "intake, routing, final answer, approval gate", magenta(), true));
-            rows.push(row("explorer", "read-only files, directories, regex search, git status", cyan(), false));
+            rows.push(row("loom", "Context Loom feeds source-cited evidence before routing", green(), true));
+            rows.push(row("explorer", "context packs, read-only files, directories, regex search, git status", cyan(), false));
             rows.push(row("coder", "approval-safe diffs and file payloads", yellow(), false));
             rows.push(row("approval", "human confirms side effects before writes land", green(), false));
             rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
+        }
+        PanelView::Context => {
+            rows.push(row("loom", "deterministic workspace index plus source-cited Context Packs", magenta(), true));
+            rows.push(row("status", "/context shows index status for the active project", cyan(), false));
+            rows.push(row("pack", "/context <query> builds an evidence pack without running a model", yellow(), false));
+            rows.push(row("refresh", "/index refresh rebuilds the local SQLite index", green(), false));
+            rows.push(row("model", "packs are injected into ProtoLink Architect prompts before routing", muted(), false));
         }
         PanelView::Sessions => {
             for (idx, line) in crate::sessions::session_panel_rows().into_iter().take(6).enumerate() {
@@ -197,7 +205,8 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model without leaving the TUI", green(), true));
-            rows.push(row("panels", "/dashboard /project /models /agents /sessions /timeline", magenta(), false));
+            rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
+            rows.push(row("loom", "/context <query> inspects the source-cited context pack", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("session", "/quit or Esc", muted(), false));
@@ -476,6 +485,7 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
         (PanelView::Project, "/project"),
         (PanelView::Models, "/models"),
         (PanelView::Agents, "/agents"),
+        (PanelView::Context, "/context"),
         (PanelView::Sessions, "/sessions"),
         (PanelView::Timeline, "/timeline"),
         (PanelView::Check, "/check"),
