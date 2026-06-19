@@ -23,11 +23,31 @@ pub(super) fn prompt_line_modal(
     rows: &[String],
     initial: &str,
 ) -> Result<Option<String>> {
+    prompt_input_modal(terminal, app, title, rows, initial, false)
+}
+
+pub(super) fn prompt_secret_modal(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    title: &str,
+    rows: &[String],
+) -> Result<Option<String>> {
+    prompt_input_modal(terminal, app, title, rows, "", true)
+}
+
+fn prompt_input_modal(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    title: &str,
+    rows: &[String],
+    initial: &str,
+    masked: bool,
+) -> Result<Option<String>> {
     let history = VecDeque::new();
     let mut editor = InputEditor::with_initial(&history, initial);
     loop {
         terminal.render(app, None)?;
-        draw_input_modal(title, rows, &editor)?;
+        draw_input_modal(title, rows, &editor, masked)?;
         let Event::Key(key) = read()? else {
             continue;
         };
@@ -163,7 +183,16 @@ pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..modal_height.saturating_sub(4) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
-        write_at(&mut out, x, y + idx + 2, modal_width, row, text(), modal_bg(), false)?;
+        write_at(
+            &mut out,
+            x + 1,
+            y + idx + 2,
+            modal_width.saturating_sub(2),
+            row,
+            text(),
+            modal_bg(),
+            false,
+        )?;
     }
     write_at(
         &mut out,
@@ -180,7 +209,12 @@ pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEditor) -> Result<()> {
+pub(super) fn draw_input_modal(
+    title: &str,
+    rows: &[String],
+    editor: &InputEditor,
+    masked: bool,
+) -> Result<()> {
     let (width, height) = size();
     let modal_width = width.saturating_mul(3).saturating_div(4).clamp(48, width.saturating_sub(4));
     let modal_height = (rows.len() as u16 + 6).clamp(8, height.saturating_sub(4));
@@ -194,12 +228,26 @@ pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEdito
     write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..modal_height.saturating_sub(5) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
-        write_at(&mut out, x, y + idx + 2, modal_width, row, text(), modal_bg(), false)?;
+        write_at(
+            &mut out,
+            x + 1,
+            y + idx + 2,
+            modal_width.saturating_sub(2),
+            row,
+            text(),
+            modal_bg(),
+            false,
+        )?;
     }
     let input_y = y + modal_height - 3;
     let prompt = " > ";
     let available = inner_width.saturating_sub(prompt.len()).max(8);
     let (visible, cursor) = editor.visible(available);
+    let display = if masked {
+        "*".repeat(visible.chars().count())
+    } else {
+        visible
+    };
     write_at(&mut out, x + 1, input_y, modal_width.saturating_sub(2), "", text(), input_bg(), false)?;
     queue!(
         out,
@@ -208,7 +256,7 @@ pub(super) fn draw_input_modal(title: &str, rows: &[String], editor: &InputEdito
         SetBackgroundColor(input_bg()),
         Print(prompt),
         SetForegroundColor(text()),
-        Print(clip_plain(&visible, available))
+        Print(clip_plain(&display, available))
     )?;
     write_at(
         &mut out,
@@ -259,14 +307,23 @@ fn draw_choice_picker_modal(
     write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
     for idx in 0..info_rows {
         let row = rows.get(idx).map(String::as_str).unwrap_or("");
-        write_at(&mut out, x, y + idx as u16 + 2, modal_width, row, text(), modal_bg(), false)?;
+        write_at(
+            &mut out,
+            x + 1,
+            y + idx as u16 + 2,
+            modal_width.saturating_sub(2),
+            row,
+            text(),
+            modal_bg(),
+            false,
+        )?;
     }
     let filter_y = y + 2 + info_rows as u16;
     write_at(
         &mut out,
-        x,
+        x + 1,
         filter_y,
-        modal_width,
+        modal_width.saturating_sub(2),
         &format!(" Filter : {}", if filter.is_empty() { "(type to filter)" } else { filter }),
         cyan(),
         modal_bg(),
@@ -274,9 +331,9 @@ fn draw_choice_picker_modal(
     )?;
     write_at(
         &mut out,
-        x,
+        x + 1,
         filter_y + 1,
-        modal_width,
+        modal_width.saturating_sub(2),
         " Enter selects. Esc back. Up/Down/Page moves.",
         yellow(),
         modal_bg(),

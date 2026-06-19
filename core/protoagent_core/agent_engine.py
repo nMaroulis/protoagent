@@ -25,7 +25,7 @@ from .context import (
     refresh_context_index,
 )
 from .llm import validate_protolink
-from .models import discover_models
+from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
 from .tools import build_context_map, create_new_file, list_directory, read_file, safe_path, workspace_root
 
@@ -38,9 +38,9 @@ MAX_MEMORY_CONTEXT_CHARS = 18_000
 MAX_MEMORY_ITEM_CHARS = 2_400
 
 
-def list_models() -> str:
+def list_models(validate_api_keys: bool = False) -> str:
     """Return model inventory JSON for the Rust CLI."""
-    return _json(discover_models())
+    return _json(discover_models(validate_api_keys=validate_api_keys))
 
 
 def get_config() -> str:
@@ -287,6 +287,7 @@ def _model_response(
     memory_context = memory_context or {"turns": [], "errors": []}
     runtime_prompt = _runtime_prompt(prompt, tagged_context, memory_context, loom_context)
     result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
+    remember_valid_provider(result["provider"], result["model"])
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])

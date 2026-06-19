@@ -22,7 +22,7 @@ mod theme;
 use approval::{apply_actions, approval_prompt};
 use diff_view::{diff_review_summary, show_diff_modal};
 use modal::pick_choice_modal;
-use model_picker::handle_model_command;
+use model_picker::{handle_key_command, handle_model_command};
 use project::handle_project_command;
 use render::truncate_detail;
 use state::{PanelView, Role, TerminalApp};
@@ -79,12 +79,17 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             if matches!(arg.trim(), "choose" | "set" | "select") {
                 handle_model_command(app, terminal)?;
             } else {
-                switch_panel(app, PanelView::Models, command, "Models panel pinned.");
+                switch_model_panel(app, command, "Models panel pinned.");
             }
             Ok(true)
         }
         "/model" | "/provider" => {
             handle_model_command(app, terminal)?;
+            Ok(true)
+        }
+        "/key" => {
+            let provider = parts.next();
+            handle_key_command(app, terminal, provider)?;
             Ok(true)
         }
         "/agents" => {
@@ -203,6 +208,12 @@ fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &s
     app.push(Role::Command, command, body);
 }
 
+fn switch_model_panel(app: &mut TerminalApp, command: &str, body: &str) {
+    app.panel = PanelView::Models;
+    app.refresh_models();
+    app.push(Role::Command, command, body);
+}
+
 async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: &str) -> Result<()> {
     let workspace = match crate::active_project_dir() {
         Some(path) => path.to_string_lossy().to_string(),
@@ -278,7 +289,11 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     }
     app.push_response(&response);
     app.last_response = Some(response.clone());
-    app.refresh(None);
+    if app.panel == PanelView::Models {
+        app.refresh_models();
+    } else {
+        app.refresh(None);
+    }
 
     if response.requires_approval || !response.actions.is_empty() {
         terminal.render(app, None)?;

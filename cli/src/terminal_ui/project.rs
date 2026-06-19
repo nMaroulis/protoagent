@@ -150,6 +150,7 @@ fn project_prompt(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<O
                 "Enter confirms. Esc cancels.".to_string(),
             ],
             &editor,
+            false,
         )?;
         let Event::Key(key) = read()? else {
             continue;

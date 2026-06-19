@@ -151,10 +151,12 @@ def visible_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return configuration safe for terminal display."""
     config = deepcopy(config or load_config())
     for provider, data in config.get("providers", {}).items():
-        key = data.get("api_key") or os.getenv(ENV_KEYS.get(provider, ""), "")
+        stored_key = data.get("api_key", "")
+        env_key = os.getenv(ENV_KEYS.get(provider, ""), "")
+        key = stored_key or env_key
         data["api_key_set"] = bool(key)
         data["api_key"] = redact_key(key) if key else ""
-        data["from_env"] = bool(os.getenv(ENV_KEYS.get(provider, ""), ""))
+        data["from_env"] = bool(env_key and not stored_key)
     config["config_path"] = str(CONFIG_PATH)
     return config
 

@@ -11,8 +11,8 @@ use crate::wrap_lines;
 use super::input::InputEditor;
 use super::state::{PanelView, TerminalApp, TerminalMessage};
 use super::theme::{
-    bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, role_color, surface_bg, text,
-    write_at, write_line, yellow,
+    bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, red, role_color, surface_bg,
+    text, write_at, write_line, yellow,
 };
 use super::{HEADER_ROWS, INPUT_ROWS};
 
@@ -150,11 +150,10 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Models => {
             rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
-            rows.push(row("choose", "/model opens the in-app provider/model picker", green(), true));
             rows.push(row("inventory", &app.status.model_summary, magenta(), false));
-            rows.push(row("providers", &app.status.provider_summary, yellow(), false));
+            rows.push(row("providers", &app.status.provider_summary, text(), false));
+            rows.push(row("setup", "/model picks provider/model; /key openai stores a key", green(), true));
             rows.push(row("config", &app.status.config_path, muted(), false));
-            rows.push(row("tip", "use /check for runtime wiring and /config for provider setup", green(), false));
         }
         PanelView::Agents => {
             rows.push(row("architect", "intake, routing, final answer, approval gate", magenta(), true));
@@ -198,13 +197,13 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("provider", &app.status.provider, cyan(), true));
             rows.push(row("model", &app.status.model, magenta(), false));
             rows.push(row("config", &app.status.config_path, yellow(), false));
-            rows.push(row("keys", "model/key setup stays in regular terminal prompts for now", muted(), false));
+            rows.push(row("keys", "/key sets API keys here; proto-cli key openai works from shell", green(), false));
             rows.push(row("report", "full report: proto-cli config", green(), false));
         }
         PanelView::Help => {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
-            rows.push(row("model", "/model changes active provider/model without leaving the TUI", green(), true));
+            rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
             rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
             rows.push(row("loom", "/context <query> inspects the source-cited context pack", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
@@ -247,6 +246,22 @@ fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: us
         if used >= max_rows {
             break;
         }
+        if row.label == "providers" {
+            write_at(
+                out,
+                1,
+                y,
+                label_width as u16,
+                &format!(" {} ", row.label.to_uppercase()),
+                row.color,
+                panel_bg(),
+                true,
+            )?;
+            draw_provider_segments(out, body_x, y, width, &row.value)?;
+            y += 1;
+            used += 1;
+            continue;
+        }
         let wrapped = wrap_lines(&row.value, body_width);
         for (line_index, line) in wrapped.iter().enumerate() {
             if used >= max_rows {
@@ -270,6 +285,32 @@ fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: us
         }
     }
     Ok(())
+}
+
+fn draw_provider_segments(out: &mut Stdout, start_x: u16, y: u16, width: u16, value: &str) -> Result<()> {
+    write_at(out, start_x, y, width.saturating_sub(start_x), "", text(), panel_bg(), false)?;
+    let mut x = start_x;
+    for segment in value.split("  ").filter(|segment| !segment.trim().is_empty()) {
+        let color = provider_segment_color(segment);
+        draw_text_segment(out, &mut x, y, width, segment, color, panel_bg(), true)?;
+        draw_text_segment(out, &mut x, y, width, "  ", muted(), panel_bg(), false)?;
+        if x >= width.saturating_sub(4) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn provider_segment_color(segment: &str) -> Color {
+    if segment.starts_with("K✓") || segment.starts_with("L✓") {
+        green()
+    } else if segment.starts_with("K✗") || segment.starts_with("L✗") {
+        red()
+    } else if segment.starts_with("K?") || segment.starts_with("K!") || segment.starts_with("L*") {
+        yellow()
+    } else {
+        muted()
+    }
 }
 
 fn draw_scroll_marker(out: &mut Stdout, y: u16, width: u16, scroll_offset: usize) -> Result<()> {

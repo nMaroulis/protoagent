@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::{
-    empty_as_unknown, load_inventory, load_visible_config, CoreResponse, DoctorReport, ModelInventory,
+    empty_as_unknown, load_inventory_with_validation, load_visible_config, CoreResponse, DoctorReport, ModelInventory,
     INPUT_HISTORY_CAPACITY,
 };
 
@@ -60,7 +60,11 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh(&mut self, doctor: Option<&DoctorReport>) {
-        self.status = StatusSnapshot::load(doctor);
+        self.status = StatusSnapshot::load(doctor, self.panel == PanelView::Models);
+    }
+
+    pub(super) fn refresh_models(&mut self) {
+        self.status = StatusSnapshot::load(None, true);
     }
 
     pub(super) fn remember(&mut self, input: &str) {
@@ -244,7 +248,7 @@ pub(super) struct StatusSnapshot {
 }
 
 impl StatusSnapshot {
-    fn load(doctor: Option<&DoctorReport>) -> Self {
+    fn load(doctor: Option<&DoctorReport>, validate_api_keys: bool) -> Self {
         let mut snapshot = Self {
             provider: "unknown".to_string(),
             model: "not selected".to_string(),
@@ -272,7 +276,7 @@ impl StatusSnapshot {
                 })
                 .unwrap_or_else(|| "not selected".to_string());
         }
-        if let Ok(inventory) = load_inventory() {
+        if let Ok(inventory) = load_inventory_with_validation(validate_api_keys) {
             snapshot.model_summary = model_summary(&inventory);
             snapshot.provider_summary = provider_summary(&inventory);
         }
@@ -288,22 +292,67 @@ fn model_summary(inventory: &ModelInventory) -> String {
     let ready = inventory
         .providers
         .iter()
-        .filter(|provider| provider.status == "online" || provider.status == "configured")
+        .filter(|provider| provider.configured || provider.status == "online" || provider.status == "detected")
         .count();
     format!("{} models across {} providers, {} ready", total, inventory.providers.len(), ready)
 }
 
 fn provider_summary(inventory: &ModelInventory) -> String {
-    let mut rows = inventory
+    let mut chips = inventory
         .providers
         .iter()
-        .take(5)
-        .map(|provider| format!("{}: {}, {} model(s)", provider.name, provider.status, provider.models.len()))
+        .map(|provider| (provider_priority(provider), provider_chip(provider)))
         .collect::<Vec<_>>();
-    if inventory.providers.len() > rows.len() {
-        rows.push(format!("+{} more provider(s)", inventory.providers.len() - rows.len()));
+    chips.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    chips
+        .into_iter()
+        .map(|(_, chip)| chip)
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn provider_priority(provider: &crate::ModelProvider) -> u8 {
+    if provider.kind == "api" && provider.key_status == "valid" {
+        0
+    } else if provider.status == "online" {
+        1
+    } else if provider.status == "detected" || provider.configured {
+        2
+    } else if provider.kind == "api" && provider.api_key_set {
+        3
+    } else if provider.kind == "api" {
+        4
+    } else {
+        5
     }
-    rows.join(" | ")
+}
+
+fn provider_chip(provider: &crate::ModelProvider) -> String {
+    let marker = if provider.kind == "api" {
+        match provider.key_status.as_str() {
+            "valid" => "K✓",
+            "invalid" => "K✗",
+            "missing" => "K?",
+            "unverified" => "K!",
+            "set" => "K!",
+            _ if provider.api_key_set => "K!",
+            _ => "K?",
+        }
+    } else if provider.status == "online" {
+        "L✓"
+    } else if provider.status == "detected" {
+        "L*"
+    } else if provider.status == "not-found" {
+        "L-"
+    } else {
+        "L✗"
+    };
+
+    if provider.models.is_empty() {
+        format!("{marker} {}", provider.name)
+    } else {
+        format!("{marker} {}({})", provider.name, provider.models.len())
+    }
 }
 
 fn doctor_summary(report: &DoctorReport) -> String {

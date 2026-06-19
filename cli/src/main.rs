@@ -58,6 +58,8 @@ struct CoreResponse {
 #[derive(Debug, Deserialize)]
 struct ModelInventory {
     config_path: String,
+    #[serde(default)]
+    api_key_validation: bool,
     active_provider: String,
     #[serde(default)]
     active_model: String,
@@ -72,6 +74,14 @@ struct ModelProvider {
     status: String,
     #[serde(default)]
     configured: bool,
+    #[serde(default)]
+    api_key_set: bool,
+    #[serde(default)]
+    key_status: String,
+    #[serde(default)]
+    key_source: String,
+    #[serde(default)]
+    env_key: String,
     #[serde(default)]
     base_url: String,
     #[serde(default)]
@@ -590,7 +600,7 @@ fn choose_project_from_prompt() -> Result<()> {
 }
 
 fn show_models() -> Result<()> {
-    let inventory = load_inventory()?;
+    let inventory = load_inventory_with_validation(true)?;
     print_panel(
         "MODEL RADAR",
         &[
@@ -604,9 +614,19 @@ fn show_models() -> Result<()> {
                 }
             ),
             format!("Config : {}", inventory.config_path),
+            format!(
+                "Keys   : {}",
+                if inventory.api_key_validation {
+                    "API keys checked against provider endpoints"
+                } else {
+                    "API keys read from config/env"
+                }
+            ),
         ],
         PanelTone::Magenta,
     );
+
+    render_provider_strip(&inventory);
 
     for provider in &inventory.providers {
         render_provider_card(provider);
@@ -615,24 +635,179 @@ fn show_models() -> Result<()> {
 }
 
 fn render_provider_strip(inventory: &ModelInventory) {
-    let mut rows = Vec::new();
-    for provider in &inventory.providers {
-        rows.push(format!(
-            "{:<18} {:<11} {:>2} model(s) {}",
-            provider.name,
-            provider.status,
-            provider.models.len(),
-            if provider.configured { "ready" } else { "setup" }
-        ));
+    let mut providers = inventory
+        .providers
+        .iter()
+        .map(|provider| (provider_priority(provider), provider))
+        .collect::<Vec<_>>();
+    providers.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.name.cmp(&right.1.name)));
+    print_provider_strip(&providers.into_iter().map(|(_, provider)| provider).collect::<Vec<_>>());
+}
+
+fn print_provider_strip(providers: &[&ModelProvider]) {
+    let width = terminal_width();
+    let inner = width.saturating_sub(4).max(24);
+    let title_text = " PROVIDERS ";
+    let line_len = width.saturating_sub(title_text.len() + 3).max(2);
+    let top = format!("+{}{}+", title_text, repeat_char('-', line_len));
+    println!("{}", style(&top).dim().bold());
+    if providers.is_empty() {
+        println!("| {:<inner$} |", "", inner = inner);
     }
-    print_panel("PROVIDERS", &rows, PanelTone::Dim);
+    for provider in providers {
+        let marker = provider_marker(provider);
+        let rest = format!("{:<22} {:>2} model(s)", provider.name, provider.models.len());
+        let marker_width = marker.chars().count();
+        let available = inner.saturating_sub(marker_width + 1);
+        let rest = truncate_plain(&rest, available);
+        let plain_len = marker_width + 1 + rest.chars().count();
+        let padding = inner.saturating_sub(plain_len);
+        print!("| ");
+        print!("{}", provider_marker_style(marker, provider));
+        print!(" {}{}", rest, " ".repeat(padding));
+        println!(" |");
+    }
+    println!("{}", style(&format!("+{}+", repeat_char('-', width.saturating_sub(2)))).dim().bold());
+    println!();
+}
+
+fn provider_marker(provider: &ModelProvider) -> &'static str {
+    if provider.kind == "api" {
+        match provider.key_status.as_str() {
+            "valid" => "K✓",
+            "invalid" => "K✗",
+            "missing" => "K?",
+            "unverified" => "K!",
+            "set" => "K!",
+            _ if provider.api_key_set => "K!",
+            _ => "K?",
+        }
+    } else if provider.status == "online" {
+        "L✓"
+    } else if provider.status == "detected" {
+        "L*"
+    } else if provider.status == "not-found" {
+        "L-"
+    } else {
+        "L✗"
+    }
+}
+
+fn provider_marker_style<'a>(marker: &'a str, provider: &ModelProvider) -> console::StyledObject<&'a str> {
+    if marker == "K✓" || marker == "L✓" {
+        style(marker).green().bold()
+    } else if marker == "K✗" || marker == "L✗" {
+        style(marker).red().bold()
+    } else if marker == "K?" || marker == "K!" || marker == "L*" {
+        style(marker).yellow().bold()
+    } else if provider.configured {
+        style(marker).cyan().bold()
+    } else {
+        style(marker).dim().bold()
+    }
+}
+
+fn provider_priority(provider: &ModelProvider) -> u8 {
+    if provider.kind == "api" && provider.key_status == "valid" {
+        0
+    } else if provider.status == "online" {
+        1
+    } else if provider.status == "detected" || provider.configured {
+        2
+    } else if provider.kind == "api" && provider.api_key_set {
+        3
+    } else if provider.kind == "api" {
+        4
+    } else {
+        5
+    }
+}
+
+fn provider_badges(provider: &ModelProvider) -> String {
+    let mut badges = Vec::new();
+    badges.push(format!("[{}]", provider.status.to_uppercase()));
+    if provider.kind == "api" || provider.api_key_set || !provider.key_status.is_empty() {
+        badges.push(format!("[KEY:{}]", provider_key_badge(provider)));
+    }
+    if provider.configured {
+        badges.push("[READY]".to_string());
+    } else {
+        badges.push("[SETUP]".to_string());
+    }
+    badges.join(" ")
+}
+
+fn provider_key_badge(provider: &ModelProvider) -> &'static str {
+    match provider.key_status.as_str() {
+        "valid" => "VALID",
+        "invalid" => "INVALID",
+        "missing" => "MISSING",
+        "unverified" => "UNVERIFIED",
+        "not-required" => "NOT-REQUIRED",
+        "set" => "SET",
+        "" if provider.api_key_set => "SET",
+        "" => "N/A",
+        _ => "UNKNOWN",
+    }
+}
+
+fn provider_key_line(provider: &ModelProvider) -> String {
+    let status = provider_key_badge(provider);
+    let source = if provider.key_source.is_empty() {
+        "none"
+    } else {
+        provider.key_source.as_str()
+    };
+    if provider.env_key.is_empty() {
+        format!("{status} via {source}")
+    } else {
+        format!("{status} via {source} (env: {})", provider.env_key)
+    }
+}
+
+fn provider_needs_key_prompt(provider: &ModelProvider) -> bool {
+    provider.kind == "api"
+        && (!provider.api_key_set || matches!(provider.key_status.as_str(), "missing" | "invalid"))
+}
+
+fn ensure_cli_provider_key(provider: &mut ModelProvider) -> Result<()> {
+    if !provider_needs_key_prompt(provider) {
+        return Ok(());
+    }
+    print_panel(
+        "API KEY REQUIRED",
+        &[
+            format!("Provider: {} ({})", provider.name, provider.id),
+            format!("Key     : {}", provider_key_line(provider)),
+            provider.hint.clone(),
+        ],
+        PanelTone::Yellow,
+    );
+    let api_key = Password::new("API key").without_confirmation().prompt()?;
+    call_add_api_key(provider.id.clone(), api_key)
+        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+    if let Some(updated) = load_inventory_with_validation(true)?
+        .providers
+        .into_iter()
+        .find(|item| item.id == provider.id)
+    {
+        *provider = updated;
+    }
+    if provider.key_status == "invalid" {
+        return Err(anyhow!("API key for {} was rejected by the provider", provider.name));
+    }
+    Ok(())
 }
 
 fn render_provider_card(provider: &ModelProvider) {
     let mut rows = vec![
+        format!("Badges : {}", provider_badges(provider)),
         format!("Kind   : {}", provider.kind),
         format!("Status : {} ({})", provider.status, if provider.configured { "ready" } else { "setup" }),
     ];
+    if provider.kind == "api" || provider.api_key_set || !provider.key_status.is_empty() {
+        rows.push(format!("Key    : {}", provider_key_line(provider)));
+    }
     if !provider.base_url.is_empty() {
         rows.push(format!("Base   : {}", provider.base_url));
     }
@@ -669,17 +844,20 @@ fn render_provider_card(provider: &ModelProvider) {
             rows.push(format!("  ...and {} more", provider.models.len() - 8));
         }
     }
+    if !provider.hint.is_empty() && provider.kind == "api" {
+        rows.push(format!("Hint   : {}", provider.hint));
+    }
     let tone = match provider.status.as_str() {
         "online" | "configured" | "detected" => PanelTone::Cyan,
-        "needs-key" | "not-found" => PanelTone::Yellow,
+        "needs-key" | "key-invalid" | "key-unverified" | "not-found" => PanelTone::Yellow,
         _ => PanelTone::Dim,
     };
     print_panel(&format!("{} ({})", provider.name, provider.id), &rows, tone);
 }
 
 fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
-    let inventory = load_inventory()?;
-    let provider = match preselected_provider {
+    let inventory = load_inventory_with_validation(true)?;
+    let mut provider = match preselected_provider {
         Some(provider_id) => inventory
             .providers
             .iter()
@@ -692,11 +870,11 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
                 .iter()
                 .map(|provider| {
                     format!(
-                        "{} ({}) - {} model(s), {}",
+                        "{} ({}) - {} model(s) {}",
                         provider.name,
                         provider.id,
                         provider.models.len(),
-                        provider.status
+                        provider_badges(provider)
                     )
                 })
                 .collect();
@@ -709,6 +887,7 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
             inventory.providers[index].clone()
         }
     };
+    ensure_cli_provider_key(&mut provider)?;
 
     let mut model_choices: Vec<String> = provider.models.iter().map(|model| model.id.clone()).collect();
     model_choices.push("Custom model id or path".to_string());
@@ -756,7 +935,18 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
     let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.clone(), api_key)
         .map_err(|err| anyhow!("Python config error: {err:?}"))?;
-    print_panel("KEY STORED", &[format!("Provider: {}", provider)], PanelTone::Cyan);
+    let rows = match load_inventory_with_validation(true)
+        .ok()
+        .and_then(|inventory| inventory.providers.into_iter().find(|item| item.id == provider))
+    {
+        Some(provider) => vec![
+            format!("Provider: {}", provider.name),
+            format!("Key     : {}", provider_key_line(&provider)),
+            format!("Status  : {}", provider_badges(&provider)),
+        ],
+        None => vec![format!("Provider: {}", provider)],
+    };
+    print_panel("KEY STORED", &rows, PanelTone::Cyan);
 
     if Confirm::new("Choose a model for this provider now?")
         .with_default(true)
@@ -951,7 +1141,12 @@ fn print_agent_graph() {
 }
 
 fn load_inventory() -> Result<ModelInventory> {
-    let json = call_no_args("list_models").map_err(|err| anyhow!("Python model discovery error: {err:?}"))?;
+    load_inventory_with_validation(false)
+}
+
+fn load_inventory_with_validation(validate_api_keys: bool) -> Result<ModelInventory> {
+    let json = call_list_models(validate_api_keys)
+        .map_err(|err| anyhow!("Python model discovery error: {err:?}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
@@ -1246,6 +1441,14 @@ fn call_no_args(function: &str) -> PyResult<String> {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module.getattr(function)?.call0()?.extract()
+    })
+}
+
+fn call_list_models(validate_api_keys: bool) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("list_models")?.call1((validate_api_keys,))?.extract()
     })
 }
 
