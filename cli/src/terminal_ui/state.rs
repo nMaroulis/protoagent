@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::{
     empty_as_unknown, load_inventory_with_validation, load_visible_config, CoreResponse, DoctorReport, ModelInventory,
-    INPUT_HISTORY_CAPACITY,
+    progress::ContextUsage, INPUT_HISTORY_CAPACITY,
 };
 
 pub(super) struct TerminalApp {
@@ -15,6 +15,7 @@ pub(super) struct TerminalApp {
     pub(super) last_response: Option<CoreResponse>,
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
+    pub(super) context_usage: ContextUsage,
 }
 
 impl TerminalApp {
@@ -29,6 +30,7 @@ impl TerminalApp {
             last_response: None,
             activity: "idle".to_string(),
             scroll_offset: 0,
+            context_usage: ContextUsage::default(),
         };
         app.refresh(None);
         if let Some(project) = crate::active_project_dir() {

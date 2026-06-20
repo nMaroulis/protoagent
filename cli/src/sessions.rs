@@ -54,6 +54,12 @@ pub(crate) struct SessionTurn {
     pub(crate) timeline: Vec<timeline::TimelineItem>,
 }
 
+pub(crate) struct HistoryCompaction {
+    pub(crate) found: bool,
+    pub(crate) removed: usize,
+    pub(crate) kept: usize,
+}
+
 pub(crate) fn record_turn(prompt: &str, response: &CoreResponse) -> Result<()> {
     let workspace = if response.workspace.trim().is_empty() {
         crate::workspace_dir_string()
@@ -165,6 +171,28 @@ pub(crate) fn rename_current(name: &str) -> Result<()> {
     save_store(&store)
 }
 
+pub(crate) fn compact_current_history(keep_recent: usize) -> Result<HistoryCompaction> {
+    let workspace = crate::require_project_dir_string()?;
+    let id = crate::project_session_id(&workspace);
+    let mut store = load_store();
+    let Some(session) = store.sessions.iter_mut().find(|session| session.id == id) else {
+        return Ok(HistoryCompaction {
+            found: false,
+            removed: 0,
+            kept: 0,
+        });
+    };
+    let removed = trim_history(&mut session.history, keep_recent);
+    session.updated_at = now_secs();
+    let kept = session.history.len();
+    save_store(&store)?;
+    Ok(HistoryCompaction {
+        found: true,
+        removed,
+        kept,
+    })
+}
+
 pub(crate) fn session_panel_rows() -> Vec<String> {
     let store = load_store();
     let active = crate::active_project_dir().map(|path| crate::project_session_id(&path.to_string_lossy()));
@@ -185,7 +213,9 @@ pub(crate) fn session_panel_rows() -> Vec<String> {
     }
 
     rows.push(format!("Store: {}", sessions_path().to_string_lossy()));
-    rows.push("Commands: /sessions choose | /session rename NAME | /timeline".to_string());
+    rows.push(
+        "Commands: /sessions choose | /session rename NAME | /context compact | /timeline".to_string(),
+    );
 
     if store.sessions.is_empty() {
         rows.push("Recent: no saved sessions yet.".to_string());
@@ -260,6 +290,15 @@ fn preview_text(value: &str) -> String {
     preview
 }
 
+fn trim_history(history: &mut Vec<SessionTurn>, keep_recent: usize) -> usize {
+    let keep = keep_recent.min(history.len());
+    let removed = history.len().saturating_sub(keep);
+    if removed > 0 {
+        history.drain(0..removed);
+    }
+    removed
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -298,5 +337,43 @@ impl EmptyFallback for String {
 impl EmptyFallback for str {
     fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str {
         if self.trim().is_empty() { fallback } else { self }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{trim_history, SessionTurn};
+
+    fn turn(prompt: &str) -> SessionTurn {
+        SessionTurn {
+            at: 0,
+            prompt: prompt.to_string(),
+            answer_preview: String::new(),
+            status: "answered".to_string(),
+            provider: "ollama".to_string(),
+            model: "gemma".to_string(),
+            responder: "architect".to_string(),
+            elapsed_ms: 0,
+            event_count: 0,
+            requires_approval: false,
+            file_target: String::new(),
+            timeline: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn compaction_keeps_only_the_newest_turns() {
+        let mut history = vec![turn("one"), turn("two"), turn("three"), turn("four")];
+
+        assert_eq!(trim_history(&mut history, 2), 2);
+        assert_eq!(history.iter().map(|turn| turn.prompt.as_str()).collect::<Vec<_>>(), ["three", "four"]);
+    }
+
+    #[test]
+    fn reset_removes_every_stored_turn() {
+        let mut history = vec![turn("one"), turn("two")];
+
+        assert_eq!(trim_history(&mut history, 0), 2);
+        assert!(history.is_empty());
     }
 }

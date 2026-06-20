@@ -125,6 +125,8 @@ struct VisibleProviderConfig {
     api_key_set: bool,
     #[serde(default)]
     from_env: bool,
+    #[serde(default)]
+    context_window: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,6 +265,9 @@ fn print_cli_help() {
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
+    println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
+    println!("  proto-cli context compact    Keep only the newest two conversation turns");
+    println!("  proto-cli context reset      Clear remembered conversation turns");
     println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
     println!("  proto-cli sessions           Show saved project sessions");
     println!();
@@ -987,6 +992,9 @@ fn show_config() -> Result<()> {
         if !provider.base_url.is_empty() {
             rows.push(format!("Base  : {}", provider.base_url));
         }
+        if let Some(window) = provider.context_window {
+            rows.push(format!("Context: {} tokens", format_token_count(window)));
+        }
         if provider.api_key_set {
             let source = if provider.from_env { "env" } else { "config" };
             rows.push(format!("Key   : {} ({source})", provider.api_key));
@@ -1056,11 +1064,110 @@ fn show_agents() -> Result<()> {
 }
 
 fn handle_context_command(args: &[String]) -> Result<()> {
-    let query = args.join(" ");
-    if query.trim().is_empty() {
-        show_context_status()
+    match args.first().map(String::as_str) {
+        Some("window") => {
+            if args.len() > 2 {
+                return Err(anyhow!("Usage: proto-cli context window [16k|auto]"));
+            }
+            let value = args.get(1).cloned();
+            let text = context_window_text(value)?;
+            print_panel(
+                "RUNTIME CONTEXT",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+        Some("compact") => {
+            let text = compact_context_history(args.get(1).map(String::as_str))?;
+            print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
+            Ok(())
+        }
+        Some("reset") => {
+            let text = reset_context_history()?;
+            print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
+            Ok(())
+        }
+        _ => {
+            let query = args.join(" ");
+            if query.trim().is_empty() {
+                show_context_status()
+            } else {
+                show_context_pack(query.trim())
+            }
+        }
+    }
+}
+
+pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
+    let raw = match value.as_deref() {
+        None | Some("status") => call_no_args("get_context_settings"),
+        Some(value) => call_configure_context_window(Some(value.to_string())),
+    }
+    .map_err(|err| anyhow!("Python context configuration error: {err:?}"))?;
+    let settings: Value = serde_json::from_str(&raw)?;
+    let provider = settings.get("provider").and_then(Value::as_str).unwrap_or("unknown");
+    let model = settings.get("model").and_then(Value::as_str).unwrap_or("");
+    let selection = if model.trim().is_empty() {
+        provider.to_string()
     } else {
-        show_context_pack(query.trim())
+        format!("{provider} / {model}")
+    };
+    let controllable = settings
+        .get("controllable")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !controllable {
+        return Ok(format!(
+            "Provider: {selection}\nWindow: provider managed; ProtoAgent cannot change it"
+        ));
+    }
+    let window = settings.get("window_tokens").and_then(Value::as_u64).unwrap_or(0);
+    let source = settings.get("source").and_then(Value::as_str).unwrap_or("unknown");
+    Ok(format!(
+        "Provider: {selection}\nWindow: {} tokens ({source})\nCommands: /context window 16k | /context window auto",
+        format_token_count(window)
+    ))
+}
+
+pub(crate) fn compact_context_history(value: Option<&str>) -> Result<String> {
+    let keep_recent = match value {
+        None | Some("") => 2,
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| anyhow!("Usage: /context compact [turns-to-keep]"))?,
+    };
+    if keep_recent > 20 {
+        return Err(anyhow!("Compaction can keep at most 20 recent turns"));
+    }
+    let result = sessions::compact_current_history(keep_recent)?;
+    if !result.found {
+        return Ok("No saved conversation history exists for this project.".to_string());
+    }
+    Ok(format!(
+        "Compacted session memory: removed {} old turn(s), kept {} recent turn(s).",
+        result.removed, result.kept
+    ))
+}
+
+pub(crate) fn reset_context_history() -> Result<String> {
+    let result = sessions::compact_current_history(0)?;
+    if !result.found {
+        return Ok("No saved conversation history exists for this project.".to_string());
+    }
+    Ok(format!(
+        "Conversation memory reset: removed {} stored turn(s).",
+        result.removed
+    ))
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_048_576 && tokens % 1_048_576 == 0 {
+        format!("{}m", tokens / 1_048_576)
+    } else if tokens >= 1_024 && tokens % 1_024 == 0 {
+        format!("{}k", tokens / 1_024)
+    } else {
+        tokens.to_string()
     }
 }
 
@@ -1485,6 +1592,17 @@ fn call_set_model(provider: String, model: String, base_url: Option<String>) -> 
         module
             .getattr("set_model")?
             .call1((provider, model, base_url))?
+            .extract()
+    })
+}
+
+fn call_configure_context_window(value: Option<String>) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("configure_context_window")?
+            .call1((value,))?
             .extract()
     })
 }

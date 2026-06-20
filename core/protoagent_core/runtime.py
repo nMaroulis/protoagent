@@ -12,6 +12,7 @@ from typing import Any
 
 from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
+from .llm import ollama_context_window
 from .runtime_bridge import RuntimeBridge
 
 _FALLBACK_PORT = 19100
@@ -84,6 +85,8 @@ async def _run_agent_deck(
     emit(f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).")
     emit(f"Active project workspace: {project}.")
     emit(f"Conversation session: {session_id or 'task-local'}.")
+    if provider == "ollama":
+        emit(f"Ollama context window: {ollama_context_window()} tokens.")
     emit(f"Run context: {context.run_id}.")
     registry = None
     client = None

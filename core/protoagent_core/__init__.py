@@ -7,7 +7,9 @@ frontends can share the same brain.
 
 from .agent_engine import (
     add_api_key,
+    configure_context_window,
     doctor,
+    get_context_settings,
     get_config,
     list_models,
     process_prompt,
@@ -16,7 +18,9 @@ from .agent_engine import (
 
 __all__ = [
     "add_api_key",
+    "configure_context_window",
     "doctor",
+    "get_context_settings",
     "get_config",
     "list_models",
     "process_prompt",

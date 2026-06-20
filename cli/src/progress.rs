@@ -11,6 +11,32 @@ pub(crate) struct ProgressFile {
     seen_approvals: HashSet<String>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ContextUsage {
+    latest: Option<ContextSample>,
+    peak: Option<ContextSample>,
+    observations: Vec<ContextSample>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ContextSample {
+    pub(crate) used_tokens: u64,
+    pub(crate) window_tokens: Option<u64>,
+    pub(crate) used_percent: Option<f64>,
+    pub(crate) estimated: bool,
+    pub(crate) agent_name: String,
+    pub(crate) model: String,
+    task_id: String,
+    step: Option<u64>,
+    finalized: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct ProgressBatch {
+    pub(crate) events: Vec<String>,
+    pub(crate) context_samples: Vec<ContextSample>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeApproval {
     pub(crate) request_id: String,
@@ -46,11 +72,15 @@ impl ProgressFile {
     }
 
     pub(crate) fn read_new(&mut self) -> Vec<String> {
+        self.read_new_batch().events
+    }
+
+    pub(crate) fn read_new_batch(&mut self) -> ProgressBatch {
         let Ok(text) = fs::read_to_string(&self.path) else {
-            return Vec::new();
+            return ProgressBatch::default();
         };
 
-        let mut events = Vec::new();
+        let mut batch = ProgressBatch::default();
         for line in text.lines().skip(self.seen_lines) {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -61,19 +91,26 @@ impl ProgressFile {
             let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
                 break;
             };
-            let event = value
-                .get("run_event")
-                .and_then(run_event_summary)
-                .or_else(|| value.get("event").and_then(Value::as_str).map(str::to_string));
+            let run_event = value.get("run_event");
+            if let Some(sample) = run_event.and_then(context_sample_from_run_event) {
+                batch.context_samples.push(sample);
+            }
+            let event = if run_event.map(is_context_metric_event).unwrap_or(false) {
+                None
+            } else {
+                run_event
+                    .and_then(run_event_summary)
+                    .or_else(|| value.get("event").and_then(Value::as_str).map(str::to_string))
+            };
             if let Some(event) = event
                 .map(|event| event.trim().to_string())
                 .filter(|event| !event.is_empty())
             {
-                events.push(event);
+                batch.events.push(event);
             }
             self.seen_lines += 1;
         }
-        events
+        batch
     }
 
     pub(crate) fn take_approval_request(&mut self) -> Option<RuntimeApproval> {
@@ -125,6 +162,52 @@ impl ProgressFile {
 
     fn cancel_path(&self) -> PathBuf {
         control_path(&self.path, "cancel")
+    }
+}
+
+impl ContextUsage {
+    pub(crate) fn reset(&mut self) {
+        self.latest = None;
+        self.peak = None;
+        self.observations.clear();
+    }
+
+    pub(crate) fn observe(&mut self, sample: ContextSample) {
+        let existing = self
+            .observations
+            .iter()
+            .rposition(|current| samples_are_same_call(&sample, current));
+        match existing {
+            Some(index) if sample.finalized || !self.observations[index].finalized => {
+                self.observations[index] = sample;
+            }
+            Some(_) => {}
+            None => self.observations.push(sample),
+        }
+        self.latest = self.observations.last().cloned();
+        self.peak = self.observations.iter().cloned().reduce(|peak, candidate| {
+            if sample_has_more_pressure(&candidate, &peak) {
+                candidate
+            } else {
+                peak
+            }
+        });
+    }
+
+    pub(crate) fn observe_run_events(&mut self, events: &[Value]) {
+        for event in events {
+            if let Some(sample) = context_sample_from_run_event(event) {
+                self.observe(sample);
+            }
+        }
+    }
+
+    pub(crate) fn latest(&self) -> Option<&ContextSample> {
+        self.latest.as_ref()
+    }
+
+    pub(crate) fn peak(&self) -> Option<&ContextSample> {
+        self.peak.as_ref()
     }
 }
 
@@ -219,6 +302,54 @@ fn run_event_summary(value: &Value) -> Option<String> {
         Some(summary.to_string())
     } else {
         Some(format!("{agent}: {summary}"))
+    }
+}
+
+fn is_context_metric_event(value: &Value) -> bool {
+    matches!(
+        value
+            .get("payload")
+            .and_then(|payload| payload.get("llm_event_type"))
+            .and_then(Value::as_str),
+        Some("llm_context" | "llm_call_metrics")
+    )
+}
+
+fn context_sample_from_run_event(value: &Value) -> Option<ContextSample> {
+    let payload = value.get("payload")?;
+    let event_type = payload.get("llm_event_type").and_then(Value::as_str)?;
+    if !matches!(event_type, "llm_context" | "llm_call_metrics") {
+        return None;
+    }
+    let metadata = payload.get("metadata")?;
+    let context = metadata.get("context")?;
+    let used_tokens = context.get("used_tokens")?.as_u64()?;
+    Some(ContextSample {
+        used_tokens,
+        window_tokens: context.get("window_tokens").and_then(Value::as_u64),
+        used_percent: context.get("used_percent").and_then(Value::as_f64),
+        estimated: context.get("estimated").and_then(Value::as_bool).unwrap_or(true),
+        agent_name: value_string(payload, &["agent_name"]),
+        model: value_string(metadata, &["model"]),
+        task_id: value_string(payload, &["task_id"]),
+        step: payload.get("step").and_then(Value::as_u64),
+        finalized: event_type == "llm_call_metrics",
+    })
+}
+
+fn samples_are_same_call(left: &ContextSample, right: &ContextSample) -> bool {
+    !left.task_id.is_empty()
+        && left.task_id == right.task_id
+        && left.agent_name == right.agent_name
+        && left.step == right.step
+}
+
+fn sample_has_more_pressure(candidate: &ContextSample, current: &ContextSample) -> bool {
+    match (candidate.used_percent, current.used_percent) {
+        (Some(candidate), Some(current)) => candidate > current,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => candidate.used_tokens > current.used_tokens,
     }
 }
 
@@ -523,7 +654,7 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_live_progress, latest_progress_message, ProgressFile};
+    use super::{format_live_progress, latest_progress_message, ContextUsage, ProgressFile};
     use serde_json::{json, Value};
     use std::fs;
 
@@ -572,6 +703,119 @@ mod tests {
 
         assert_eq!(progress.read_new(), vec!["coder: Action started: replace_file"]);
         progress.cleanup();
+    }
+
+    #[test]
+    fn extracts_context_metrics_without_polluting_the_live_trace() {
+        let mut progress = ProgressFile::new("context-metric-test");
+        fs::write(
+            &progress.path,
+            serde_json::to_string(&json!({
+                "event": "legacy llm_context",
+                "run_event": {
+                    "type": "llm.stream",
+                    "agent_name": "architect",
+                    "summary": "llm_context",
+                    "payload": {
+                        "type": "task_llm_stream",
+                        "task_id": "task-1",
+                        "agent_name": "architect",
+                        "llm_event_type": "llm_context",
+                        "step": 1,
+                        "metadata": {
+                            "model": "gemma4:e4b",
+                            "context": {
+                                "used_tokens": 5116,
+                                "window_tokens": 8192,
+                                "used_percent": 62.451,
+                                "available_tokens": 3076,
+                                "estimated": true
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let batch = progress.read_new_batch();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.context_samples.len(), 1);
+        assert_eq!(batch.context_samples[0].used_tokens, 5116);
+        assert_eq!(batch.context_samples[0].window_tokens, Some(8192));
+        assert_eq!(batch.context_samples[0].model, "gemma4:e4b");
+        progress.cleanup();
+    }
+
+    #[test]
+    fn retains_latest_context_and_high_water_mark() {
+        let events = vec![
+            json!({
+                "payload": {
+                    "task_id": "task-1",
+                    "agent_name": "architect",
+                    "llm_event_type": "llm_context",
+                    "step": 1,
+                    "metadata": {"context": {"used_tokens": 7000, "window_tokens": 8192, "used_percent": 85.45}}
+                }
+            }),
+            json!({
+                "payload": {
+                    "task_id": "task-2",
+                    "agent_name": "coder",
+                    "llm_event_type": "llm_context",
+                    "step": 1,
+                    "metadata": {"context": {"used_tokens": 2400, "window_tokens": 8192, "used_percent": 29.3}}
+                }
+            }),
+        ];
+        let mut usage = ContextUsage::default();
+        usage.observe_run_events(&events);
+
+        assert_eq!(usage.latest().unwrap().agent_name, "coder");
+        assert_eq!(usage.latest().unwrap().used_tokens, 2400);
+        assert_eq!(usage.peak().unwrap().used_tokens, 7000);
+    }
+
+    #[test]
+    fn exact_call_metrics_replace_the_provisional_peak() {
+        let events = vec![
+            json!({
+                "payload": {
+                    "task_id": "task-1",
+                    "agent_name": "architect",
+                    "llm_event_type": "llm_context",
+                    "step": 1,
+                    "metadata": {"context": {
+                        "used_tokens": 8520,
+                        "window_tokens": 8192,
+                        "used_percent": 104.0,
+                        "estimated": true
+                    }}
+                }
+            }),
+            json!({
+                "payload": {
+                    "task_id": "task-1",
+                    "agent_name": "architect",
+                    "llm_event_type": "llm_call_metrics",
+                    "step": 1,
+                    "metadata": {"context": {
+                        "used_tokens": 6200,
+                        "window_tokens": 8192,
+                        "used_percent": 75.684,
+                        "estimated": false
+                    }}
+                }
+            }),
+        ];
+        let mut usage = ContextUsage::default();
+        usage.observe_run_events(&events);
+
+        assert_eq!(usage.latest().unwrap().used_tokens, 6200);
+        assert_eq!(usage.peak().unwrap().used_tokens, 6200);
+        assert!(!usage.peak().unwrap().estimated);
     }
 
     #[test]

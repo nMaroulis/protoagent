@@ -81,8 +81,8 @@ pub(super) fn draw_input(
     let top = height.saturating_sub(INPUT_ROWS);
     write_line(out, top, width, &"-".repeat(width as usize), cyan(), input_bg(), false)?;
     write_line(out, top + 1, width, "", text(), input_bg(), false)?;
-    draw_bottom_status(out, top + 2, width, app)?;
-    write_line(out, top + 3, width, "", muted(), input_bg(), false)?;
+    draw_context_usage(out, top + 2, width, app)?;
+    draw_bottom_status(out, top + 3, width, app)?;
 
     let prompt = " > ";
     let available = width.saturating_sub(prompt.len() as u16 + 4).max(10) as usize;
@@ -99,6 +99,148 @@ pub(super) fn draw_input(
         Print(clip_plain(&visible, available))
     )?;
     Ok((2 + prompt.len() as u16 + cursor as u16, top + 1))
+}
+
+fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
+    write_line(out, y, width, "", muted(), input_bg(), false)?;
+    let mut x = 1u16;
+    draw_badge(out, &mut x, y, width, "CONTEXT", black(), cyan(), true)?;
+    draw_text_segment(out, &mut x, y, width, "  ", muted(), input_bg(), false)?;
+
+    let Some(latest) = app.context_usage.latest() else {
+        return draw_text_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            "waiting for model metrics",
+            muted(),
+            input_bg(),
+            false,
+        );
+    };
+
+    let pressure = latest
+        .used_percent
+        .or_else(|| {
+            latest
+                .window_tokens
+                .filter(|window| *window > 0)
+                .map(|window| latest.used_tokens as f64 / window as f64 * 100.0)
+        });
+    let pressure_color = context_pressure_color(pressure);
+    if let Some(percent) = pressure {
+        let cells = if width >= 88 { 18 } else if width >= 60 { 12 } else { 7 };
+        let filled = meter_fill(percent, cells);
+        draw_text_segment(out, &mut x, y, width, "[", muted(), input_bg(), false)?;
+        draw_text_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            &"#".repeat(filled),
+            pressure_color,
+            input_bg(),
+            true,
+        )?;
+        draw_text_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            &".".repeat(cells.saturating_sub(filled)),
+            muted(),
+            input_bg(),
+            false,
+        )?;
+        draw_text_segment(out, &mut x, y, width, "] ", muted(), input_bg(), false)?;
+    }
+
+    let estimated = if latest.estimated { "~" } else { "" };
+    let usage = match latest.window_tokens {
+        Some(window) => format!(
+            "{}{}/{}  {:.0}%",
+            estimated,
+            compact_tokens(latest.used_tokens),
+            compact_tokens(window),
+            pressure.unwrap_or_default()
+        ),
+        None => format!("{}{} tokens", estimated, compact_tokens(latest.used_tokens)),
+    };
+    draw_text_segment(out, &mut x, y, width, &usage, pressure_color, input_bg(), true)?;
+
+    if width >= 76 {
+        if let Some(peak) = app.context_usage.peak() {
+            let peak_text = match peak.used_percent {
+                Some(percent) => format!(
+                    "  PEAK {}{:.0}%",
+                    if peak.estimated { "~" } else { "" },
+                    percent
+                ),
+                None => format!(
+                    "  PEAK {}{}",
+                    if peak.estimated { "~" } else { "" },
+                    compact_tokens(peak.used_tokens)
+                ),
+            };
+            draw_text_segment(out, &mut x, y, width, &peak_text, muted(), input_bg(), false)?;
+        }
+    }
+    if width >= 108 && !latest.model.is_empty() {
+        draw_text_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            &format!("  {}", latest.model),
+            muted(),
+            input_bg(),
+            false,
+        )?;
+    }
+    Ok(())
+}
+
+fn context_pressure_color(percent: Option<f64>) -> Color {
+    match percent {
+        Some(value) if value >= 88.0 => red(),
+        Some(value) if value >= 70.0 => yellow(),
+        Some(_) => green(),
+        None => cyan(),
+    }
+}
+
+fn meter_fill(percent: f64, cells: usize) -> usize {
+    ((percent.clamp(0.0, 100.0) / 100.0 * cells as f64).round() as usize).min(cells)
+}
+
+fn compact_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}m", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+#[cfg(test)]
+mod context_meter_tests {
+    use super::{compact_tokens, meter_fill};
+
+    #[test]
+    fn scales_context_pressure_into_fixed_cells() {
+        assert_eq!(meter_fill(0.0, 12), 0);
+        assert_eq!(meter_fill(62.5, 12), 8);
+        assert_eq!(meter_fill(140.0, 12), 12);
+    }
+
+    #[test]
+    fn formats_token_counts_compactly() {
+        assert_eq!(compact_tokens(5116), "5.1k");
+        assert_eq!(compact_tokens(8192), "8.2k");
+        assert_eq!(compact_tokens(1_200_000), "1.2m");
+    }
 }
 
 pub(super) fn truncate_detail(text: &str, max_lines: usize) -> String {
@@ -165,10 +307,10 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Context => {
             rows.push(row("loom", "deterministic workspace index plus source-cited Context Packs", magenta(), true));
-            rows.push(row("status", "/context shows index status for the active project", cyan(), false));
-            rows.push(row("pack", "/context <query> builds an evidence pack without running a model", yellow(), false));
-            rows.push(row("refresh", "/index refresh rebuilds the local SQLite index", green(), false));
-            rows.push(row("model", "packs are injected into ProtoLink Architect prompts before routing", muted(), false));
+            rows.push(row("window", "/context window 16k | auto", cyan(), true));
+            rows.push(row("memory", "/context compact [keep] | /context reset", yellow(), true));
+            rows.push(row("pack", "/context <query> previews workspace evidence", green(), false));
+            rows.push(row("refresh", "/index refresh rebuilds the local SQLite index", muted(), false));
         }
         PanelView::Sessions => {
             for (idx, line) in crate::sessions::session_panel_rows().into_iter().take(6).enumerate() {
@@ -205,7 +347,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
             rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
-            rows.push(row("loom", "/context <query> inspects the source-cited context pack", green(), false));
+            rows.push(row("context", "/context window 16k | compact | reset", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("cancel", "Esc or Ctrl-C while a task runs", red(), false));

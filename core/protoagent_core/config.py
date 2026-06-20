@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_VERSION = 1
-CONFIG_DIR = Path(os.getenv("PROTOAGENT_HOME", "~/.protoagent")).expanduser()
+CONFIG_DIR = Path(os.getenv("PROTOAGENT_CONFIG_DIR", os.getenv("PROTOAGENT_HOME", "~/.protoagent"))).expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
+MIN_CONTEXT_WINDOW = 2_048
+MAX_CONTEXT_WINDOW = 2_097_152
 
 API_PROVIDERS = {"openai", "anthropic", "gemini", "deepseek", "openai-compatible"}
 LOCAL_PROVIDERS = {"ollama", "lmstudio", "llama.cpp-server", "llama.cpp-local"}
@@ -133,6 +135,26 @@ def set_active_model(provider: str, model: str, base_url: str | None = None) -> 
     config["providers"][provider]["model"] = model.strip()
     if base_url is not None and base_url.strip():
         config["providers"][provider]["base_url"] = base_url.strip()
+    save_config(config)
+    return visible_config(config)
+
+
+def set_context_window(provider: str, window_tokens: int | None) -> dict[str, Any]:
+    """Persist or clear the runtime context window for a controllable provider."""
+    provider = normalize_provider(provider)
+    if provider != "ollama":
+        raise ValueError("Context-window control is currently available for Ollama models")
+    if window_tokens is not None and not MIN_CONTEXT_WINDOW <= window_tokens <= MAX_CONTEXT_WINDOW:
+        raise ValueError(
+            f"Context window must be between {MIN_CONTEXT_WINDOW} and {MAX_CONTEXT_WINDOW} tokens"
+        )
+
+    config = load_config()
+    target = config["providers"][provider]
+    if window_tokens is None:
+        target.pop("context_window", None)
+    else:
+        target["context_window"] = int(window_tokens)
     save_config(config)
     return visible_config(config)
 

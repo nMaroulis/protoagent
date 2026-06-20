@@ -4,9 +4,10 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    call_process_prompt_with_progress, context_pack_text, context_status_text, empty_as_unknown, load_doctor,
-    progress::{format_live_progress, progress_activity, ProgressFile},
-    refresh_context_text, CoreResponse,
+    call_process_prompt_with_progress, compact_context_history, context_pack_text, context_status_text,
+    context_window_text, empty_as_unknown, load_doctor,
+    progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
+    reset_context_history, CoreResponse,
 };
 
 mod approval;
@@ -232,6 +233,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     let prompt = query.to_string();
     let session_id = crate::project_session_id(&workspace);
     app.turn += 1;
+    app.context_usage.reset();
     app.last_query = query.to_string();
     app.push(Role::User, "You", query);
     let progress_index = app.messages.len();
@@ -256,11 +258,11 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
                         return Err(err.into());
                     }
                 };
-                progress_events.extend(progress_file.read_new());
+                ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
                 break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
             }
             _ = sleep(Duration::from_millis(120)) => {
-                progress_events.extend(progress_file.read_new());
+                ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
                 if let Some(approval) = progress_file.take_approval_request() {
                     terminal.render(app, None)?;
                     let approved = approval_prompt(terminal, app, &approval)?;
@@ -293,11 +295,12 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
             }
         }
     };
-    progress_events.extend(progress_file.read_new());
+    ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
     progress_file.cleanup();
     let json = json_result?;
 
     let response: CoreResponse = serde_json::from_str(&json)?;
+    app.context_usage.observe_run_events(&response.run_events);
     if let Err(err) = crate::sessions::record_turn(query, &response) {
         app.push(Role::Error, "Session history", &err.to_string());
     }
@@ -321,6 +324,13 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     }
 
     Ok(())
+}
+
+fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: ProgressBatch) {
+    events.extend(batch.events);
+    for sample in batch.context_samples {
+        app.context_usage.observe(sample);
+    }
 }
 
 fn poll_task_cancellation() -> Result<bool> {
@@ -373,6 +383,58 @@ fn handle_context_command(
     command: &str,
     arg: &str,
 ) -> Result<()> {
+    let mut parts = arg.split_whitespace();
+    match parts.next() {
+        Some("window") => {
+            let value = parts.next().map(str::to_string);
+            if parts.next().is_some() {
+                app.push(Role::Error, command, "Usage: /context window [16k|auto]");
+                return Ok(());
+            }
+            match context_window_text(value.clone()) {
+                Ok(text) => {
+                    if value.is_some() {
+                        app.context_usage.reset();
+                    }
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        Some("compact") => {
+            let keep = parts.next();
+            if parts.next().is_some() {
+                app.push(Role::Error, command, "Usage: /context compact [turns-to-keep]");
+                return Ok(());
+            }
+            match compact_context_history(keep) {
+                Ok(text) => {
+                    app.context_usage.reset();
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        Some("reset") => {
+            match reset_context_history() {
+                Ok(text) => {
+                    app.context_usage.reset();
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
     let Some(workspace) = crate::active_project_dir().map(|path| path.to_string_lossy().to_string()) else {
         app.panel = PanelView::Project;
         app.refresh(None);
