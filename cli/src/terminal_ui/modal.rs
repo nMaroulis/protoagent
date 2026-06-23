@@ -171,6 +171,32 @@ pub(super) fn modal_title(title: &str, width: u16) -> String {
 }
 
 pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
+    draw_status_modal(title, rows, StatusModalKind::Dismissible)
+}
+
+pub(super) fn draw_loading_modal(title: &str, rows: &[String]) -> Result<()> {
+    draw_status_modal(title, rows, StatusModalKind::Loading)
+}
+
+pub(super) fn draw_exit_modal() -> Result<()> {
+    draw_status_modal(
+        "Leave ProtoAgent?",
+        &[
+            "Leaving already? We were just getting somewhere.".to_string(),
+            "Esc again exits. Any other key stays.".to_string(),
+        ],
+        StatusModalKind::Exit,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum StatusModalKind {
+    Dismissible,
+    Loading,
+    Exit,
+}
+
+fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Result<()> {
     let (width, height) = size();
     let modal_width = width.saturating_mul(2).saturating_div(3).clamp(42, width.saturating_sub(4));
     let modal_height = (rows.len() as u16 + 4).clamp(7, height.saturating_sub(4));
@@ -180,7 +206,12 @@ pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
     write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
+    let heading = match kind {
+        StatusModalKind::Dismissible => modal_title(title, modal_width),
+        StatusModalKind::Loading => clip_plain(&format!(" {title}  | LOADING"), modal_width as usize),
+        StatusModalKind::Exit => clip_plain(&format!(" {title}  | ESC AGAIN TO EXIT"), modal_width as usize),
+    };
+    write_at(&mut out, x, y + 1, modal_width, &heading, black(), modal_border(), true)?;
     for idx in 0..modal_height.saturating_sub(4) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
         write_at(

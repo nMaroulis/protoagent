@@ -10,8 +10,10 @@ use crossterm::{
     },
 };
 use std::io::{stdout, Write};
+use std::time::{Duration, Instant};
 
 use super::input::InputEditor;
+use super::modal::draw_exit_modal;
 use super::project::{format_file_tag, pick_project_file};
 use super::render::{draw_header, draw_input, draw_transcript};
 use super::state::{PanelView, Role, TerminalApp};
@@ -20,6 +22,7 @@ use super::{HEADER_ROWS, INPUT_ROWS, WHEEL_LINES};
 
 pub(super) struct TerminalSurface {
     active: bool,
+    suppress_exit_escape_until: Option<Instant>,
 }
 
 impl TerminalSurface {
@@ -40,7 +43,10 @@ impl TerminalSurface {
             let _ = disable_raw_mode();
             return Err(err.into());
         }
-        Ok(Self { active: true })
+        Ok(Self {
+            active: true,
+            suppress_exit_escape_until: None,
+        })
     }
 
     pub(super) fn leave(&mut self) -> Result<()> {
@@ -85,7 +91,14 @@ impl TerminalSurface {
             match read()? {
                 Event::Key(key) => match key.code {
                     KeyCode::Enter => return Ok(Some(editor.line())),
-                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Esc => {
+                        if self.exit_escape_is_suppressed() {
+                            continue;
+                        }
+                        if self.confirm_exit(app)? {
+                            return Ok(None);
+                        }
+                    }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
                         return Ok(None);
@@ -121,6 +134,36 @@ impl TerminalSurface {
                     _ => {}
                 },
                 Event::Resize(_, _) => {}
+                _ => {}
+            }
+        }
+    }
+
+    pub(super) fn suppress_exit_escape(&mut self) {
+        self.suppress_exit_escape_until = Some(Instant::now() + Duration::from_millis(500));
+    }
+
+    fn exit_escape_is_suppressed(&mut self) -> bool {
+        let suppressed = self
+            .suppress_exit_escape_until
+            .map(|until| Instant::now() < until)
+            .unwrap_or(false);
+        if !suppressed {
+            self.suppress_exit_escape_until = None;
+        }
+        suppressed
+    }
+
+    fn confirm_exit(&mut self, app: &TerminalApp) -> Result<bool> {
+        loop {
+            self.render(app, None)?;
+            draw_exit_modal()?;
+            match read()? {
+                Event::Key(key) => {
+                    return Ok(matches!(key.code, KeyCode::Esc)
+                        || matches!(key.code, KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL)));
+                }
+                Event::Resize(_, _) => continue,
                 _ => {}
             }
         }

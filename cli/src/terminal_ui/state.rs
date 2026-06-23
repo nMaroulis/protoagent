@@ -16,6 +16,7 @@ pub(super) struct TerminalApp {
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
     pub(super) context_usage: ContextUsage,
+    pub(super) models_loading: bool,
 }
 
 impl TerminalApp {
@@ -31,6 +32,7 @@ impl TerminalApp {
             activity: "idle".to_string(),
             scroll_offset: 0,
             context_usage: ContextUsage::default(),
+            models_loading: false,
         };
         app.refresh(None);
         if let Some(project) = crate::active_project_dir() {
@@ -67,6 +69,12 @@ impl TerminalApp {
 
     pub(super) fn refresh_models(&mut self) {
         self.status = StatusSnapshot::load(None, true);
+        self.models_loading = false;
+    }
+
+    pub(super) fn apply_model_inventory(&mut self, inventory: &ModelInventory) {
+        self.status.apply_inventory(inventory);
+        self.models_loading = false;
     }
 
     pub(super) fn remember(&mut self, input: &str) {
@@ -293,6 +301,18 @@ impl StatusSnapshot {
             snapshot.runtime = doctor_summary(report);
         }
         snapshot
+    }
+
+    fn apply_inventory(&mut self, inventory: &ModelInventory) {
+        self.provider = inventory.active_provider.clone();
+        self.model = if inventory.active_model.is_empty() {
+            "not selected".to_string()
+        } else {
+            inventory.active_model.clone()
+        };
+        self.config_path = inventory.config_path.clone();
+        self.model_summary = model_summary(inventory);
+        self.provider_summary = provider_summary(inventory);
     }
 }
 

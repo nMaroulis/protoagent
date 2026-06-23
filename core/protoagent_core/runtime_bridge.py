@@ -21,7 +21,9 @@ class RuntimeBridge:
         self.approval_requests: list[dict[str, Any]] = []
         self.approval_decisions: list[dict[str, Any]] = []
         self._write_lock = threading.Lock()
-        self._clear_controls()
+        # Rust owns stale-control cleanup before the worker starts. Preserve a
+        # cancellation that may arrive while Python is still assembling context.
+        self._clear_controls(include_cancel=False)
 
     def emit(self, message: str, *, run_event: dict[str, Any] | None = None) -> None:
         """Append a progress record, preserving the normalized event envelope."""
@@ -109,8 +111,11 @@ class RuntimeBridge:
             return None
         return Path(f"{self.progress_path}.{suffix}.json")
 
-    def _clear_controls(self) -> None:
-        for path in (self.request_path, self.decision_path, self.cancel_path):
+    def _clear_controls(self, *, include_cancel: bool = True) -> None:
+        paths = [self.request_path, self.decision_path]
+        if include_cancel:
+            paths.append(self.cancel_path)
+        for path in paths:
             self._unlink(path)
 
     @staticmethod

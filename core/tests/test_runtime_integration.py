@@ -10,7 +10,7 @@ from protolink import ActionDeniedError, RunContext
 
 import protoagent_core.agents.coder as coder_module
 import protoagent_core.agents.explorer as explorer_module
-from protoagent_core.runtime import _context_from_delivery, _monitor_cancellation
+from protoagent_core.runtime import _context_from_delivery, _monitor_cancellation, _preflight_cancellation_result
 from protoagent_core.runtime_bridge import RuntimeBridge
 
 
@@ -39,6 +39,17 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(final_context.canceled)
         self.assertEqual(final_context.cancel_reason, "Stopped by test")
+
+    def test_runtime_bridge_preserves_cancel_requested_before_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            progress_path = Path(root) / "runtime.jsonl"
+            cancel_path = Path(f"{progress_path}.cancel.json")
+            cancel_path.write_text(json.dumps({"reason": "Early escape"}), encoding="utf-8")
+
+            bridge = RuntimeBridge(str(progress_path))
+
+            self.assertEqual(bridge.cancel_reason(), "Early escape")
+            bridge.cleanup()
 
     async def test_coder_write_waits_for_typed_approval(self) -> None:
         with tempfile.TemporaryDirectory() as root:
@@ -129,6 +140,69 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls[0]["task_id"], "task_123")
             self.assertEqual(calls[0]["reason"], "Canceled from test")
             self.assertIn("Cancellation accepted", events[0])
+            bridge.cleanup()
+
+    async def test_cancel_signal_prefers_the_in_process_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            bridge = RuntimeBridge(str(Path(root) / "runtime.jsonl"))
+            bridge.cancel_path.write_text(
+                json.dumps({"reason": "Canceled locally"}),
+                encoding="utf-8",
+            )
+            calls: list[tuple[str, str]] = []
+
+            class Agent:
+                async def cancel_task(self, task_id, reason):
+                    calls.append((task_id, reason))
+
+            class Client:
+                async def cancel_task(self, **_kwargs):
+                    raise AssertionError("remote client should not be used for an in-process agent")
+
+            events: list[str] = []
+            await asyncio.wait_for(
+                _monitor_cancellation(
+                    bridge=bridge,
+                    client=Client(),
+                    agent=Agent(),
+                    agent_url="runtime://architect",
+                    task_id="task_local",
+                    emit=events.append,
+                ),
+                timeout=1,
+            )
+            self.assertEqual(calls, [("task_local", "Canceled locally")])
+            self.assertIn("Cancellation accepted", events[0])
+            bridge.cleanup()
+
+    def test_preflight_cancel_skips_model_execution(self) -> None:
+        from protolink import InMemoryEventSink, RunContext, Task
+
+        with tempfile.TemporaryDirectory() as root:
+            bridge = RuntimeBridge(str(Path(root) / "runtime.jsonl"))
+            bridge.cancel_path.write_text(
+                json.dumps({"reason": "Canceled during startup"}),
+                encoding="utf-8",
+            )
+            task = Task.create_infer(prompt="hello")
+            context = RunContext(session_id="session-test")
+            context.attach_to_task(task)
+            events: list[str] = []
+            result = _preflight_cancellation_result(
+                bridge=bridge,
+                context=context,
+                task=task,
+                sink=InMemoryEventSink(),
+                events=events,
+                emit=events.append,
+                provider="ollama",
+                model="gemma4:e4b",
+            )
+
+            self.assertIsNotNone(result)
+            self.assertEqual(result["status"], "canceled")
+            self.assertTrue(result["run_context"]["canceled"])
+            self.assertIn("before model execution", result["events"][-1])
             bridge.cleanup()
 
     async def _wait_for_request(self, bridge: RuntimeBridge) -> dict:

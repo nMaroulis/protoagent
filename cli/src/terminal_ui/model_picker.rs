@@ -4,29 +4,27 @@ use crate::{
     call_add_api_key, call_set_model, load_inventory_with_validation, ModelInfo, ModelProvider,
 };
 
-use super::modal::{pick_choice_modal, prompt_line_modal, prompt_secret_modal};
+use super::modal::{draw_loading_modal, pick_choice_modal, prompt_line_modal, prompt_secret_modal};
 use super::state::{PanelView, Role, TerminalApp};
 use super::TerminalSurface;
 
 pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut TerminalSurface) -> Result<()> {
     app.panel = PanelView::Models;
-    app.activity = "choosing model".to_string();
-    app.refresh_models();
-    terminal.render(app, None)?;
-
-    let inventory = match load_inventory_with_validation(true) {
-        Ok(inventory) if inventory.providers.is_empty() => {
-            app.activity = "idle".to_string();
-            app.push(Role::Error, "/model", "No providers were found in the model inventory.");
-            return Ok(());
-        }
-        Ok(inventory) => inventory,
-        Err(err) => {
-            app.activity = "idle".to_string();
-            app.push(Role::Error, "/model", &format!("Could not load model inventory: {err}"));
-            return Ok(());
-        }
+    let Some(inventory) = load_inventory_with_feedback(
+        app,
+        terminal,
+        "/model",
+        "Loading Providers",
+        "Discovering local models and configured providers.",
+    )? else {
+        return Ok(());
     };
+    if inventory.providers.is_empty() {
+        app.activity = "idle".to_string();
+        app.push(Role::Error, "/model", "No providers were found in the model inventory.");
+        return Ok(());
+    }
+    app.activity = "choosing model".to_string();
 
     let provider_choices = inventory
         .providers
@@ -106,9 +104,15 @@ pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut Termina
     terminal.render(app, None)?;
     match call_set_model(provider.id.clone(), model.clone(), base_url) {
         Ok(_) => {
-            app.activity = "idle".to_string();
             app.panel = PanelView::Models;
-            app.refresh_models();
+            let _ = load_inventory_with_feedback(
+                app,
+                terminal,
+                "/model",
+                "Applying Model",
+                "Refreshing the active model and provider status.",
+            )?;
+            app.activity = "idle".to_string();
             app.push(
                 Role::Command,
                 "/model",
@@ -129,18 +133,16 @@ pub(super) fn handle_key_command(
     preselected_provider: Option<&str>,
 ) -> Result<()> {
     app.panel = PanelView::Models;
-    app.activity = "setting api key".to_string();
-    app.refresh_models();
-    terminal.render(app, None)?;
-
-    let inventory = match load_inventory_with_validation(true) {
-        Ok(inventory) => inventory,
-        Err(err) => {
-            app.activity = "idle".to_string();
-            app.push(Role::Error, "/key", &format!("Could not load provider inventory: {err}"));
-            return Ok(());
-        }
+    let Some(inventory) = load_inventory_with_feedback(
+        app,
+        terminal,
+        "/key",
+        "Loading Providers",
+        "Checking API providers and saved key status.",
+    )? else {
+        return Ok(());
     };
+    app.activity = "setting api key".to_string();
     let api_providers = inventory
         .providers
         .iter()
@@ -194,7 +196,6 @@ pub(super) fn handle_key_command(
     };
     app.activity = "idle".to_string();
     app.panel = PanelView::Models;
-    app.refresh_models();
     app.push(
         Role::Command,
         "/key",
@@ -206,7 +207,7 @@ pub(super) fn handle_key_command(
 fn cancel_model_selection(app: &mut TerminalApp) {
     app.activity = "idle".to_string();
     app.panel = PanelView::Models;
-    app.refresh_models();
+    app.models_loading = false;
     app.push(Role::Command, "/model", "Model selection cancelled.");
 }
 
@@ -244,7 +245,7 @@ fn ensure_api_key_for_provider(
 
 fn prompt_and_store_api_key(
     terminal: &mut TerminalSurface,
-    app: &TerminalApp,
+    app: &mut TerminalApp,
     provider: ModelProvider,
 ) -> Result<Option<ModelProvider>> {
     let Some(api_key) = prompt_secret_modal(
@@ -267,12 +268,54 @@ fn prompt_and_store_api_key(
 
     call_add_api_key(provider.id.clone(), api_key)
         .map_err(|err| anyhow::anyhow!("Python config error: {err:?}"))?;
-    let updated = load_inventory_with_validation(true)?
+    let Some(inventory) = load_inventory_with_feedback(
+        app,
+        terminal,
+        "/key",
+        "Validating Key",
+        "Checking provider access with the stored key.",
+    )? else {
+        return Ok(None);
+    };
+    let updated = inventory
         .providers
         .into_iter()
         .find(|item| item.id == provider.id)
         .unwrap_or(provider);
     Ok(Some(updated))
+}
+
+fn load_inventory_with_feedback(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    title: &str,
+    detail: &str,
+) -> Result<Option<crate::ModelInventory>> {
+    app.panel = PanelView::Models;
+    app.models_loading = true;
+    app.activity = "loading model inventory".to_string();
+    terminal.render(app, None)?;
+    draw_loading_modal(
+        title,
+        &[
+            detail.to_string(),
+            "Ollama / LM Studio / llama.cpp     loading".to_string(),
+            "Cloud providers / key status       checking".to_string(),
+        ],
+    )?;
+    match load_inventory_with_validation(true) {
+        Ok(inventory) => {
+            app.apply_model_inventory(&inventory);
+            Ok(Some(inventory))
+        }
+        Err(err) => {
+            app.models_loading = false;
+            app.activity = "idle".to_string();
+            app.push(Role::Error, command, &format!("Could not load model inventory: {err}"));
+            Ok(None)
+        }
+    }
 }
 
 fn choose_model_value(

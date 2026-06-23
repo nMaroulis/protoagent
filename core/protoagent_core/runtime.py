@@ -80,6 +80,18 @@ async def _run_agent_deck(
         events.append(message)
         bridge.emit(message)
 
+    def canceled_before_execution() -> dict[str, Any] | None:
+        return _preflight_cancellation_result(
+            bridge=bridge,
+            context=context,
+            task=task,
+            sink=sink,
+            events=events,
+            emit=emit,
+            provider=provider,
+            model=model,
+        )
+
     emit(f"Registry prepared at {urls['registry']}.")
     emit(f"All LLM-capable agents configured with {provider} / {model}.")
     emit(f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).")
@@ -95,9 +107,13 @@ async def _run_agent_deck(
     cancellation_monitor: asyncio.Task[None] | None = None
 
     try:
+        if canceled := canceled_before_execution():
+            return canceled
         registry = Registry(url=urls["registry"], transport="http", verbosity=0)
         registry.start(background=True)
         emit("Registry started.")
+        if canceled := canceled_before_execution():
+            return canceled
 
         deck = create_agent_deck(
             registry=registry,
@@ -112,22 +128,29 @@ async def _run_agent_deck(
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
         )
+        if canceled := canceled_before_execution():
+            return canceled
 
         for name in ("explorer", "coder", "architect"):
             deck[name].start(background=True)
             started_agents.append(deck[name])
             emit(f"{name.title()} registered at {deck[name].card.url}.")
+            if canceled := canceled_before_execution():
+                return canceled
 
         await asyncio.sleep(float(os.getenv("PROTOAGENT_DISCOVERY_DELAY", "0.15")))
         discovered = await deck["architect"].discover_agents()
         names = ", ".join(sorted(card.name for card in discovered)) or "none"
         emit(f"Architect discovery sees: {names}.")
+        if canceled := canceled_before_execution():
+            return canceled
 
         client = AgentClient(url=urls["client"], transport=agent_transport, timeout=_runtime_timeout())
         cancellation_monitor = asyncio.create_task(
             _monitor_cancellation(
                 bridge=bridge,
                 client=client,
+                agent=deck["architect"],
                 agent_url=deck["architect"].card.url,
                 task_id=task.id,
                 emit=emit,
@@ -403,6 +426,7 @@ async def _monitor_cancellation(
     *,
     bridge: RuntimeBridge,
     client,
+    agent=None,
     agent_url: str,
     task_id: str,
     emit,
@@ -413,13 +437,58 @@ async def _monitor_cancellation(
         if not reason:
             await asyncio.sleep(0.08)
             continue
+        accepted = False
+        if agent is not None:
+            try:
+                await agent.cancel_task(task_id, reason)
+                accepted = True
+            except Exception:
+                pass
         try:
-            await client.cancel_task(agent_url=agent_url, task_id=task_id, reason=reason)
+            if not accepted:
+                await client.cancel_task(agent_url=agent_url, task_id=task_id, reason=reason)
+                accepted = True
         except Exception:
             await asyncio.sleep(0.08)
             continue
-        emit(f"Cancellation accepted for task {task_id}: {reason}.")
-        return
+        if accepted:
+            emit(f"Cancellation accepted for task {task_id}: {reason}.")
+            return
+
+
+def _preflight_cancellation_result(
+    *,
+    bridge: RuntimeBridge,
+    context,
+    task,
+    sink,
+    events: list[str],
+    emit,
+    provider: str,
+    model: str,
+) -> dict[str, Any] | None:
+    """Return a canceled result when the application canceled before task submission."""
+    reason = bridge.cancel_reason()
+    if not reason:
+        return None
+    canceled_context = context.cancel(reason)
+    canceled_context.attach_to_task(task)
+    task.cancel(reason)
+    emit(f"Task canceled before model execution: {reason}.")
+    return {
+        "provider": provider,
+        "model": model,
+        "responder": "architect",
+        "answer": f"Task canceled: {reason}",
+        "status": "canceled",
+        "events": events,
+        "run_events": sink.to_list(),
+        "diffs": [],
+        "targets": [],
+        "approval_requests": bridge.approval_requests,
+        "approval_decisions": bridge.approval_decisions,
+        "run_context": canceled_context.to_dict(),
+    }
 
 
 def _task_last_part_content(task_payload: dict[str, Any]) -> Any:

@@ -5,7 +5,7 @@ use tokio::time::sleep;
 
 use crate::{
     call_process_prompt_with_progress, compact_context_history, context_pack_text, context_status_text,
-    context_window_text, empty_as_unknown, load_doctor,
+    context_window_text, empty_as_unknown, load_doctor, load_inventory_with_validation,
     progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
     reset_context_history, CoreResponse,
 };
@@ -81,7 +81,7 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             if matches!(arg.trim(), "choose" | "set" | "select") {
                 handle_model_command(app, terminal)?;
             } else {
-                switch_model_panel(app, command, "Models panel pinned.");
+                switch_model_panel(app, terminal, command, "Models panel pinned.")?;
             }
             Ok(true)
         }
@@ -210,10 +210,26 @@ fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &s
     app.push(Role::Command, command, body);
 }
 
-fn switch_model_panel(app: &mut TerminalApp, command: &str, body: &str) {
+fn switch_model_panel(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    body: &str,
+) -> Result<()> {
     app.panel = PanelView::Models;
-    app.refresh_models();
+    app.models_loading = true;
+    app.activity = "loading model inventory".to_string();
     app.push(Role::Command, command, body);
+    terminal.render(app, None)?;
+    match load_inventory_with_validation(true) {
+        Ok(inventory) => app.apply_model_inventory(&inventory),
+        Err(err) => {
+            app.models_loading = false;
+            app.push(Role::Error, command, &format!("Could not load model inventory: {err}"));
+        }
+    }
+    app.activity = "idle".to_string();
+    Ok(())
 }
 
 async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: &str) -> Result<()> {
@@ -258,6 +274,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
                         return Err(err.into());
                     }
                 };
+                let _ = poll_task_cancellation(true)?;
                 ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
                 break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
             }
@@ -278,16 +295,21 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
                         &format!("{} was {decision} before execution.", approval.target),
                     );
                 }
-                if !cancellation_requested && poll_task_cancellation()? {
+                if poll_task_cancellation(cancellation_requested)? {
                     progress_file.request_cancel("Canceled from the ProtoAgent TUI")?;
                     cancellation_requested = true;
                     progress_events.push("Cancellation requested from the TUI.".to_string());
                 }
                 app.activity = progress_activity(&progress_events, tick);
                 if let Some(message) = app.messages.get_mut(progress_index) {
+                    let task_hint = if cancellation_requested {
+                        "Cancellation requested. Repeated Esc is ignored while the task winds down."
+                    } else {
+                        "Esc or Ctrl-C cancels this task."
+                    };
                     message.body = format!(
-                        "{}\n\nEsc or Ctrl-C cancels this task.",
-                        format_live_progress(&progress_events)
+                        "{}\n\n{task_hint}",
+                        format_live_progress(&progress_events),
                     );
                 }
                 terminal.render(app, None)?;
@@ -297,6 +319,10 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     };
     ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
     progress_file.cleanup();
+    if cancellation_requested {
+        let _ = poll_task_cancellation(true)?;
+        terminal.suppress_exit_escape();
+    }
     let json = json_result?;
 
     let response: CoreResponse = serde_json::from_str(&json)?;
@@ -304,9 +330,10 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     if let Err(err) = crate::sessions::record_turn(query, &response) {
         app.push(Role::Error, "Session history", &err.to_string());
     }
-    app.activity = format!("completed in {} ms", response.elapsed_ms);
+    let canceled = response.status == "canceled";
+    app.activity = format!("{} in {} ms", if canceled { "canceled" } else { "completed" }, response.elapsed_ms);
     if let Some(message) = app.messages.get_mut(progress_index) {
-        message.label = "Completed".to_string();
+        message.label = if canceled { "Canceled" } else { "Completed" }.to_string();
         message.body = format!(
             "{} / {} | {} ms\n{} live event(s); /trace shows the full agent run",
             empty_as_unknown(&response.provider),
@@ -333,15 +360,19 @@ fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: Progr
     }
 }
 
-fn poll_task_cancellation() -> Result<bool> {
-    if !poll(Duration::from_millis(0))? {
-        return Ok(false);
+fn poll_task_cancellation(already_requested: bool) -> Result<bool> {
+    let mut request_cancellation = false;
+    while poll(Duration::from_millis(0))? {
+        let Event::Key(key) = read()? else {
+            continue;
+        };
+        let is_cancel = matches!(key.code, KeyCode::Esc)
+            || matches!(key.code, KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL));
+        if is_cancel && !already_requested && !request_cancellation {
+            request_cancellation = true;
+        }
     }
-    let Event::Key(key) = read()? else {
-        return Ok(false);
-    };
-    Ok(matches!(key.code, KeyCode::Esc)
-        || matches!(key.code, KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL)))
+    Ok(request_cancellation)
 }
 
 fn handle_session_command(

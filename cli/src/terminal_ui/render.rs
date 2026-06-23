@@ -292,10 +292,17 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Models => {
             rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
-            rows.push(row("inventory", &app.status.model_summary, magenta(), false));
-            rows.push(row("providers", &app.status.provider_summary, text(), false));
-            rows.push(row("setup", "/model picks provider/model; /key openai stores a key", green(), true));
-            rows.push(row("config", &app.status.config_path, muted(), false));
+            if app.models_loading {
+                rows.push(row("inventory", "scanning configured model sources...", magenta(), true));
+                rows.push(row("local", "Ollama [LOADING]  LM Studio [LOADING]  llama.cpp [LOADING]", cyan(), false));
+                rows.push(row("cloud", "provider keys and model access [CHECKING]", yellow(), false));
+                rows.push(row("config", &app.status.config_path, muted(), false));
+            } else {
+                rows.push(row("inventory", &app.status.model_summary, magenta(), false));
+                rows.push(row("providers", &app.status.provider_summary, text(), false));
+                rows.push(row("setup", "/model picks provider/model; /key openai stores a key", green(), true));
+                rows.push(row("config", &app.status.config_path, muted(), false));
+            }
         }
         PanelView::Agents => {
             rows.push(row("architect", "intake, routing, delegation, final answer", magenta(), true));
@@ -351,7 +358,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("cancel", "Esc or Ctrl-C while a task runs", red(), false));
-            rows.push(row("session", "/quit or Esc", muted(), false));
+            rows.push(row("session", "/quit exits now; Esc asks first", muted(), false));
             rows.push(row("launch", "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"", green(), false));
         }
     }
@@ -697,7 +704,7 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
         )?;
         x = x.saturating_add(chip_width + 1);
     }
-    let hint = "Wheel/PageUp scrolls chat  Esc exits";
+    let hint = "Wheel/PageUp scrolls chat  Esc asks to exit";
     let hint_width = hint.chars().count() as u16;
     if x + 1 + hint_width <= width {
         write_at(out, x + 1, y, hint_width, hint, muted(), panel_bg(), false)?;

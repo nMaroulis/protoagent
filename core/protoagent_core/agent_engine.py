@@ -332,9 +332,13 @@ def _model_response(
     memory_context = memory_context or {"turns": [], "errors": []}
     runtime_prompt = _runtime_prompt(prompt, tagged_context, memory_context, loom_context)
     result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
-    remember_valid_provider(result["provider"], result["model"])
-    context = build_context_map(workspace)
-    targets = _extract_file_targets(prompt, context.get("files", []))
+    runtime_status = str(result.get("status") or "completed")
+    if runtime_status == "canceled":
+        targets = []
+    else:
+        remember_valid_provider(result["provider"], result["model"])
+        context = build_context_map(workspace)
+        targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
     answer = result["answer"]
     action_targets = [str(path) for path in result.get("targets", []) if path]
@@ -345,7 +349,6 @@ def _model_response(
     ]
     target_label = ", ".join(sorted(set([*targets, *action_targets, *diff_targets]))) if [*targets, *action_targets, *diff_targets] else ""
     diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
-    runtime_status = str(result.get("status") or "completed")
     return {
         "status": "canceled" if runtime_status == "canceled" else "answered",
         "headline": "Architect completed the ProtoLink run.",
