@@ -12,6 +12,7 @@ from typing import Any
 
 from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
+from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
 from .runtime_bridge import RuntimeBridge
 
@@ -128,6 +129,15 @@ async def _run_agent_deck(
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
         )
+        compaction_reports = compact_agent_histories_for_run(deck.values(), session_id)
+        for report in compaction_reports:
+            if report.get("changed"):
+                emit(
+                    "ProtoLink compacted "
+                    f"{str(report['agent']).title()} history: removed "
+                    f"{report['removed_messages']} message(s); "
+                    f"{report['after_tokens']} estimated token(s) remain."
+                )
         if canceled := canceled_before_execution():
             return canceled
 
@@ -357,10 +367,13 @@ async def _send_task_streaming(
 
     content = final_content
     if final_task:
-        task_content = _task_last_part_content(final_task)
-        if task_content is not None:
-            content = task_content
         final_status = str(final_task.get("state") or final_status)
+        if final_status == "canceled":
+            content = None
+        else:
+            task_content = _task_last_part_content(final_task)
+            if task_content is not None:
+                content = task_content
     elif artifact_content is not None:
         content = artifact_content
     return {"content": _normalize(content), "status": final_status, "task": final_task}
@@ -432,22 +445,42 @@ async def _monitor_cancellation(
     emit,
 ) -> None:
     """Forward a Rust cancellation signal through Protolink's control plane."""
+    from protolink import TaskCancellationRequest, TaskNotCancelableError, TaskNotFoundError
+
     while True:
         reason = bridge.cancel_reason()
         if not reason:
             await asyncio.sleep(0.08)
             continue
+        request = TaskCancellationRequest(
+            id=task_id,
+            reason=reason,
+            metadata={"requested_by": "protoagent-tui"},
+        )
         accepted = False
         if agent is not None:
             try:
-                await agent.cancel_task(task_id, reason)
+                await agent.cancel_task(request)
                 accepted = True
+            except TaskNotCancelableError:
+                emit(f"Cancellation arrived after task {task_id} reached a terminal state.")
+                return
+            except TaskNotFoundError:
+                pass
             except Exception:
                 pass
         try:
             if not accepted:
-                await client.cancel_task(agent_url=agent_url, task_id=task_id, reason=reason)
+                await client.cancel_task(
+                    agent_url=agent_url,
+                    task_id=task_id,
+                    reason=reason,
+                    metadata=request.metadata,
+                )
                 accepted = True
+        except TaskNotCancelableError:
+            emit(f"Cancellation arrived after task {task_id} reached a terminal state.")
+            return
         except Exception:
             await asyncio.sleep(0.08)
             continue

@@ -3,18 +3,20 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Install ProtoLink 0.6.1 or newer with the HTTP/SSE transport and LLM extras so
+Install ProtoLink 0.6.2 or newer with the HTTP/SSE transport and LLM extras so
 the embedded Agent runtime can import streaming agents, lifecycle-aware task
-status events, and provider clients:
+status events, recursive stream serialization, history compaction, metrics,
+and provider clients:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.1"
+pip install "protolink[http,llms]>=0.6.2"
 ```
 
 ## Layout
 
 - `protoagent_core/agent_engine.py` - PyO3-facing functions for prompts, model discovery, config, and doctor checks.
 - `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`, normalizes `RunEvent`s, and sends tasks to Architect with `AgentClient`.
+- `protoagent_core/history.py` - ProtoLink `HistoryCompactor` policy for automatic token-budget compaction plus explicit compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider config and API-key storage at `~/.protoagent/config.json`.
@@ -29,6 +31,14 @@ default. The selected model is used to create fresh LLM instances for the
 Architect, Explorer, and Coder on each run. Agents use ProtoLink's SSE
 JSON-RPC lifecycle-aware task stream by default, while the Registry remains on
 plain HTTP.
+
+Each LLM is configured through `LLM.configure_metrics(LLMModelProfile(...))`.
+For Ollama, the same selected window is sent as `num_ctx` and recorded in the
+profile, so ProtoLink's `llm_context` and `llm_call_metrics` events drive the
+terminal context meter. Conversation continuity lives in ProtoLink's
+per-agent SQLite state. Before a session resumes, the core uses
+`LLM.compact_history(strategy="tokens")` when that profile's history budget is
+exceeded; `/context compact` exposes recent, tokens, and summary strategies.
 
 Before each model run, Context Loom refreshes a deterministic local index and
 injects a bounded Context Pack into the Architect prompt. Explorer also exposes
@@ -56,3 +66,5 @@ Coder tools declare `workspace.write` and build `RunAction` objects with
 `Artifact(kind="preview", media_type="text/x-diff")`. Protolink policy pauses
 those actions and calls the Rust-owned approval handler before execution. The
 same control bridge forwards TUI cancellation through `AgentClient.cancel_task()`.
+The embedded in-process fast path uses the same typed `TaskCancellationRequest`
+and falls back to the transport control plane when needed.

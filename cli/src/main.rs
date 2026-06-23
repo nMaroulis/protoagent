@@ -154,6 +154,12 @@ struct ProtolinkStatus {
     #[serde(default)]
     streaming_ready: bool,
     #[serde(default)]
+    metrics_ready: bool,
+    #[serde(default)]
+    compaction_ready: bool,
+    #[serde(default)]
+    cancellation_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
@@ -266,8 +272,8 @@ fn print_cli_help() {
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
-    println!("  proto-cli context compact    Keep only the newest two conversation turns");
-    println!("  proto-cli context reset      Clear remembered conversation turns");
+    println!("  proto-cli context compact    Compact ProtoLink history (tokens by default)");
+    println!("  proto-cli context reset      Clear ProtoLink history and the session index");
     println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
     println!("  proto-cli sessions           Show saved project sessions");
     println!();
@@ -1017,9 +1023,12 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, agent runtime ready, streaming {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, cancellation {}",
                         empty_as_unknown(&report.protolink.version),
-                        if report.protolink.streaming_ready { "ready" } else { "unavailable" }
+                        readiness(report.protolink.streaming_ready),
+                        readiness(report.protolink.metrics_ready),
+                        readiness(report.protolink.compaction_ready),
+                        readiness(report.protolink.cancellation_ready),
                     )
                 } else if report.protolink.installed {
                     format!("installed, agent runtime blocked ({})", report.protolink.error)
@@ -1048,6 +1057,10 @@ fn show_check() -> Result<()> {
         .collect();
     print_panel("AGENTS", &rows, PanelTone::Cyan);
     Ok(())
+}
+
+fn readiness(ready: bool) -> &'static str {
+    if ready { "ready" } else { "unavailable" }
 }
 
 fn show_agents() -> Result<()> {
@@ -1079,7 +1092,8 @@ fn handle_context_command(args: &[String]) -> Result<()> {
             Ok(())
         }
         Some("compact") => {
-            let text = compact_context_history(args.get(1).map(String::as_str))?;
+            let values = args.iter().skip(1).map(String::as_str).collect::<Vec<_>>();
+            let text = compact_context_history(&values)?;
             print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
             Ok(())
         }
@@ -1130,35 +1144,113 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
     ))
 }
 
-pub(crate) fn compact_context_history(value: Option<&str>) -> Result<String> {
-    let keep_recent = match value {
-        None | Some("") => 2,
-        Some(value) => value
-            .parse::<usize>()
-            .map_err(|_| anyhow!("Usage: /context compact [turns-to-keep]"))?,
-    };
-    if keep_recent > 20 {
-        return Err(anyhow!("Compaction can keep at most 20 recent turns"));
+pub(crate) fn compact_context_history(values: &[&str]) -> Result<String> {
+    let (strategy, limit, ui_turns) = parse_compaction_request(values)?;
+    let workspace = require_project_dir_string()?;
+    let session_id = project_session_id(&workspace);
+    let raw = call_compact_protolink_history(session_id, strategy.to_string(), limit)
+        .map_err(|err| anyhow!("Python ProtoLink compaction error: {err:?}"))?;
+    let report: Value = serde_json::from_str(&raw)?;
+    let summary = report
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("ProtoLink history compaction completed.");
+
+    let session = sessions::compact_current_history(ui_turns)?;
+    if session.found {
+        Ok(format!(
+            "{summary}\nSession index: removed {} old turn(s), kept {} recent turn(s).",
+            session.removed, session.kept
+        ))
+    } else {
+        Ok(summary.to_string())
     }
-    let result = sessions::compact_current_history(keep_recent)?;
-    if !result.found {
-        return Ok("No saved conversation history exists for this project.".to_string());
-    }
-    Ok(format!(
-        "Compacted session memory: removed {} old turn(s), kept {} recent turn(s).",
-        result.removed, result.kept
-    ))
 }
 
 pub(crate) fn reset_context_history() -> Result<String> {
-    let result = sessions::compact_current_history(0)?;
-    if !result.found {
-        return Ok("No saved conversation history exists for this project.".to_string());
+    let workspace = require_project_dir_string()?;
+    let session_id = project_session_id(&workspace);
+    let raw = call_reset_protolink_history(session_id)
+        .map_err(|err| anyhow!("Python ProtoLink history reset error: {err:?}"))?;
+    let report: Value = serde_json::from_str(&raw)?;
+    let summary = report
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("ProtoLink history reset completed.");
+    let session = sessions::compact_current_history(0)?;
+    if session.found {
+        Ok(format!(
+            "{summary}\nSession index: removed {} stored turn(s).",
+            session.removed
+        ))
+    } else {
+        Ok(summary.to_string())
     }
-    Ok(format!(
-        "Conversation memory reset: removed {} stored turn(s).",
-        result.removed
-    ))
+}
+
+fn parse_compaction_request(values: &[&str]) -> Result<(&'static str, Option<usize>, usize)> {
+    if values.is_empty() {
+        return Ok(("tokens", None, 2));
+    }
+    if values.len() == 1 {
+        if let Ok(turns) = values[0].parse::<usize>() {
+            if turns > 20 {
+                return Err(anyhow!("Compaction can keep at most 20 recent turns"));
+            }
+            let messages = turns.saturating_mul(4).saturating_add(1).max(2);
+            return Ok(("recent", Some(messages), turns));
+        }
+    }
+    if values.len() > 2 {
+        return Err(anyhow!(
+            "Usage: /context compact [recent|tokens|summary] [limit]"
+        ));
+    }
+    let strategy = match values[0].to_ascii_lowercase().as_str() {
+        "recent" => "recent",
+        "tokens" => "tokens",
+        "summary" => "summary",
+        _ => {
+            return Err(anyhow!(
+                "Usage: /context compact [recent|tokens|summary] [limit]"
+            ))
+        }
+    };
+    let limit = values
+        .get(1)
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|_| anyhow!("Compaction limit must be a positive integer"))?;
+    if limit == Some(0) || (strategy == "recent" && limit == Some(1)) {
+        return Err(anyhow!("Compaction limit is too small for {strategy}"));
+    }
+    Ok((strategy, limit, 2))
+}
+
+#[cfg(test)]
+mod context_command_tests {
+    use super::parse_compaction_request;
+
+    #[test]
+    fn defaults_to_protolink_token_compaction() {
+        assert_eq!(
+            parse_compaction_request(&[]).unwrap(),
+            ("tokens", None, 2)
+        );
+    }
+
+    #[test]
+    fn supports_strategies_and_legacy_turn_shorthand() {
+        assert_eq!(
+            parse_compaction_request(&["summary", "8"]).unwrap(),
+            ("summary", Some(8), 2)
+        );
+        assert_eq!(
+            parse_compaction_request(&["3"]).unwrap(),
+            ("recent", Some(13), 3)
+        );
+        assert!(parse_compaction_request(&["mystery"]).is_err());
+    }
 }
 
 fn format_token_count(tokens: u64) -> String {
@@ -1603,6 +1695,32 @@ fn call_configure_context_window(value: Option<String>) -> PyResult<String> {
         module
             .getattr("configure_context_window")?
             .call1((value,))?
+            .extract()
+    })
+}
+
+fn call_compact_protolink_history(
+    session_id: String,
+    strategy: String,
+    limit: Option<usize>,
+) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("compact_protolink_history")?
+            .call1((session_id, strategy, limit))?
+            .extract()
+    })
+}
+
+fn call_reset_protolink_history(session_id: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("reset_protolink_history")?
+            .call1((session_id,))?
             .extract()
     })
 }

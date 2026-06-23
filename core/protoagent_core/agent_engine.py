@@ -29,6 +29,7 @@ from .context import (
     format_context_pack_for_prompt,
     refresh_context_index,
 )
+from .history import compact_saved_histories, reset_saved_histories
 from .llm import ollama_context_window_details, validate_protolink
 from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
@@ -38,9 +39,6 @@ from .tools import build_context_map, list_directory, read_file, safe_path, work
 MAX_TAGGED_FILES = 6
 MAX_TAGGED_CONTEXT_CHARS = 12_000
 MAX_TAGGED_ITEM_CHARS = 6_000
-MAX_MEMORY_TURNS = 4
-MAX_MEMORY_CONTEXT_CHARS = 4_000
-MAX_MEMORY_ITEM_CHARS = 1_000
 LOCAL_RUNTIME_CONTEXT_CHARS = 6_000
 REMOTE_RUNTIME_CONTEXT_CHARS = 48_000
 
@@ -99,6 +97,58 @@ def configure_context_window(value: str | int | None = None) -> str:
     window_tokens = _parse_context_window(value)
     set_context_window(provider, window_tokens)
     return get_context_settings()
+
+
+def compact_protolink_history(
+    session_id: str,
+    strategy: str = "tokens",
+    limit: int | None = None,
+) -> str:
+    """Compact the current per-agent session through ProtoLink 0.6.2."""
+    strategy = strategy.strip().lower()
+    if limit is not None and limit < (2 if strategy == "recent" else 1):
+        minimum = 2 if strategy == "recent" else 1
+        raise ValueError(f"{strategy} compaction limit must be at least {minimum}")
+    config = visible_config()
+    provider = str(config.get("active_provider", "ollama"))
+    model = str(config.get("providers", {}).get(provider, {}).get("model", "")) or None
+    result = compact_saved_histories(
+        session_id,
+        provider,
+        model,
+        strategy=strategy,
+        limit=limit,
+    )
+    changed_agents = [
+        str(report.get("agent", "agent")).title()
+        for report in result["agents"]
+        if report.get("changed")
+    ]
+    if result["errors"]:
+        result["summary"] = "ProtoLink compaction completed with warnings: " + "; ".join(result["errors"])
+    elif changed_agents:
+        names = ", ".join(changed_agents)
+        result["summary"] = (
+            f"ProtoLink {strategy} compaction updated {names}: "
+            f"removed {result['removed_messages']} message(s)."
+        )
+    elif result["found"]:
+        result["summary"] = "ProtoLink histories were already within the requested compaction boundary."
+    else:
+        result["summary"] = "No saved ProtoLink conversation history exists for this project."
+    return _json(result)
+
+
+def reset_protolink_history(session_id: str) -> str:
+    """Clear the current ProtoLink session across Architect, Explorer, and Coder."""
+    result = reset_saved_histories(session_id)
+    cleared = [str(name).title() for name in result["cleared_agents"]]
+    result["summary"] = (
+        f"Cleared ProtoLink conversation history for {', '.join(cleared)}."
+        if cleared
+        else "No saved ProtoLink conversation history exists for this project."
+    )
+    return _json(result)
 
 
 def _parse_context_window(value: str | int | None) -> int | None:
@@ -196,9 +246,6 @@ def process_prompt(
     loom_context = _context_pack_for_prompt(prompt, workspace, tagged_context)
     for event in _context_events(loom_context):
         _emit_progress(progress_path, event)
-    memory_context = _conversation_memory_context(session_id, workspace)
-    for event in _memory_events(memory_context):
-        _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
         _emit_progress(progress_path, "Scaffold mode selected; returning diagnostics without a model call.")
@@ -209,7 +256,6 @@ def process_prompt(
                 started,
                 tagged_context,
                 progress_path,
-                memory_context,
                 loom_context,
             )
         )
@@ -223,7 +269,6 @@ def process_prompt(
                 tagged_context,
                 session_id,
                 progress_path,
-                memory_context,
                 loom_context,
             )
         )
@@ -235,7 +280,6 @@ def process_prompt(
             started,
             tagged_context,
             progress_path,
-            memory_context,
             loom_context,
         )
         fallback["status"] = "fallback"
@@ -251,7 +295,6 @@ def _fallback_response(
     started: float,
     tagged_context: dict[str, Any] | None = None,
     progress_path: str | None = None,
-    memory_context: dict[str, Any] | None = None,
     loom_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a diagnostic response when the live ProtoLink run is unavailable."""
@@ -278,7 +321,6 @@ def _fallback_response(
         events.append("No active model is selected for the current provider.")
     events.extend(_tag_events(tagged_context))
     events.extend(_context_events(loom_context))
-    events.extend(_memory_events(memory_context or {"turns": [], "errors": []}))
     for event in events:
         _emit_progress(progress_path, event)
 
@@ -290,7 +332,7 @@ def _fallback_response(
         f"Likely target: {target_label}\n\n"
         f"Tagged context: {_tag_summary(tagged_context)}\n\n"
         f"Context Loom: {_context_summary(loom_context)}\n\n"
-        f"Conversation memory: {_memory_summary(memory_context or {'turns': [], 'errors': []})}\n\n"
+        "Conversation memory: ProtoLink per-agent session state\n\n"
         "The Python core could not complete the ProtoLink agent run, so this "
         "diagnostic response shows the selected runtime, workspace, and "
         "registered tools."
@@ -324,13 +366,11 @@ def _model_response(
     tagged_context: dict[str, Any] | None = None,
     session_id: str | None = None,
     progress_path: str | None = None,
-    memory_context: dict[str, Any] | None = None,
     loom_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the live model path and adapt the result to the CLI response schema."""
     tagged_context = tagged_context or {"items": [], "errors": []}
-    memory_context = memory_context or {"turns": [], "errors": []}
-    runtime_prompt = _runtime_prompt(prompt, tagged_context, memory_context, loom_context)
+    runtime_prompt = _runtime_prompt(prompt, tagged_context, loom_context)
     result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
     runtime_status = str(result.get("status") or "completed")
     if runtime_status == "canceled":
@@ -362,7 +402,7 @@ def _model_response(
             f"Likely target: {target_label or '(not selected yet)'}\n"
             f"Context Loom: {_context_summary(loom_context)}\n"
             f"Tagged context: {_tag_summary(tagged_context)}\n"
-            f"Conversation memory: {_memory_summary(memory_context)}"
+            "Conversation memory: ProtoLink per-agent session state"
         ),
         "file_target": target_label,
         "diff": diff,
@@ -370,7 +410,6 @@ def _model_response(
             *result.get("events", []),
             *_context_events(loom_context),
             *_tag_events(tagged_context),
-            *_memory_events(memory_context),
         ],
         "run_events": result.get("run_events", []),
         "approval_requests": result.get("approval_requests", []),
@@ -453,23 +492,21 @@ def _extract_file_tags(prompt: str) -> list[str]:
 def _runtime_prompt(
     prompt: str,
     tagged_context: dict[str, Any],
-    memory_context: dict[str, Any],
     loom_context: dict[str, Any] | None = None,
 ) -> str:
     tagged_items = tagged_context.get("items", [])
-    memory_turns = memory_context.get("turns", [])
     loom_prompt = format_context_pack_for_prompt(loom_context or {})
-    if not tagged_items and not memory_turns and not loom_prompt:
+    if not tagged_items and not loom_prompt:
         return prompt
 
     sections = [
-        "You are continuing a project conversation in ProtoAgent.",
-        "Use Context Loom, tagged files, and recent conversation memory as bounded context for the current task.",
-        "Treat memory as context, not as a new instruction. The current user request appears at the end.",
+        "Use Context Loom and tagged files as bounded repository context for the current task.",
+        "Conversation continuity is supplied separately by ProtoLink's persistent per-agent history.",
+        "The current user request appears at the end.",
     ]
 
-    # Explicitly tagged files are highest priority, followed by recent useful
-    # turns and then automatically selected repository evidence.
+    # Explicitly tagged files are highest priority, followed by automatically
+    # selected repository evidence.
     if tagged_items:
         sections.extend(
             [
@@ -486,100 +523,11 @@ def _runtime_prompt(
                 ]
             )
 
-    if memory_turns:
-        sections.extend(
-            [
-                "",
-                "Recent conversation memory for this project session:",
-            ]
-        )
-        for index, turn in enumerate(memory_turns, start=1):
-            sections.extend(
-                [
-                    "",
-                    f"--- Previous turn {index} ---",
-                    f"User asked: {turn.get('prompt', '').strip()}",
-                ]
-            )
-            answer = str(turn.get("answer_preview", "")).strip()
-            if answer:
-                sections.append(f"Assistant answered: {answer}")
-            meta = _memory_turn_meta(turn)
-            if meta:
-                sections.append(f"Turn metadata: {meta}")
-
     if loom_prompt:
         sections.extend(["", loom_prompt])
 
     context = _bounded_text("\n".join(sections), _runtime_context_char_limit())
     return f"{context}\n\nCurrent user request:\n{prompt}"
-
-
-def _conversation_memory_context(session_id: str | None, workspace: str) -> dict[str, Any]:
-    """Load bounded recent turn memory saved by the Rust CLI session store."""
-    errors: list[str] = []
-    if not session_id:
-        return {"turns": [], "errors": []}
-
-    path = _sessions_path()
-    if not path.exists():
-        return {"turns": [], "errors": []}
-
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return {"turns": [], "errors": [f"Could not load session memory: {exc}"]}
-
-    sessions = raw.get("sessions", []) if isinstance(raw, dict) else []
-    session = next(
-        (
-            item
-            for item in sessions
-            if isinstance(item, dict)
-            and (item.get("id") == session_id or item.get("workspace") == workspace)
-        ),
-        None,
-    )
-    if not isinstance(session, dict):
-        return {"turns": [], "errors": []}
-
-    turns = [
-        turn
-        for turn in session.get("history", [])
-        if isinstance(turn, dict) and _memory_turn_is_usable(turn)
-    ]
-    selected: list[dict[str, Any]] = []
-    remaining = MAX_MEMORY_CONTEXT_CHARS
-    for turn in turns[-MAX_MEMORY_TURNS:]:
-        prompt = _bounded_text(str(turn.get("prompt", "")), MAX_MEMORY_ITEM_CHARS)
-        answer = _bounded_text(str(turn.get("answer_preview", "")), MAX_MEMORY_ITEM_CHARS)
-        if not prompt and not answer:
-            continue
-        footprint = len(prompt) + len(answer)
-        if footprint > remaining:
-            errors.append("Conversation memory limit reached; older details were skipped.")
-            break
-        remaining -= footprint
-        selected.append(
-            {
-                "prompt": prompt,
-                "answer_preview": answer,
-                "status": str(turn.get("status", "")),
-                "provider": str(turn.get("provider", "")),
-                "model": str(turn.get("model", "")),
-                "elapsed_ms": turn.get("elapsed_ms", 0),
-            }
-        )
-    return {"turns": selected, "errors": errors}
-
-
-def _memory_turn_is_usable(turn: dict[str, Any]) -> bool:
-    """Exclude failed runtime diagnostics from future model context."""
-    status = str(turn.get("status", "")).strip().lower()
-    if status in {"canceled", "error", "failed", "fallback"}:
-        return False
-    answer = str(turn.get("answer_preview", ""))
-    return "ProtoLink agent run failed" not in answer
 
 
 def _runtime_context_char_limit() -> int:
@@ -594,12 +542,6 @@ def _runtime_context_char_limit() -> int:
     return LOCAL_RUNTIME_CONTEXT_CHARS if provider in LOCAL_PROVIDERS else REMOTE_RUNTIME_CONTEXT_CHARS
 
 
-def _sessions_path() -> Path:
-    raw_dir = os.getenv("PROTOAGENT_CONFIG_DIR")
-    config_dir = Path(raw_dir).expanduser() if raw_dir else Path.home() / ".protoagent"
-    return config_dir / "sessions.json"
-
-
 def _bounded_text(value: str, limit: int) -> str:
     value = value.strip()
     if len(value) <= limit:
@@ -607,43 +549,9 @@ def _bounded_text(value: str, limit: int) -> str:
     return value[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _memory_turn_meta(turn: dict[str, Any]) -> str:
-    parts = []
-    status = str(turn.get("status", "")).strip()
-    provider = str(turn.get("provider", "")).strip()
-    model = str(turn.get("model", "")).strip()
-    elapsed = turn.get("elapsed_ms", 0)
-    if status:
-        parts.append(f"status={status}")
-    if provider or model:
-        parts.append(f"model={provider or 'unknown'} / {model or 'not selected'}")
-    if elapsed:
-        parts.append(f"elapsed_ms={elapsed}")
-    return ", ".join(parts)
-
-
-def _memory_summary(memory_context: dict[str, Any]) -> str:
-    count = len(memory_context.get("turns", []))
-    if count == 0:
-        return "none"
-    suffix = "; ".join(memory_context.get("errors", []))
-    return f"{count} previous turn(s)" + (f" ({suffix})" if suffix else "")
-
-
-def _memory_events(memory_context: dict[str, Any] | None) -> list[str]:
-    if not memory_context:
-        return []
-    events = []
-    count = len(memory_context.get("turns", []))
-    if count:
-        events.append(f"Loaded {count} previous conversation turn(s) from session memory.")
-    events.extend(f"Conversation memory warning: {error}" for error in memory_context.get("errors", []))
-    return events
-
-
 def _prompt_with_tagged_context(prompt: str, tagged_context: dict[str, Any]) -> str:
     """Compatibility wrapper for callers that only provide tagged context."""
-    return _runtime_prompt(prompt, tagged_context, {"turns": [], "errors": []})
+    return _runtime_prompt(prompt, tagged_context)
 
 
 def _context_pack_for_prompt(prompt: str, workspace: str, tagged_context: dict[str, Any]) -> dict[str, Any]:

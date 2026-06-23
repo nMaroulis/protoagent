@@ -21,6 +21,7 @@ If **LangChain** is the massive, heavy enterprise framework for cloud models, `p
 
 * **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. Protolink acts as a buffer, specifically hand-holding 7B/8B parameter models (like Qwen, Llama 3) through strict multi-agent loops (Planner ➔ Coder ➔ Critic) without them hallucinating or breaking syntax.
 * **Context Loom:** ProtoAgent builds a local, source-cited Context Pack from the active workspace before the agent deck runs. This gives smaller models a compact evidence map instead of a giant hidden repo dump.
+* **ProtoLink-native context control:** Every model is configured with a typed `LLMModelProfile`; live context/cost events drive the Rust meter, while persistent per-agent history is compacted through ProtoLink's built-in `HistoryCompactor`.
 * **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits lifecycle-aware task events plus typed action payloads.
 
 Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).
@@ -62,7 +63,7 @@ cd protoagent
 # Initialize the Brain
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.1"
+pip install "protolink[http,llms]>=0.6.2"
 
 ```
 

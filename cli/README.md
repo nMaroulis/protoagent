@@ -41,7 +41,7 @@ If you haven't already, initialize the Python environment in the monorepo root:
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.1"
+pip install "protolink[http,llms]>=0.6.2"
 
 ```
 
@@ -119,6 +119,9 @@ Inside the TUI you can use slash commands:
 * `/agents` - Shows the Architect / Explorer / Coder topology.
 * `/context` - Shows Context Loom index status for the active project.
 * `/context QUERY` - Builds a source-cited Context Pack without running a model.
+* `/context window 16k` - Sets the Ollama request window and ProtoLink `LLMModelProfile` together.
+* `/context compact [recent|tokens|summary] [limit]` - Compacts the active per-agent ProtoLink session.
+* `/context reset` - Clears the active ProtoLink histories and the Rust session index.
 * `/index refresh` - Refreshes the local Context Loom SQLite index.
 * `/last` - Replays the last agent response.
 * `/run` - Runs a task from a slash command.

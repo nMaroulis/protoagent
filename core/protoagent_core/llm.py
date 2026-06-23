@@ -16,7 +16,12 @@ def protolink_provider(provider: str) -> str:
 
 
 def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
-    """Build keyword arguments for ProtoLink LLM construction."""
+    """Build provider-request arguments for ProtoLink LLM construction.
+
+    Observability metadata is configured separately through
+    :meth:`protolink.llms.base.LLM.configure_metrics` so it cannot drift into a
+    provider request payload.
+    """
     provider = normalize_provider(provider)
     cfg = provider_config(provider)
     selected_model = model or cfg.get("model")
@@ -41,9 +46,28 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
         model_params = dict(cfg.get("model_params") or {})
         model_params["num_ctx"] = context_window
         kwargs["model_params"] = model_params
-        kwargs["metrics_profile"] = {"context_window": context_window}
 
     return kwargs
+
+
+def llm_model_profile(provider: str, model: str | None = None):
+    """Build ProtoLink's typed metrics profile for the selected model."""
+    from protolink import LLMModelProfile
+
+    provider = normalize_provider(provider)
+    cfg = provider_config(provider)
+    selected_model = model or cfg.get("model") or None
+    context_window = ollama_context_window(cfg) if provider == "ollama" else _optional_positive_int(
+        cfg.get("context_window")
+    )
+    return LLMModelProfile(
+        context_window=context_window,
+        input_cost_per_million=_optional_nonnegative_float(cfg.get("input_cost_per_million")),
+        output_cost_per_million=_optional_nonnegative_float(cfg.get("output_cost_per_million")),
+        currency=str(cfg.get("currency") or "USD"),
+        provider=provider,
+        model=str(selected_model) if selected_model else None,
+    )
 
 
 def ollama_context_window(config: dict[str, Any] | None = None) -> int:
@@ -90,23 +114,40 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
     requested = normalize_provider(provider or cfg["id"])
     from protolink.llms.factory import create_llm
 
-    return create_llm(protolink_provider(requested), **llm_kwargs(requested, model))
+    llm = create_llm(protolink_provider(requested), **llm_kwargs(requested, model))
+    llm.configure_metrics(llm_model_profile(requested, model))
+    return llm
 
 
 def validate_protolink() -> dict[str, Any]:
     """Report whether ProtoLink and its agent runtime can be imported."""
     try:
         import protolink
+        from protolink import HistoryCompactor, LLMModelProfile, TaskCancellationRequest
         from protolink.agents import Agent
         from protolink.client import AgentClient
+        from protolink.llms.base import LLM
         from protolink.llms.factory import create_llm  # noqa: F401
+
+        streaming_ready = hasattr(Agent, "handle_task_streaming") and hasattr(
+            AgentClient, "send_task_streaming"
+        )
+        metrics_ready = hasattr(LLM, "configure_metrics") and LLMModelProfile is not None
+        compaction_ready = hasattr(LLM, "compact_history") and HistoryCompactor is not None
+        cancellation_ready = (
+            hasattr(Agent, "cancel_task")
+            and hasattr(AgentClient, "cancel_task")
+            and TaskCancellationRequest is not None
+        )
 
         return {
             "installed": True,
             "version": getattr(protolink, "__version__", ""),
-            "agent_ready": True,
-            "streaming_ready": hasattr(Agent, "handle_task_streaming")
-            and hasattr(AgentClient, "send_task_streaming"),
+            "agent_ready": streaming_ready and metrics_ready and compaction_ready and cancellation_ready,
+            "streaming_ready": streaming_ready,
+            "metrics_ready": metrics_ready,
+            "compaction_ready": compaction_ready,
+            "cancellation_ready": cancellation_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
@@ -118,6 +159,9 @@ def validate_protolink() -> dict[str, Any]:
                 "version": getattr(protolink, "__version__", ""),
                 "agent_ready": False,
                 "streaming_ready": False,
+                "metrics_ready": False,
+                "compaction_ready": False,
+                "cancellation_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -126,5 +170,24 @@ def validate_protolink() -> dict[str, Any]:
                 "version": "",
                 "agent_ready": False,
                 "streaming_ready": False,
+                "metrics_ready": False,
+                "compaction_ready": False,
+                "cancellation_ready": False,
                 "error": str(exc),
             }
+
+
+def _optional_positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _optional_nonnegative_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None

@@ -436,12 +436,16 @@ fn handle_context_command(
             return Ok(());
         }
         Some("compact") => {
-            let keep = parts.next();
-            if parts.next().is_some() {
-                app.push(Role::Error, command, "Usage: /context compact [turns-to-keep]");
+            let values = parts.collect::<Vec<_>>();
+            if values.len() > 2 {
+                app.push(
+                    Role::Error,
+                    command,
+                    "Usage: /context compact [recent|tokens|summary] [limit]",
+                );
                 return Ok(());
             }
-            match compact_context_history(keep) {
+            match compact_context_history(&values) {
                 Ok(text) => {
                     app.context_usage.reset();
                     app.panel = PanelView::Context;

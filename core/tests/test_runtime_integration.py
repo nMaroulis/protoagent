@@ -10,7 +10,12 @@ from protolink import ActionDeniedError, RunContext
 
 import protoagent_core.agents.coder as coder_module
 import protoagent_core.agents.explorer as explorer_module
-from protoagent_core.runtime import _context_from_delivery, _monitor_cancellation, _preflight_cancellation_result
+from protoagent_core.runtime import (
+    _context_from_delivery,
+    _monitor_cancellation,
+    _preflight_cancellation_result,
+    _send_task_streaming,
+)
 from protoagent_core.runtime_bridge import RuntimeBridge
 
 
@@ -139,6 +144,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(calls[0]["task_id"], "task_123")
             self.assertEqual(calls[0]["reason"], "Canceled from test")
+            self.assertEqual(calls[0]["metadata"]["requested_by"], "protoagent-tui")
             self.assertIn("Cancellation accepted", events[0])
             bridge.cleanup()
 
@@ -149,11 +155,11 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 json.dumps({"reason": "Canceled locally"}),
                 encoding="utf-8",
             )
-            calls: list[tuple[str, str]] = []
+            calls: list[tuple[str, str | None]] = []
 
             class Agent:
-                async def cancel_task(self, task_id, reason):
-                    calls.append((task_id, reason))
+                async def cancel_task(self, request):
+                    calls.append((request.id, request.reason))
 
             class Client:
                 async def cancel_task(self, **_kwargs):
@@ -174,6 +180,41 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls, [("task_local", "Canceled locally")])
             self.assertIn("Cancellation accepted", events[0])
             bridge.cleanup()
+
+    async def test_canceled_stream_does_not_echo_the_original_prompt_as_answer(self) -> None:
+        from protolink import InMemoryEventSink, RunContext, Task
+        from protolink.core.events import TaskStatusUpdateEvent
+
+        task = Task.create_infer(prompt="original prompt")
+        task.begin()
+        task.cancel("Stopped by test")
+        context = RunContext(session_id="session-test").cancel("Stopped by test")
+        context.attach_to_task(task)
+        event = TaskStatusUpdateEvent(
+            task_id=task.id,
+            previous_state="working",
+            new_state="canceled",
+            final=True,
+            metadata={"task": task.to_dict()},
+        )
+
+        class Client:
+            async def send_task_streaming(self, **_kwargs):
+                yield event
+
+        bridge = RuntimeBridge(None)
+        result = await _send_task_streaming(
+            client=Client(),
+            agent_url="runtime://architect",
+            task=task,
+            context=context,
+            sink=InMemoryEventSink(),
+            events=[],
+            bridge=bridge,
+        )
+
+        self.assertEqual(result["status"], "canceled")
+        self.assertIsNone(result["content"])
 
     def test_preflight_cancel_skips_model_execution(self) -> None:
         from protolink import InMemoryEventSink, RunContext, Task

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 import unittest
@@ -12,14 +11,16 @@ from protoagent_core import agent_engine
 from protoagent_core.config import provider_config, set_context_window
 from protoagent_core.llm import (
     DEFAULT_OLLAMA_CONTEXT_WINDOW,
+    create_llm_from_config,
     llm_kwargs,
+    llm_model_profile,
     ollama_context_window,
     ollama_context_window_details,
 )
 
 
 class OllamaContextTests(unittest.TestCase):
-    def test_ollama_kwargs_set_input_context_and_metrics_window(self) -> None:
+    def test_ollama_request_and_metrics_use_one_context_window(self) -> None:
         config = {
             "id": "ollama",
             "model": "gemma4:e4b",
@@ -28,9 +29,40 @@ class OllamaContextTests(unittest.TestCase):
         }
         with patch("protoagent_core.llm.provider_config", return_value=config):
             kwargs = llm_kwargs("ollama")
+            profile = llm_model_profile("ollama")
 
         self.assertEqual(kwargs["model_params"]["num_ctx"], DEFAULT_OLLAMA_CONTEXT_WINDOW)
-        self.assertEqual(kwargs["metrics_profile"]["context_window"], DEFAULT_OLLAMA_CONTEXT_WINDOW)
+        self.assertNotIn("metrics_profile", kwargs)
+        self.assertEqual(profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
+        self.assertEqual(profile.provider, "ollama")
+        self.assertEqual(profile.model, "gemma4:e4b")
+
+    def test_llm_is_configured_through_protolink_metrics_api(self) -> None:
+        config = {
+            "id": "ollama",
+            "model": "gemma4:e4b",
+            "base_url": "http://localhost:11434",
+            "api_key": "",
+        }
+
+        class FakeLLM:
+            def __init__(self) -> None:
+                self.profile = None
+
+            def configure_metrics(self, profile):
+                self.profile = profile
+                return self
+
+        llm = FakeLLM()
+        with (
+            patch("protoagent_core.llm.provider_config", return_value=config),
+            patch("protolink.llms.factory.create_llm", return_value=llm),
+        ):
+            created = create_llm_from_config("ollama")
+
+        self.assertIs(created, llm)
+        self.assertEqual(llm.profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
+        self.assertEqual(llm.profile.model, "gemma4:e4b")
 
     def test_context_window_honors_protoagent_environment_override(self) -> None:
         with patch.dict(os.environ, {"PROTOAGENT_OLLAMA_NUM_CTX": "16384"}, clear=False):
@@ -63,49 +95,29 @@ class OllamaContextTests(unittest.TestCase):
             "items": [{"path": "large.py", "kind": "file", "content": "x" * 20_000}],
             "errors": [],
         }
-        memory = {
-            "turns": [{"prompt": "old", "answer_preview": "y" * 10_000}],
-            "errors": [],
-        }
         loom = {
             "workspace": "/tmp/project",
             "items": [{"path": "other.py", "snippet": "z" * 10_000}],
         }
         with patch.dict(os.environ, {"PROTOAGENT_CONTEXT_CHARS": "2000"}, clear=False):
-            prompt = agent_engine._runtime_prompt("CURRENT REQUEST", tagged, memory, loom)
+            prompt = agent_engine._runtime_prompt("CURRENT REQUEST", tagged, loom)
 
         context, request = prompt.rsplit("Current user request:\n", 1)
         self.assertLessEqual(len(context.strip()), 2_000)
         self.assertEqual(request, "CURRENT REQUEST")
 
-    def test_failed_turns_are_not_replayed_into_context(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            sessions = {
-                "sessions": [
-                    {
-                        "id": "session-test",
-                        "workspace": "/tmp/project",
-                        "history": [
-                            {
-                                "prompt": "hi",
-                                "answer_preview": "ProtoLink agent run failed; showing core diagnostics.",
-                                "status": "fallback",
-                            },
-                            {
-                                "prompt": "real question",
-                                "answer_preview": "real answer",
-                                "status": "answered",
-                            },
-                        ],
-                    }
-                ]
-            }
-            Path(directory, "sessions.json").write_text(json.dumps(sessions), encoding="utf-8")
-            with patch.dict(os.environ, {"PROTOAGENT_CONFIG_DIR": directory}, clear=False):
-                context = agent_engine._conversation_memory_context("session-test", "/tmp/project")
+    def test_runtime_prompt_leaves_conversation_continuity_to_protolink(self) -> None:
+        prompt = agent_engine._runtime_prompt(
+            "CURRENT REQUEST",
+            {"items": [], "errors": []},
+            {
+                "workspace": "/tmp/project",
+                "items": [{"path": "agent.py", "snippet": "evidence"}],
+            },
+        )
 
-        self.assertEqual(len(context["turns"]), 1)
-        self.assertEqual(context["turns"][0]["prompt"], "real question")
+        self.assertIn("ProtoLink's persistent per-agent history", prompt)
+        self.assertNotIn("Previous turn", prompt)
 
 
 if __name__ == "__main__":
