@@ -4,8 +4,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    call_process_prompt_with_progress, compact_context_history, context_pack_text, context_status_text,
-    context_window_text, empty_as_unknown, load_doctor, load_inventory_with_validation,
+    call_process_prompt_with_progress, compact_context_history, context_history_text, context_pack_text,
+    context_status_text, context_window_text, empty_as_unknown, load_doctor,
     progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
     reset_context_history, CoreResponse,
 };
@@ -24,7 +24,7 @@ mod theme;
 use approval::approval_prompt;
 use diff_view::{diff_review_summary, show_diff_modal};
 use modal::pick_choice_modal;
-use model_picker::{handle_key_command, handle_model_command};
+use model_picker::{handle_key_command, handle_model_command, load_inventory_with_feedback};
 use project::handle_project_command;
 use render::truncate_detail;
 use state::{PanelView, Role, TerminalApp};
@@ -232,14 +232,13 @@ fn switch_model_panel(
     app.models_loading = true;
     app.activity = "loading model inventory".to_string();
     app.push(Role::Command, command, body);
-    terminal.render(app, None)?;
-    match load_inventory_with_validation(true) {
-        Ok(inventory) => app.apply_model_inventory(&inventory),
-        Err(err) => {
-            app.models_loading = false;
-            app.push(Role::Error, command, &format!("Could not load model inventory: {err}"));
-        }
-    }
+    let _ = load_inventory_with_feedback(
+        app,
+        terminal,
+        command,
+        "Loading Models",
+        "Scanning configured model sources before opening the panel.",
+    )?;
     app.activity = "idle".to_string();
     Ok(())
 }
@@ -460,6 +459,17 @@ fn handle_context_command(
             match compact_context_history(&values) {
                 Ok(text) => {
                     app.context_usage.reset();
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        Some("history") => {
+            match context_history_text() {
+                Ok(text) => {
                     app.panel = PanelView::Context;
                     app.refresh(None);
                     app.push(Role::Command, command, &text);

@@ -159,23 +159,37 @@ pub(crate) fn format_run_trace(run_events: &[Value], fallback_events: &[String])
         return fallback_events.join("\n");
     }
     let mut rows = Vec::new();
+    let mut suppressed = 0usize;
     for event in run_events {
+        if is_trace_noise(event) {
+            suppressed += 1;
+            continue;
+        }
         let sequence = event
             .get("sequence")
             .and_then(Value::as_u64)
             .map(|value| format!("{value:02}"))
             .unwrap_or_else(|| "--".to_string());
         let event_type = value_string(event, &["type"]);
-        let agent = run_event_actor(event);
-        let summary = run_event_summary(event)
+        let route = trace_route(event);
+        let summary = trace_summary(event)
+            .if_empty_then(|| run_event_summary(event))
             .if_empty_then(|| event_type.clone())
             .if_empty_then(|| "runtime event".to_string());
         rows.push(format!(
-            "{} {:<18} {:<10} {}",
+            "{} {:<18} {:<22} {}",
             sequence,
             truncate_plain(&event_type, 18),
-            truncate_plain(&agent, 10),
+            truncate_plain(&route, 22),
             summary
+        ));
+    }
+    if rows.is_empty() && !fallback_events.is_empty() {
+        return fallback_events.join("\n");
+    }
+    if suppressed > 0 {
+        rows.push(format!(
+            "suppressed {suppressed} low-level stream/metric event(s)"
         ));
     }
     rows.join("\n")
@@ -278,6 +292,72 @@ fn parse_run_event(event: &Value) -> Option<TimelineItem> {
         "task.error" => Some(item("ERROR", &actor, "", "task failed", summary)),
         "llm.stream" => parse_llm_run_event(&actor, &llm_type, payload, summary),
         _ => None,
+    }
+}
+
+fn is_trace_noise(event: &Value) -> bool {
+    matches!(
+        value_string(event.get("payload").unwrap_or(&Value::Null), &["llm_event_type"]).as_str(),
+        "llm_chunk" | "llm_context" | "llm_call_metrics"
+    )
+}
+
+fn trace_route(event: &Value) -> String {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
+    let actor = run_event_actor(event);
+    let target = display_agent(&value_string(metadata, &["agent"]));
+    match (
+        value_string(event, &["type"]).as_str(),
+        value_string(payload, &["llm_event_type"]).as_str(),
+    ) {
+        ("action.started", "agent_call_start") if !target.is_empty() => {
+            format!("{actor} -> {target}")
+        }
+        ("action.completed", "agent_call_result") if !target.is_empty() => {
+            format!("{target} -> {actor}")
+        }
+        _ => actor,
+    }
+}
+
+fn trace_summary(event: &Value) -> String {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
+    match (
+        value_string(event, &["type"]).as_str(),
+        value_string(payload, &["llm_event_type"]).as_str(),
+    ) {
+        ("action.started", "agent_call_start") => {
+            let target = display_agent(&value_string(metadata, &["agent"]));
+            let mode = value_string(metadata, &["action"]);
+            if target.is_empty() {
+                String::new()
+            } else if mode.is_empty() {
+                format!("delegated task to {target}")
+            } else {
+                format!("delegated {mode} task")
+            }
+        }
+        ("action.completed", "agent_call_result") => "returned delegated result".to_string(),
+        ("action.started", "tool_start") => {
+            let tool = value_string(metadata, &["tool"]);
+            if tool.is_empty() {
+                String::new()
+            } else {
+                format!("calling tool {tool}")
+            }
+        }
+        ("action.completed", "tool_result") => {
+            let tool = value_string(metadata, &["tool"]);
+            if tool.is_empty() {
+                String::new()
+            } else {
+                format!("tool {tool} returned")
+            }
+        }
+        ("llm.stream", "llm_final") => "final response produced".to_string(),
+        _ => String::new(),
     }
 }
 
@@ -630,7 +710,7 @@ fn truncate_plain(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_timeline, build_timeline_from_run_events, format_timeline,
+        build_timeline, build_timeline_from_run_events, format_run_trace, format_timeline,
         format_timeline_from_run_events,
     };
     use serde_json::json;
@@ -726,5 +806,36 @@ mod tests {
         assert!(items.iter().any(|item| item.kind == "APPROVAL"));
         assert!(format_timeline_from_run_events(&events, &[], 10)
             .contains("returned final answer"));
+    }
+
+    #[test]
+    fn run_trace_suppresses_token_chunks() {
+        let trace = format_run_trace(
+            &[
+                json!({
+                    "sequence": 1,
+                    "type": "llm.stream",
+                    "agent_name": "architect",
+                    "summary": "llm_chunk",
+                    "payload": {"llm_event_type": "llm_chunk", "content": "hello"}
+                }),
+                json!({
+                    "sequence": 2,
+                    "type": "action.started",
+                    "agent_name": "architect",
+                    "summary": "Action started: explorer",
+                    "payload": {
+                        "llm_event_type": "agent_call_start",
+                        "metadata": {"agent": "explorer"}
+                    }
+                }),
+            ],
+            &[],
+        );
+
+        assert!(!trace.contains("llm_chunk"));
+        assert!(trace.contains("action.started"));
+        assert!(trace.contains("Architect -> Explorer"));
+        assert!(trace.contains("suppressed 1"));
     }
 }

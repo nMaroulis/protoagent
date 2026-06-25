@@ -29,7 +29,7 @@ from .context import (
     format_context_pack_for_prompt,
     refresh_context_index,
 )
-from .history import compact_saved_histories, reset_saved_histories
+from .history import compact_saved_histories, describe_saved_histories, reset_saved_histories
 from .llm import ollama_context_window_details, validate_protolink
 from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
@@ -146,6 +146,17 @@ def reset_protolink_history(session_id: str) -> str:
     result["summary"] = (
         f"Cleared ProtoLink conversation history for {', '.join(cleared)}."
         if cleared
+        else "No saved ProtoLink conversation history exists for this project."
+    )
+    return _json(result)
+
+
+def describe_protolink_history(session_id: str) -> str:
+    """Return a read-only summary of the current ProtoLink conversation memory."""
+    result = describe_saved_histories(session_id)
+    result["summary"] = (
+        "Saved ProtoLink conversation history for this project."
+        if result["found"]
         else "No saved ProtoLink conversation history exists for this project."
     )
     return _json(result)

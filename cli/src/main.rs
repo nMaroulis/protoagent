@@ -272,6 +272,7 @@ fn print_cli_help() {
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
+    println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
     println!("  proto-cli context compact    Compact ProtoLink history (tokens by default)");
     println!("  proto-cli context reset      Clear ProtoLink history and the session index");
     println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
@@ -516,7 +517,7 @@ fn show_dashboard() -> Result<()> {
         "/models scans local and cloud model options".to_string(),
         "/project sets the active project folder".to_string(),
         "Use @ inside a task to tag project files".to_string(),
-        "/context shows Context Loom evidence".to_string(),
+        "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
     ];
@@ -1092,6 +1093,15 @@ fn handle_context_command(args: &[String]) -> Result<()> {
             print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
             Ok(())
         }
+        Some("history") => {
+            let text = context_history_text()?;
+            print_panel(
+                "PROTOLINK MEMORY",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
         Some("reset") => {
             let text = reset_context_history()?;
             print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
@@ -1181,6 +1191,45 @@ pub(crate) fn reset_context_history() -> Result<String> {
     } else {
         Ok(summary.to_string())
     }
+}
+
+pub(crate) fn context_history_text() -> Result<String> {
+    let workspace = require_project_dir_string()?;
+    let session_id = project_session_id(&workspace);
+    let raw = call_describe_protolink_history(session_id)
+        .map_err(|err| anyhow!("Python ProtoLink history inspection error: {err:?}"))?;
+    let report: Value = serde_json::from_str(&raw)?;
+    let mut rows = vec![report
+        .get("summary")
+        .and_then(Value::as_str)
+        .unwrap_or("ProtoLink history inspection completed.")
+        .to_string()];
+
+    if let Some(agents) = report.get("agents").and_then(Value::as_array) {
+        for agent in agents {
+            let name = title_case_agent(agent.get("agent").and_then(Value::as_str).unwrap_or("agent"));
+            if !agent.get("found").and_then(Value::as_bool).unwrap_or(false) {
+                rows.push(format!("{name}: no saved model-facing history."));
+                continue;
+            }
+            let messages = agent.get("message_count").and_then(Value::as_u64).unwrap_or(0);
+            let tokens = agent.get("estimated_tokens").and_then(Value::as_u64).unwrap_or(0);
+            rows.push(format!(
+                "{name}: {messages} message(s), about {} tokens.",
+                format_token_count(tokens)
+            ));
+            if let Some(recent) = agent.get("recent").and_then(Value::as_array) {
+                for message in recent {
+                    let role = message.get("role").and_then(Value::as_str).unwrap_or("unknown");
+                    let preview = message.get("preview").and_then(Value::as_str).unwrap_or("");
+                    if !preview.trim().is_empty() {
+                        rows.push(format!("  {role}: {}", truncate_plain(preview, 96)));
+                    }
+                }
+            }
+        }
+    }
+    Ok(rows.join("\n"))
 }
 
 fn parse_compaction_request(values: &[&str]) -> Result<(&'static str, Option<usize>, usize)> {
@@ -1715,6 +1764,17 @@ fn call_reset_protolink_history(session_id: String) -> PyResult<String> {
         let module = py.import("protoagent_core.agent_engine")?;
         module
             .getattr("reset_protolink_history")?
+            .call1((session_id,))?
+            .extract()
+    })
+}
+
+fn call_describe_protolink_history(session_id: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("describe_protolink_history")?
             .call1((session_id,))?
             .extract()
     })

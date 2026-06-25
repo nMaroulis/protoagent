@@ -66,7 +66,6 @@ def create_explorer_agent(
         policy=CapabilityPolicy(
             {
                 "workspace.read": "allow",
-                "llm.history.compact": "allow",
             },
             default_effect="deny",
         ),

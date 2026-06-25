@@ -69,7 +69,6 @@ def create_coder_agent(
         policy=CapabilityPolicy(
             {
                 "workspace.write": "require_approval",
-                "llm.history.compact": "allow",
             },
             default_effect="deny",
         ),

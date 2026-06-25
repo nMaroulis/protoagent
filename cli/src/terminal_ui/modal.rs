@@ -174,8 +174,8 @@ pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     draw_status_modal(title, rows, StatusModalKind::Dismissible)
 }
 
-pub(super) fn draw_loading_modal(title: &str, rows: &[String]) -> Result<()> {
-    draw_status_modal(title, rows, StatusModalKind::Loading)
+pub(super) fn draw_loading_modal_frame(title: &str, rows: &[String], spinner: &'static str) -> Result<()> {
+    draw_status_modal(title, rows, StatusModalKind::Loading(spinner))
 }
 
 pub(super) fn draw_exit_modal() -> Result<()> {
@@ -192,7 +192,7 @@ pub(super) fn draw_exit_modal() -> Result<()> {
 #[derive(Clone, Copy)]
 enum StatusModalKind {
     Dismissible,
-    Loading,
+    Loading(&'static str),
     Exit,
 }
 
@@ -208,7 +208,9 @@ fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Res
     write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
     let heading = match kind {
         StatusModalKind::Dismissible => modal_title(title, modal_width),
-        StatusModalKind::Loading => clip_plain(&format!(" {title}  | LOADING"), modal_width as usize),
+        StatusModalKind::Loading(spinner) => {
+            clip_plain(&format!(" {title}  {spinner} LOADING"), modal_width as usize)
+        }
         StatusModalKind::Exit => clip_plain(&format!(" {title}  | ESC AGAIN TO EXIT"), modal_width as usize),
     };
     write_at(&mut out, x, y + 1, modal_width, &heading, black(), modal_border(), true)?;

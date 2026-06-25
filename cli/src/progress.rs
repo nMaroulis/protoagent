@@ -95,7 +95,7 @@ impl ProgressFile {
             if let Some(sample) = run_event.and_then(context_sample_from_run_event) {
                 batch.context_samples.push(sample);
             }
-            let event = if run_event.map(is_context_metric_event).unwrap_or(false) {
+            let event = if run_event.map(is_hidden_run_event).unwrap_or(false) {
                 None
             } else {
                 run_event
@@ -293,6 +293,94 @@ fn write_json_atomic(path: &PathBuf, value: &Value) -> std::io::Result<()> {
 }
 
 fn run_event_summary(value: &Value) -> Option<String> {
+    let payload = value.get("payload").unwrap_or(&Value::Null);
+    let llm_type = value_string(payload, &["llm_event_type"]);
+    if llm_type == "llm_chunk" {
+        return None;
+    }
+    let event_type = value_string(value, &["type"]);
+    let agent = run_event_agent(value);
+    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
+
+    match (event_type.as_str(), llm_type.as_str()) {
+        ("action.started", "agent_call_start") => {
+            let target = display_agent(&value_string(metadata, &["agent"]));
+            let action = value_string(metadata, &["action"]);
+            if !target.is_empty() {
+                let detail = if action.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({action})")
+                };
+                return Some(format!("{agent}: delegating to {target}{detail}."));
+            }
+        }
+        ("action.completed", "agent_call_result") => {
+            let target = display_agent(&value_string(metadata, &["agent"]));
+            if !target.is_empty() {
+                return Some(format!("{agent}: delegation from {target} returned."));
+            }
+        }
+        ("action.started", "tool_start") => {
+            let tool = value_string(metadata, &["tool"]);
+            if !tool.is_empty() {
+                return Some(format!("{agent}: calling tool {tool}."));
+            }
+        }
+        ("action.completed", "tool_result") => {
+            let tool = value_string(metadata, &["tool"]);
+            if !tool.is_empty() {
+                return Some(format!("{agent}: tool {tool} returned."));
+            }
+        }
+        ("action.failed", "tool_error") => {
+            let tool = value_string(metadata, &["tool"]);
+            if !tool.is_empty() {
+                return Some(format!("{agent}: tool {tool} failed."));
+            }
+        }
+        ("llm.stream", "llm_step") => {
+            return Some(format!(
+                "{agent} step {}: LLM step started.",
+                payload.get("step").and_then(Value::as_u64).unwrap_or(0)
+            ));
+        }
+        ("llm.stream", "llm_response") => return Some(format!("{agent}: LLM response.")),
+        ("llm.stream", "llm_action") => {
+            let action = value_string(payload, &["action"]);
+            if !action.is_empty() {
+                return Some(format!("{agent}: selected action {action}."));
+            }
+        }
+        ("llm.stream", "llm_final") => return Some(format!("{agent}: final response produced.")),
+        ("approval.required", _) => {
+            let action = value_string(payload, &["request", "action", "name"]);
+            return Some(if action.is_empty() {
+                format!("{agent}: Approval required.")
+            } else {
+                format!("{agent}: Approval required for {action}.")
+            });
+        }
+        ("approval.decided", _) => {
+            let approved = payload
+                .get("decision")
+                .and_then(|decision| decision.get("approved"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            return Some(format!(
+                "{agent}: Approval {}.",
+                if approved { "approved" } else { "denied" }
+            ));
+        }
+        ("action.policy", _) => {
+            let effect = value_string(payload, &["decision", "effect"]);
+            if !effect.is_empty() {
+                return Some(format!("{agent}: Policy decision: {effect}."));
+            }
+        }
+        _ => {}
+    }
+
     let summary = value.get("summary").and_then(Value::as_str)?.trim();
     if summary.is_empty() {
         return value.get("type").and_then(Value::as_str).map(str::to_string);
@@ -305,6 +393,17 @@ fn run_event_summary(value: &Value) -> Option<String> {
     }
 }
 
+fn is_hidden_run_event(value: &Value) -> bool {
+    is_context_metric_event(value)
+        || matches!(
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("llm_event_type"))
+                .and_then(Value::as_str),
+            Some("llm_chunk")
+        )
+}
+
 fn is_context_metric_event(value: &Value) -> bool {
     matches!(
         value
@@ -312,6 +411,15 @@ fn is_context_metric_event(value: &Value) -> bool {
             .and_then(|payload| payload.get("llm_event_type"))
             .and_then(Value::as_str),
         Some("llm_context" | "llm_call_metrics")
+    )
+}
+
+fn run_event_agent(value: &Value) -> String {
+    let payload = value.get("payload").unwrap_or(&Value::Null);
+    display_agent(
+        &value_string(value, &["agent_name"])
+            .if_empty_then(|| value_string(payload, &["agent_name"]))
+            .if_empty_then(|| "ProtoLink".to_string()),
     )
 }
 
@@ -702,6 +810,59 @@ mod tests {
         .unwrap();
 
         assert_eq!(progress.read_new(), vec!["coder: Action started: replace_file"]);
+        progress.cleanup();
+    }
+
+    #[test]
+    fn renders_normalized_delegation_as_agent_route() {
+        let mut progress = ProgressFile::new("normalized-delegation-test");
+        fs::write(
+            &progress.path,
+            serde_json::to_string(&json!({
+                "event": "legacy fallback",
+                "run_event": {
+                    "type": "action.started",
+                    "agent_name": "architect",
+                    "summary": "Action started: explorer",
+                    "payload": {
+                        "llm_event_type": "agent_call_start",
+                        "metadata": {"agent": "explorer", "action": "infer"}
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let events = progress.read_new();
+        assert_eq!(events, vec!["Architect: delegating to Explorer (infer)."]);
+        assert!(latest_progress_message(&events).contains("[Architect -> Explorer]"));
+        assert!(latest_progress_message(&events).contains("[Explorer]"));
+        progress.cleanup();
+    }
+
+    #[test]
+    fn suppresses_stream_chunks_from_live_progress() {
+        let mut progress = ProgressFile::new("chunk-suppression-test");
+        fs::write(
+            &progress.path,
+            serde_json::to_string(&json!({
+                "event": "llm_chunk",
+                "run_event": {
+                    "type": "llm.stream",
+                    "agent_name": "architect",
+                    "summary": "llm_chunk",
+                    "payload": {
+                        "llm_event_type": "llm_chunk",
+                        "content": "token"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(progress.read_new().is_empty());
         progress.cleanup();
     }
 

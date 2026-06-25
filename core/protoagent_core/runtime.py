@@ -70,7 +70,6 @@ async def _run_agent_deck(
         workspace_uri=Path(project).as_uri(),
         permissions={
             "agent.delegate": "allow",
-            "llm.history.compact": "allow",
             "workspace.read": "allow",
             "workspace.write": "allow",
         },
@@ -312,8 +311,8 @@ def _run_budget(provider: str, model: str, budget_type):
 
 
 def _trace_telemetry():
-    """Create ProtoLink local telemetry unless explicitly disabled."""
-    if os.getenv("PROTOAGENT_TRACE", "1").strip().lower() in {"0", "false", "no", "off"}:
+    """Create ProtoLink local telemetry when explicitly requested."""
+    if os.getenv("PROTOAGENT_TRACE", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return None
     try:
         from protolink import LocalTraceTelemetry
@@ -403,6 +402,9 @@ async def _send_task_streaming(
             _append_event(events, f"Stream event: {_content_to_text(payload)}", bridge)
             continue
 
+        if _is_llm_chunk_payload(payload):
+            continue
+
         run_event = await sink.emit_task_event(event, context=context)
         run_event_data = run_event.to_dict()
         summary = _run_event_summary(run_event_data)
@@ -455,6 +457,11 @@ def _normalize(value: Any) -> Any:
     if isinstance(value, list):
         return [_normalize(item) for item in value]
     return value
+
+
+def _is_llm_chunk_payload(payload: dict[str, Any]) -> bool:
+    """Return true for raw token chunks that should not become UI trace rows."""
+    return payload.get("type") == "task_llm_stream" and payload.get("llm_event_type") == "llm_chunk"
 
 
 def _append_event(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any
 
@@ -116,7 +117,87 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
 
     llm = create_llm(protolink_provider(requested), **llm_kwargs(requested, model))
     llm.configure_metrics(llm_model_profile(requested, model))
+    _hide_model_visible_history_compaction(llm)
     return llm
+
+
+def _hide_model_visible_history_compaction(llm: Any) -> None:
+    """Use ProtoLink compaction as an app API without exposing its tool to LLMs.
+
+    ProtoLink 0.6.2 exposes ``protolink_compact_history`` as a reserved
+    model-selectable tool. ProtoAgent compacts histories deterministically at
+    run boundaries and through ``/context compact``, so advertising that
+    maintenance tool to the model wastes context and can be hallucinated during
+    ordinary chat turns.
+    """
+    if getattr(llm, "_protoagent_hides_history_compaction_tool", False):
+        return
+
+    compactor = getattr(llm, "compactor", None)
+    if compactor is not None and not isinstance(compactor, _AppManagedHistoryCompactor):
+        llm.compactor = _AppManagedHistoryCompactor(compactor)
+
+    try:
+        from protolink.llms.compaction import HISTORY_COMPACTION_TOOL_NAME
+    except Exception:
+        HISTORY_COMPACTION_TOOL_NAME = "protolink_compact_history"
+
+    def filtered_tools(tools: Any) -> Any:
+        if not isinstance(tools, dict) or HISTORY_COMPACTION_TOOL_NAME not in tools:
+            return tools
+        return {
+            name: tool
+            for name, tool in tools.items()
+            if name != HISTORY_COMPACTION_TOOL_NAME
+        }
+
+    for method_name in ("call_action", "call_action_stream"):
+        original = getattr(llm, method_name, None)
+        if original is None:
+            continue
+
+        async def wrapper(*args, _original=original, **kwargs):
+            if "tools" in kwargs:
+                kwargs["tools"] = filtered_tools(kwargs["tools"])
+            result = _original(*args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        setattr(llm, method_name, wrapper)
+
+    llm._protoagent_hides_history_compaction_tool = True
+    _rebuild_initial_system_prompt_without_compaction(llm, HISTORY_COMPACTION_TOOL_NAME)
+
+
+class _AppManagedHistoryCompactor:
+    """Delegate ProtoLink compaction while suppressing model-visible tool text."""
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+
+    def append_tool_prompt(self, tools: str | None) -> str:
+        return tools or ""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+
+def _rebuild_initial_system_prompt_without_compaction(llm: Any, tool_name: str) -> None:
+    """Refresh constructor-built prompts that already advertised compaction."""
+    system_prompt = getattr(llm, "system_prompt", "")
+    build_system_prompt = getattr(llm, "build_system_prompt", None)
+    if not isinstance(system_prompt, str) or tool_name not in system_prompt or build_system_prompt is None:
+        return
+    try:
+        build_system_prompt(action_mode="json")
+    except TypeError:
+        try:
+            build_system_prompt()
+        except Exception:
+            return
+    except Exception:
+        return
 
 
 def validate_protolink() -> dict[str, Any]:

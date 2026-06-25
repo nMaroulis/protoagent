@@ -315,7 +315,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         PanelView::Context => {
             rows.push(row("loom", "deterministic workspace index plus source-cited Context Packs", magenta(), true));
             rows.push(row("window", "/context window 16k | auto", cyan(), true));
-            rows.push(row("memory", "/context compact [strategy] [limit] | reset", yellow(), true));
+            rows.push(row("memory", "/context history | compact [strategy] | reset", yellow(), true));
             rows.push(row("pack", "/context <query> previews workspace evidence", green(), false));
             rows.push(row("refresh", "/index refresh rebuilds the local SQLite index", muted(), false));
         }
@@ -363,7 +363,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
             rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
-            rows.push(row("context", "/context window 16k | compact [strategy] | reset", green(), false));
+            rows.push(row("context", "/context history | window 16k | compact | reset", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
             rows.push(row("cancel", "Esc or Ctrl-C while a task runs", red(), false));

@@ -49,6 +49,16 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ActionDeniedError):
             await agent.authorize_action(action, RunContext(session_id="session-test"))
 
+    async def test_reserved_history_compaction_tool_is_not_agent_authorized(self) -> None:
+        agent = explorer_module.create_explorer_agent(workspace=".", transport="http")
+        action = RunAction(
+            kind="llm.history.compact",
+            name="protolink_compact_history",
+            capabilities=frozenset({"llm.history.compact"}),
+        )
+        with self.assertRaises(ActionDeniedError):
+            await agent.authorize_action(action, RunContext(session_id="session-test"))
+
     def test_run_budget_uses_protolink_budget_carrier(self) -> None:
         with patch.dict(
             "os.environ",
@@ -245,6 +255,47 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "canceled")
         self.assertIsNone(result["content"])
+
+    async def test_streaming_trace_does_not_store_token_chunks(self) -> None:
+        from protolink import InMemoryEventSink, RunContext, Task
+        from protolink.core.events import TaskLLMStreamEvent
+
+        task = Task.create_infer(prompt="hello")
+        context = RunContext(session_id="session-test")
+        sink = InMemoryEventSink()
+
+        class Client:
+            async def send_task_streaming(self, **_kwargs):
+                yield TaskLLMStreamEvent(
+                    task_id=task.id,
+                    agent_name="architect",
+                    llm_event_type="llm_chunk",
+                    step=1,
+                    content="hello",
+                )
+                yield TaskLLMStreamEvent(
+                    task_id=task.id,
+                    agent_name="architect",
+                    llm_event_type="llm_final",
+                    step=1,
+                    content="done",
+                    final=True,
+                )
+
+        result = await _send_task_streaming(
+            client=Client(),
+            agent_url="runtime://architect",
+            task=task,
+            context=context,
+            sink=sink,
+            events=[],
+            bridge=RuntimeBridge(None),
+        )
+
+        self.assertEqual(result["content"], "done")
+        event_payloads = [event["payload"].get("llm_event_type") for event in sink.to_list()]
+        self.assertNotIn("llm_chunk", event_payloads)
+        self.assertIn("llm_final", event_payloads)
 
     def test_preflight_cancel_skips_model_execution(self) -> None:
         from protolink import InMemoryEventSink, RunContext, Task

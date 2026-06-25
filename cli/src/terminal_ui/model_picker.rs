@@ -1,10 +1,13 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use crate::{
     call_add_api_key, call_set_model, load_inventory_with_validation, ModelInfo, ModelProvider,
 };
 
-use super::modal::{draw_loading_modal, pick_choice_modal, prompt_line_modal, prompt_secret_modal};
+use super::modal::{draw_loading_modal_frame, pick_choice_modal, prompt_line_modal, prompt_secret_modal};
 use super::state::{PanelView, Role, TerminalApp};
 use super::TerminalSurface;
 
@@ -285,7 +288,7 @@ fn prompt_and_store_api_key(
     Ok(Some(updated))
 }
 
-fn load_inventory_with_feedback(
+pub(super) fn load_inventory_with_feedback(
     app: &mut TerminalApp,
     terminal: &mut TerminalSurface,
     command: &str,
@@ -295,16 +298,33 @@ fn load_inventory_with_feedback(
     app.panel = PanelView::Models;
     app.models_loading = true;
     app.activity = "loading model inventory".to_string();
-    terminal.render(app, None)?;
-    draw_loading_modal(
-        title,
-        &[
-            detail.to_string(),
-            "Ollama / LM Studio / llama.cpp     loading".to_string(),
-            "Cloud providers / key status       checking".to_string(),
-        ],
-    )?;
-    match load_inventory_with_validation(true) {
+    let rows = [
+        detail.to_string(),
+        "Ollama / LM Studio / llama.cpp     loading".to_string(),
+        "Cloud providers / key status       checking".to_string(),
+    ];
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(load_inventory_with_validation(true));
+    });
+    let spinner = ["|", "/", "-", "\\"];
+    let mut tick = 0usize;
+
+    let result = loop {
+        terminal.render(app, None)?;
+        draw_loading_modal_frame(title, &rows, spinner[tick % spinner.len()])?;
+        match receiver.recv_timeout(Duration::from_millis(120)) {
+            Ok(result) => break result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tick = tick.wrapping_add(1);
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(anyhow!("Model inventory worker exited before returning a result"));
+            }
+        }
+    };
+
+    match result {
         Ok(inventory) => {
             app.apply_model_inventory(&inventory);
             Ok(Some(inventory))

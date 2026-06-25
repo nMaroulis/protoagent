@@ -16,6 +16,7 @@ from protoagent_core.history import (
     AGENT_NAMES,
     compact_agent_histories_for_run,
     compact_saved_histories,
+    describe_saved_histories,
     reset_saved_histories,
 )
 
@@ -86,6 +87,33 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertEqual(set(reset["cleared_agents"]), set(AGENT_NAMES))
             for storage in storages.values():
                 self.assertNotIn("session-test", ConversationState(storage).to_dict())
+
+    def test_describe_saved_histories_reports_model_facing_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            storages = {
+                name: SQLiteStorage(
+                    db_path=str(Path(directory) / "history.sqlite"),
+                    table_name="agent_state",
+                    namespace=f"protoagent-{name}",
+                )
+                for name in AGENT_NAMES
+            }
+            ConversationState(storages["architect"]).save_history("session-test", _large_history())
+
+            with patch(
+                "protoagent_core.history.conversation_storage",
+                side_effect=lambda name: storages[name],
+            ):
+                report = describe_saved_histories("session-test", recent_messages=2)
+
+            architect = next(item for item in report["agents"] if item["agent"] == "architect")
+            explorer = next(item for item in report["agents"] if item["agent"] == "explorer")
+            self.assertTrue(report["found"])
+            self.assertTrue(architect["found"])
+            self.assertGreater(architect["message_count"], 0)
+            self.assertGreater(architect["estimated_tokens"], 0)
+            self.assertEqual(len(architect["recent"]), 2)
+            self.assertFalse(explorer["found"])
 
 
 def _large_history() -> ConversationHistory:

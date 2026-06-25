@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Iterable
 
+from protolink.llms.metrics import estimate_token_count
 from protolink.state.conversation import ConversationState
 
 from .agents.common import conversation_storage
@@ -21,8 +22,8 @@ def compact_agent_histories_for_run(
     """Apply ProtoLink token compaction before agents resume a session.
 
     The model profile supplies the real context window. Histories without a
-    configured window remain untouched; the LLM's built-in compaction tool is
-    still available for explicit user requests during inference.
+    configured window remain untouched; compaction remains an application
+    maintenance action rather than a model-visible tool.
     """
     if not session_id:
         return []
@@ -129,6 +130,46 @@ def reset_saved_histories(session_id: str) -> dict[str, Any]:
     return {"session_id": session_id, "cleared_agents": cleared, "found": bool(cleared)}
 
 
+def describe_saved_histories(session_id: str, *, recent_messages: int = 6) -> dict[str, Any]:
+    """Return a read-only summary of model-facing ProtoLink conversation state."""
+    agents: list[dict[str, Any]] = []
+    for agent_name in AGENT_NAMES:
+        storage = conversation_storage(agent_name)
+        if storage is None:
+            agents.append({"agent": agent_name, "found": False, "error": "storage unavailable"})
+            continue
+
+        sessions = ConversationState(storage).to_dict()
+        messages = sessions.get(session_id) or []
+        if not messages:
+            agents.append({"agent": agent_name, "found": False})
+            continue
+
+        recent = [
+            {
+                "role": str(message.get("role", "unknown")),
+                "name": str(message.get("name", "") or ""),
+                "preview": _preview_text(message.get("content")),
+            }
+            for message in messages[-recent_messages:]
+        ]
+        agents.append(
+            {
+                "agent": agent_name,
+                "found": True,
+                "message_count": len(messages),
+                "estimated_tokens": estimate_token_count(messages),
+                "recent": recent,
+            }
+        )
+
+    return {
+        "session_id": session_id,
+        "agents": agents,
+        "found": any(agent.get("found") for agent in agents),
+    }
+
+
 def _compaction_options(llm: Any, strategy: str, limit: int | None) -> dict[str, int]:
     if strategy == "recent":
         return {"max_messages": limit or 20}
@@ -150,3 +191,10 @@ def _history_budget_ratio() -> float:
     except ValueError:
         return DEFAULT_HISTORY_BUDGET_RATIO
     return min(0.9, max(0.2, value))
+
+
+def _preview_text(value: Any, *, limit: int = 180) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 3]}..."
