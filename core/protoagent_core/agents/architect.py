@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from protolink import Agent
+from protolink import Agent, CapabilityPolicy
 
 from .common import (
     QUIET_LOGGER,
@@ -44,6 +44,7 @@ def create_architect_agent(
     workspace: str | None = None,
     url: str | None = None,
     transport: str = "sse",
+    telemetry=None,
 ):
     """Create the user-facing orchestrator agent."""
     agent = Agent(
@@ -69,6 +70,14 @@ def create_architect_agent(
         system_prompt=with_workspace_contract(ARCHITECT_SYSTEM_PROMPT, workspace, "Architect"),
         storage=conversation_storage("architect"),
         state=["conversation"],
+        telemetry=telemetry,
+        policy=CapabilityPolicy(
+            {
+                "agent.delegate": "allow",
+                "llm.history.compact": "allow",
+            },
+            default_effect="deny",
+        ),
         logger=QUIET_LOGGER,
         verbosity=0,
     )

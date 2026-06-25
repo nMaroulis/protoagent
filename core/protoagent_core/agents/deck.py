@@ -18,6 +18,7 @@ def create_agent_deck(
     urls: dict[str, str] | None = None,
     transport: str = "sse",
     approval_handler=None,
+    telemetry=None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -34,6 +35,7 @@ def create_agent_deck(
         workspace=workspace,
         url=urls.get("explorer"),
         transport=transport,
+        telemetry=telemetry,
     )
     coder = create_coder_agent(
         registry=registry,
@@ -43,6 +45,7 @@ def create_agent_deck(
         url=urls.get("coder"),
         transport=transport,
         approval_handler=approval_handler,
+        telemetry=telemetry,
     )
     architect = create_architect_agent(
         registry=registry,
@@ -51,6 +54,7 @@ def create_agent_deck(
         workspace=workspace,
         url=urls.get("architect"),
         transport=transport,
+        telemetry=telemetry,
     )
     return {
         "explorer": explorer,

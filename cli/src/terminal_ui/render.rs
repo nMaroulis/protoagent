@@ -326,8 +326,17 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Timeline => {
             if let Some(response) = &app.last_response {
-                rows.push(row("summary", crate::timeline::summary(&response.events), cyan(), true));
-                for line in crate::timeline::panel_rows(&response.events, 5) {
+                rows.push(row(
+                    "summary",
+                    crate::timeline::summary_from_run_events(&response.run_events, &response.events),
+                    cyan(),
+                    true,
+                ));
+                for line in crate::timeline::panel_rows_from_run_events(
+                    &response.run_events,
+                    &response.events,
+                    5,
+                ) {
                     rows.push(row("step", line, yellow(), false));
                 }
             } else {

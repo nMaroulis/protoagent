@@ -389,9 +389,9 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     }
     print_panel("RUN SUMMARY", &summary, PanelTone::Magenta);
 
-    if !response.events.is_empty() {
-        render_agent_trace(&response.events);
-        render_agent_timeline(&response.events);
+    if !response.run_events.is_empty() || !response.events.is_empty() {
+        render_agent_trace(&response.run_events, &response.events);
+        render_agent_timeline(&response.run_events, &response.events);
     }
 
     if !response.answer.trim().is_empty() {
@@ -423,22 +423,17 @@ fn render_run_banner(query: &str) {
     println!("{}", style(repeat_char('-', terminal_width())).dim());
 }
 
-fn render_agent_trace(events: &[String]) {
+fn render_agent_trace(run_events: &[Value], events: &[String]) {
     println!("{}", style("AGENT TRACE").bold().underlined().cyan());
-    for (idx, event) in events.iter().enumerate() {
-        let label = match idx % 3 {
-            0 => style("ARCH").magenta().bold(),
-            1 => style("EXPL").cyan().bold(),
-            _ => style("CODE").yellow().bold(),
-        };
-        println!("  {} {} {}", style(format!("{:02}", idx + 1)).dim(), label, event);
+    for line in timeline::format_run_trace(run_events, events).lines() {
+        println!("  {}", line);
     }
     println!();
 }
 
-fn render_agent_timeline(events: &[String]) {
+fn render_agent_timeline(run_events: &[Value], events: &[String]) {
     println!("{}", style("AGENT TIMELINE").bold().underlined().cyan());
-    for line in timeline::format_timeline(events, 18).lines() {
+    for line in timeline::format_timeline_from_run_events(run_events, events, 18).lines() {
         println!("  {}", line);
     }
     println!();

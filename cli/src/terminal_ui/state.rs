@@ -101,13 +101,19 @@ impl TerminalApp {
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
         self.jump_to_bottom();
-        if !response.events.is_empty() {
+        if !response.run_events.is_empty() || !response.events.is_empty() {
+            let trace = crate::timeline::format_run_trace(&response.run_events, &response.events);
+            let trace_lines = trace.lines().map(str::to_string).collect::<Vec<_>>();
+            let trace_body = compact_agent_trace(&trace_lines);
             self.messages.push(TerminalMessage {
                 role: Role::System,
                 label: "Agent Trace".to_string(),
-                body: compact_agent_trace(&response.events),
-                meta: vec![format!("{} event(s)", response.events.len())],
-                details: vec![("Full trace".to_string(), response.events.join("\n"))],
+                body: trace_body,
+                meta: vec![format!(
+                    "{} event(s)",
+                    response.run_events.len().max(response.events.len())
+                )],
+                details: vec![("Full trace".to_string(), trace)],
             });
         }
         let body = response
@@ -143,9 +149,14 @@ impl TerminalApp {
         if !response.thought_process.is_empty() {
             message.details.push(("Core notes".to_string(), response.thought_process.clone()));
         }
-        if !response.events.is_empty() {
-            let timeline = crate::timeline::format_timeline(&response.events, 12);
-            message.details.push(("Agent trace".to_string(), response.events.join("\n")));
+        if !response.run_events.is_empty() || !response.events.is_empty() {
+            let trace = crate::timeline::format_run_trace(&response.run_events, &response.events);
+            let timeline = crate::timeline::format_timeline_from_run_events(
+                &response.run_events,
+                &response.events,
+                12,
+            );
+            message.details.push(("Agent trace".to_string(), trace));
             message.details.push(("Agent timeline".to_string(), timeline));
         }
         if !response.run_events.is_empty() {

@@ -54,7 +54,7 @@ async def _run_agent_deck(
     bridge: RuntimeBridge,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
-    from protolink import InMemoryEventSink, RunContext, Task
+    from protolink import InMemoryEventSink, RunBudget, RunContext, Task
     from protolink.client import AgentClient
     from protolink.discovery import Registry
 
@@ -69,9 +69,12 @@ async def _run_agent_deck(
         session_id=session_id,
         workspace_uri=Path(project).as_uri(),
         permissions={
+            "agent.delegate": "allow",
+            "llm.history.compact": "allow",
             "workspace.read": "allow",
             "workspace.write": "allow",
         },
+        budget=_run_budget(provider, model, RunBudget),
         metadata={"application": "protoagent", "interface": "rust-cli"},
     )
     context.trace_id = context.run_id
@@ -116,6 +119,7 @@ async def _run_agent_deck(
         if canceled := canceled_before_execution():
             return canceled
 
+        telemetry = _trace_telemetry()
         deck = create_agent_deck(
             registry=registry,
             provider=provider,
@@ -128,6 +132,7 @@ async def _run_agent_deck(
             },
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
+            telemetry=telemetry,
         )
         compaction_reports = compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
@@ -282,6 +287,66 @@ def _runtime_timeout() -> int:
         return max(1, int(raw))
     except ValueError:
         return 600
+
+
+def _run_budget(provider: str, model: str, budget_type):
+    """Build ProtoLink's typed budget carrier for this application run."""
+    cfg = provider_config(provider)
+    context_window = ollama_context_window(cfg) if provider == "ollama" else _env_or_config_int(
+        "PROTOAGENT_RUN_MAX_INPUT_TOKENS",
+        cfg.get("context_window"),
+    )
+    return budget_type(
+        max_steps=_env_int("PROTOAGENT_RUN_MAX_STEPS"),
+        max_llm_calls=_env_int("PROTOAGENT_RUN_MAX_LLM_CALLS"),
+        max_tool_calls=_env_int("PROTOAGENT_RUN_MAX_TOOL_CALLS"),
+        max_runtime_seconds=_env_float("PROTOAGENT_RUN_MAX_SECONDS") or float(_runtime_timeout()),
+        max_input_tokens=context_window,
+        max_output_tokens=_env_int("PROTOAGENT_RUN_MAX_OUTPUT_TOKENS"),
+        metadata={
+            "provider": provider,
+            "model": model,
+            "source": "protoagent-runtime",
+        },
+    )
+
+
+def _trace_telemetry():
+    """Create ProtoLink local telemetry unless explicitly disabled."""
+    if os.getenv("PROTOAGENT_TRACE", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    try:
+        from protolink import LocalTraceTelemetry
+    except Exception:
+        return None
+    raw_dir = os.getenv("PROTOAGENT_CONFIG_DIR")
+    config_dir = Path(raw_dir).expanduser() if raw_dir else Path.home() / ".protoagent"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    return LocalTraceTelemetry(path=config_dir / "traces.jsonl")
+
+
+def _env_int(name: str) -> int | None:
+    return _optional_int(os.getenv(name))
+
+
+def _env_float(name: str) -> float | None:
+    try:
+        value = float(os.getenv(name, ""))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _env_or_config_int(name: str, fallback: Any) -> int | None:
+    return _env_int(name) or _optional_int(fallback)
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _agent_transport() -> str:

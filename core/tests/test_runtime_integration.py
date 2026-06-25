@@ -5,8 +5,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from protolink import ActionDeniedError, RunContext
+from protolink import ActionDeniedError, RunAction, RunBudget, RunContext
 
 import protoagent_core.agents.coder as coder_module
 import protoagent_core.agents.explorer as explorer_module
@@ -14,6 +15,7 @@ from protoagent_core.runtime import (
     _context_from_delivery,
     _monitor_cancellation,
     _preflight_cancellation_result,
+    _run_budget,
     _send_task_streaming,
 )
 from protoagent_core.runtime_bridge import RuntimeBridge
@@ -36,6 +38,34 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schema["required"], ["pattern"])
         self.assertEqual(schema["properties"]["path"]["default"], ".")
         self.assertEqual(schema["properties"]["file_filter"]["default"], ".*")
+
+    async def test_explorer_policy_denies_unmatched_capability_by_default(self) -> None:
+        agent = explorer_module.create_explorer_agent(workspace=".", transport="http")
+        action = RunAction(
+            kind="shell.execute",
+            name="run_shell",
+            capabilities=frozenset({"shell.execute"}),
+        )
+        with self.assertRaises(ActionDeniedError):
+            await agent.authorize_action(action, RunContext(session_id="session-test"))
+
+    def test_run_budget_uses_protolink_budget_carrier(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROTOAGENT_RUN_MAX_STEPS": "12",
+                "PROTOAGENT_RUN_MAX_INPUT_TOKENS": "16000",
+                "PROTOAGENT_RUN_MAX_OUTPUT_TOKENS": "2048",
+                "PROTOAGENT_RUN_MAX_SECONDS": "45",
+            },
+        ):
+            budget = _run_budget("openai", "gpt-test", RunBudget)
+
+        self.assertEqual(budget.max_steps, 12)
+        self.assertEqual(budget.max_runtime_seconds, 45.0)
+        self.assertEqual(budget.max_input_tokens, 16000)
+        self.assertEqual(budget.max_output_tokens, 2048)
+        self.assertEqual(budget.metadata["source"], "protoagent-runtime")
 
     def test_final_canceled_context_is_read_from_delivery(self) -> None:
         context = RunContext(session_id="session-test").cancel("Stopped by test")

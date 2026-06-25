@@ -40,6 +40,7 @@ def create_coder_agent(
     url: str | None = None,
     transport: str = "sse",
     approval_handler=None,
+    telemetry=None,
 ):
     """Create the policy-gated file modification agent."""
     agent = Agent(
@@ -63,8 +64,15 @@ def create_coder_agent(
         system_prompt=with_workspace_contract(CODER_SYSTEM_PROMPT, workspace, "Coder"),
         storage=conversation_storage("coder"),
         state=["conversation"],
+        telemetry=telemetry,
         logger=QUIET_LOGGER,
-        policy=CapabilityPolicy({"workspace.write": "require_approval"}),
+        policy=CapabilityPolicy(
+            {
+                "workspace.write": "require_approval",
+                "llm.history.compact": "allow",
+            },
+            default_effect="deny",
+        ),
         approval_handler=approval_handler,
         verbosity=0,
     )

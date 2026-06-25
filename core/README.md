@@ -15,7 +15,7 @@ pip install "protolink[http,llms]>=0.6.2"
 ## Layout
 
 - `protoagent_core/agent_engine.py` - PyO3-facing functions for prompts, model discovery, config, and doctor checks.
-- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`, normalizes `RunEvent`s, and sends tasks to Architect with `AgentClient`.
+- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget`, normalizes `RunEvent`s, records local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
 - `protoagent_core/history.py` - ProtoLink `HistoryCompactor` policy for automatic token-budget compaction plus explicit compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
@@ -39,6 +39,8 @@ terminal context meter. Conversation continuity lives in ProtoLink's
 per-agent SQLite state. Before a session resumes, the core uses
 `LLM.compact_history(strategy="tokens")` when that profile's history budget is
 exceeded; `/context compact` exposes recent, tokens, and summary strategies.
+The Rust trace and timeline views consume normalized `RunEvent`s first, then
+fall back to legacy text summaries for scaffold diagnostics.
 
 Before each model run, Context Loom refreshes a deterministic local index and
 injects a bounded Context Pack into the Architect prompt. Explorer also exposes
@@ -50,6 +52,8 @@ Useful runtime switches:
 - `PROTOAGENT_STREAM=0` disables stream consumption and uses request/response.
 - `PROTOAGENT_AGENT_TRANSPORT=http` forces the older HTTP-only agent mesh.
 - `PROTOAGENT_STREAM_TRACE_LIMIT=120` controls how many stream summaries are retained for the Rust UI.
+- `PROTOAGENT_TRACE=0` disables `LocalTraceTelemetry`; otherwise traces append to `~/.protoagent/traces.jsonl`.
+- `PROTOAGENT_RUN_MAX_STEPS`, `PROTOAGENT_RUN_MAX_LLM_CALLS`, `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`, `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, and `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` populate the run's typed `RunBudget`.
 
 Use scaffold mode only when you want to test the Rust/Python contract without contacting a model:
 
@@ -68,3 +72,7 @@ those actions and calls the Rust-owned approval handler before execution. The
 same control bridge forwards TUI cancellation through `AgentClient.cancel_task()`.
 The embedded in-process fast path uses the same typed `TaskCancellationRequest`
 and falls back to the transport control plane when needed.
+Agent policies are deny-by-default: Architect explicitly allows delegation,
+Explorer allows read-only workspace capabilities, Coder requires approval for
+workspace writes, and every agent allows ProtoLink's reserved history
+compaction capability.

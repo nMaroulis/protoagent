@@ -4,7 +4,7 @@
   <img src="https://github.com/nMaroulis/protoagent/blob/main/misc/assets/banner.jpeg?raw=true" alt="ProtoAgent Logo" width="60%">
 </div>
 
-**An enterprise-grade, local-first AI agent ecosystem engineered for speed, privacy, and absolute developer control.** *Note: The formal orchestration architecture and mathematical routing models are currently being formalized. (White paper pending).*
+**A local-first, experimental AI agent ecosystem engineered for speed, privacy, and absolute developer control.**
 
 The core philosophy of ProtoAgent is simple: **Decouple the Brain from the Frontends.** Cloud subscriptions and bundled API plans are great for one-off chats, but when you start running complex, multi-agent autonomous loops, your quotas for Claude and Gemini go out pretty fast. Agentic coding requires hundreds of iterative steps, which means it fundamentally belongs on local compute. ProtoAgent is designed to give you that premium, autonomous coding assistant experience—entirely for free, running on your own hardware.
 
@@ -26,6 +26,8 @@ If **LangChain** is the massive, heavy enterprise framework for cloud models, `p
 
 Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).
 
+📝 Check out this article on **Level Up Coding** on **Medium**, for lessons learned while building this project: [Building My Own Local “Claude Code”: What I Learned Demystifying Agentic Coding under the Hood](https://levelup.gitconnected.com/building-my-own-local-claude-code-what-i-learned-demystifying-agentic-coding-under-the-hood-8772874b91b8)
+
 ### 2. The CLI (The Terminal Face)
 
 **Embedded via PyO3 • Rust**
@@ -33,6 +35,11 @@ A blazing-fast, gorgeous terminal wrapper for developers who live in the shell.
 
 * **The Experience:** Think of this as a purely local, offline version of **Claude Code** or **Clive**.
 * **Zero Overhead:** Because it's written in Rust, it launches instantly. It intercepts the Python core's output to render smooth progress spinners and forces an interactive `[Y/n]` approval prompt before the agent is allowed to execute any bash commands or modify your files.
+
+
+> The following animation shows a demo of a simple Task handled by the ProtoAgent CLI.
+
+![cli_demo](https://raw.githubusercontent.com/nMaroulis/protoagent/refs/heads/main/misc/assets/cli/simple_task.gif)
 
 ### 3. The ACP Server (The Editor Face)
 

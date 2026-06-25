@@ -112,7 +112,7 @@ pub(crate) fn record_turn(prompt: &str, response: &CoreResponse) -> Result<()> {
         event_count: response.run_events.len().max(response.events.len()),
         requires_approval: !response.approval_requests.is_empty(),
         file_target: response.file_target.clone(),
-        timeline: timeline::build_timeline(&response.events),
+        timeline: timeline::build_timeline_from_run_events(&response.run_events, &response.events),
     });
     if session.history.len() > MAX_TURNS_PER_SESSION {
         let overflow = session.history.len() - MAX_TURNS_PER_SESSION;

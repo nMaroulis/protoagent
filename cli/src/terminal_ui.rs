@@ -117,7 +117,15 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             app.panel = PanelView::Timeline;
             app.refresh(None);
             if let Some(response) = &app.last_response {
-                app.push(Role::Command, command, &crate::timeline::format_timeline(&response.events, 24));
+                app.push(
+                    Role::Command,
+                    command,
+                    &crate::timeline::format_timeline_from_run_events(
+                        &response.run_events,
+                        &response.events,
+                        24,
+                    ),
+                );
             } else {
                 app.push(Role::Command, command, "No timeline yet. Run a task first.");
             }
@@ -178,10 +186,14 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         }
         "/trace" => {
             if let Some(response) = &app.last_response {
-                if response.events.is_empty() {
+                if response.run_events.is_empty() && response.events.is_empty() {
                     app.push(Role::Command, "/trace", "No agent trace in the last response.");
                 } else {
-                    app.push(Role::Command, "/trace", &response.events.join("\n"));
+                    app.push(
+                        Role::Command,
+                        "/trace",
+                        &crate::timeline::format_run_trace(&response.run_events, &response.events),
+                    );
                 }
             } else {
                 app.push(Role::Command, "/trace", "No response in this session yet.");

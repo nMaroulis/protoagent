@@ -36,6 +36,7 @@ def create_explorer_agent(
     workspace: str | None = None,
     url: str | None = None,
     transport: str = "sse",
+    telemetry=None,
 ):
     """Create the read-only repository cartographer."""
     agent = Agent(
@@ -60,8 +61,15 @@ def create_explorer_agent(
         system_prompt=with_workspace_contract(EXPLORER_SYSTEM_PROMPT, workspace, "Explorer"),
         storage=conversation_storage("explorer"),
         state=["conversation"],
+        telemetry=telemetry,
         logger=QUIET_LOGGER,
-        policy=CapabilityPolicy({"workspace.read": "allow"}),
+        policy=CapabilityPolicy(
+            {
+                "workspace.read": "allow",
+                "llm.history.compact": "allow",
+            },
+            default_effect="deny",
+        ),
         verbosity=0,
     )
     set_transport_timeout(agent.transport, 600)

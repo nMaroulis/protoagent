@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TimelineItem {
@@ -29,8 +30,36 @@ pub(crate) fn build_timeline(events: &[String]) -> Vec<TimelineItem> {
     compact_repeated(items)
 }
 
+pub(crate) fn build_timeline_from_run_events(
+    run_events: &[Value],
+    fallback_events: &[String],
+) -> Vec<TimelineItem> {
+    let items = compact_repeated(run_events.iter().filter_map(parse_run_event).collect());
+    if items.is_empty() {
+        build_timeline(fallback_events)
+    } else {
+        items
+    }
+}
+
 pub(crate) fn format_timeline(events: &[String], limit: usize) -> String {
     let items = build_timeline(events);
+    format_items(&items, limit)
+}
+
+pub(crate) fn format_timeline_from_run_events(
+    run_events: &[Value],
+    fallback_events: &[String],
+    limit: usize,
+) -> String {
+    if run_events.is_empty() {
+        return format_timeline(fallback_events, limit);
+    }
+    let items = build_timeline_from_run_events(run_events, fallback_events);
+    format_items(&items, limit)
+}
+
+fn format_items(items: &[TimelineItem], limit: usize) -> String {
     if items.is_empty() {
         return "No structured timeline events yet.".to_string();
     }
@@ -56,6 +85,22 @@ pub(crate) fn format_timeline(events: &[String], limit: usize) -> String {
 
 pub(crate) fn panel_rows(events: &[String], limit: usize) -> Vec<String> {
     let items = build_timeline(events);
+    panel_rows_for_items(&items, limit)
+}
+
+pub(crate) fn panel_rows_from_run_events(
+    run_events: &[Value],
+    fallback_events: &[String],
+    limit: usize,
+) -> Vec<String> {
+    if run_events.is_empty() {
+        return panel_rows(fallback_events, limit);
+    }
+    let items = build_timeline_from_run_events(run_events, fallback_events);
+    panel_rows_for_items(&items, limit)
+}
+
+fn panel_rows_for_items(items: &[TimelineItem], limit: usize) -> Vec<String> {
     if items.is_empty() {
         return vec!["No structured timeline yet. Run a task first.".to_string()];
     }
@@ -70,13 +115,28 @@ pub(crate) fn panel_rows(events: &[String], limit: usize) -> Vec<String> {
         ));
     }
     if items.len() > limit {
-        rows.push(format!("+{} more event(s). Use /timeline for the full view.", items.len() - limit));
+        rows.push(format!(
+            "+{} more event(s). Use /timeline for the full view.",
+            items.len() - limit
+        ));
     }
     rows
 }
 
 pub(crate) fn summary(events: &[String]) -> String {
     let items = build_timeline(events);
+    summarize_items(&items)
+}
+
+pub(crate) fn summary_from_run_events(run_events: &[Value], fallback_events: &[String]) -> String {
+    if run_events.is_empty() {
+        return summary(fallback_events);
+    }
+    let items = build_timeline_from_run_events(run_events, fallback_events);
+    summarize_items(&items)
+}
+
+fn summarize_items(items: &[TimelineItem]) -> String {
     if items.is_empty() {
         return "No timeline events yet.".to_string();
     }
@@ -92,6 +152,225 @@ pub(crate) fn summary(events: &[String]) -> String {
         tools,
         approvals
     )
+}
+
+pub(crate) fn format_run_trace(run_events: &[Value], fallback_events: &[String]) -> String {
+    if run_events.is_empty() {
+        return fallback_events.join("\n");
+    }
+    let mut rows = Vec::new();
+    for event in run_events {
+        let sequence = event
+            .get("sequence")
+            .and_then(Value::as_u64)
+            .map(|value| format!("{value:02}"))
+            .unwrap_or_else(|| "--".to_string());
+        let event_type = value_string(event, &["type"]);
+        let agent = run_event_actor(event);
+        let summary = run_event_summary(event)
+            .if_empty_then(|| event_type.clone())
+            .if_empty_then(|| "runtime event".to_string());
+        rows.push(format!(
+            "{} {:<18} {:<10} {}",
+            sequence,
+            truncate_plain(&event_type, 18),
+            truncate_plain(&agent, 10),
+            summary
+        ));
+    }
+    rows.join("\n")
+}
+
+fn parse_run_event(event: &Value) -> Option<TimelineItem> {
+    let event_type = value_string(event, &["type"]);
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    let llm_type = value_string(payload, &["llm_event_type"]);
+    let actor = run_event_actor(event);
+    let summary = run_event_summary(event);
+
+    match event_type.as_str() {
+        "action.requested" => Some(item(
+            "ACTION",
+            &actor,
+            "",
+            "requested runtime action",
+            action_name(payload).if_empty(summary),
+        )),
+        "action.policy" => Some(item(
+            "POLICY",
+            &actor,
+            "Policy",
+            "evaluated runtime action",
+            decision_effect(payload).if_empty(summary),
+        )),
+        "approval.required" => Some(item(
+            "APPROVAL",
+            &actor,
+            "Human",
+            "requested runtime approval",
+            action_name(payload).if_empty(summary),
+        )),
+        "approval.decided" => {
+            let approved = payload
+                .get("decision")
+                .and_then(|decision| decision.get("approved"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            Some(item(
+                "APPROVAL",
+                &actor,
+                "Human",
+                if approved {
+                    "approved runtime action"
+                } else {
+                    "denied runtime action"
+                },
+                summary,
+            ))
+        }
+        "action.started" => {
+            if llm_type == "agent_call_start" {
+                return Some(item(
+                    "SEND",
+                    &actor,
+                    &metadata_string(payload, "agent"),
+                    "delegated task",
+                    metadata_string(payload, "action"),
+                ));
+            }
+            Some(item(
+                "TOOL",
+                &actor,
+                &metadata_string(payload, "tool").if_empty_else(|| action_name(payload)),
+                "started runtime action",
+                summary,
+            ))
+        }
+        "action.completed" => {
+            if llm_type == "agent_call_result" {
+                let target = metadata_string(payload, "agent");
+                return Some(item("RETURN", &target, &actor, "returned delegated result", ""));
+            }
+            Some(item(
+                "TOOL",
+                &actor,
+                &metadata_string(payload, "tool").if_empty_else(|| action_name(payload)),
+                "completed runtime action",
+                summary,
+            ))
+        }
+        "action.denied" => Some(item(
+            "POLICY",
+            &actor,
+            "Policy",
+            "denied runtime action",
+            summary,
+        )),
+        "action.failed" => Some(item("ERROR", &actor, "", "runtime action failed", summary)),
+        "task.status" => Some(item(
+            "TASK",
+            "ProtoLink",
+            &actor,
+            "task state changed",
+            summary,
+        )),
+        "task.progress" => Some(item("TASK", "ProtoLink", &actor, "progress update", summary)),
+        "task.error" => Some(item("ERROR", &actor, "", "task failed", summary)),
+        "llm.stream" => parse_llm_run_event(&actor, &llm_type, payload, summary),
+        _ => None,
+    }
+}
+
+trait EmptyString {
+    fn if_empty(self, fallback: String) -> String;
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String;
+    fn if_empty_else(self, fallback: impl FnOnce() -> String) -> String;
+}
+
+impl EmptyString for String {
+    fn if_empty(self, fallback: String) -> String {
+        if self.is_empty() { fallback } else { self }
+    }
+
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
+        if self.is_empty() { fallback() } else { self }
+    }
+
+    fn if_empty_else(self, fallback: impl FnOnce() -> String) -> String {
+        if self.is_empty() { fallback() } else { self }
+    }
+}
+
+fn run_event_actor(event: &Value) -> String {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    display_agent(
+        &value_string(event, &["agent_name"])
+            .if_empty_else(|| value_string(payload, &["agent_name"]))
+            .if_empty_else(|| metadata_string(payload, "agent"))
+            .if_empty_else(|| "ProtoLink".to_string()),
+    )
+}
+
+fn run_event_summary(event: &Value) -> String {
+    value_string(event, &["summary"]).trim().to_string()
+}
+
+fn action_name(payload: &Value) -> String {
+    value_string(payload, &["action", "name"])
+        .if_empty_else(|| value_string(payload, &["request", "action", "name"]))
+        .if_empty_else(|| value_string(payload, &["metadata", "action", "name"]))
+}
+
+fn decision_effect(payload: &Value) -> String {
+    value_string(payload, &["decision", "effect"])
+        .if_empty_else(|| value_string(payload, &["metadata", "decision", "effect"]))
+}
+
+fn metadata_string(payload: &Value, key: &str) -> String {
+    payload
+        .get("metadata")
+        .and_then(|metadata| metadata.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn value_string(value: &Value, path: &[&str]) -> String {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key).unwrap_or(&Value::Null);
+    }
+    current.as_str().unwrap_or("").to_string()
+}
+
+fn parse_llm_run_event(
+    actor: &str,
+    llm_type: &str,
+    payload: &Value,
+    summary: String,
+) -> Option<TimelineItem> {
+    match llm_type {
+        "llm_step" => Some(item("MODEL", actor, "", agent_work_label(actor), "")),
+        "llm_response" => Some(item("MODEL", actor, "", "received model response", "")),
+        "llm_action" => Some(item(
+            "ACTION",
+            actor,
+            "",
+            "selected next action",
+            value_string(payload, &["action"]).if_empty(summary),
+        )),
+        "llm_final" => Some(item("DONE", actor, "CLI", "returned final answer", "")),
+        "llm_parse_error" | "llm_retry" => Some(item(
+            "MODEL",
+            actor,
+            "",
+            "retrying model action",
+            summary,
+        )),
+        "llm_error" => Some(item("ERROR", actor, "", "model call failed", summary)),
+        "llm_context" | "llm_call_metrics" | "llm_chunk" => None,
+        _ => None,
+    }
 }
 
 fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
@@ -350,7 +629,11 @@ fn truncate_plain(text: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_timeline, format_timeline};
+    use super::{
+        build_timeline, build_timeline_from_run_events, format_timeline,
+        format_timeline_from_run_events,
+    };
+    use serde_json::json;
 
     #[test]
     fn builds_agent_handoff_timeline() {
@@ -363,9 +646,21 @@ mod tests {
         ];
 
         let items = build_timeline(&events);
-        assert!(items.iter().any(|item| item.actor == "CLI" && item.target == "Architect"));
-        assert!(items.iter().any(|item| item.actor == "Architect" && item.target == "Explorer"));
-        assert!(items.iter().any(|item| item.actor == "Architect" && item.target == "Coder"));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.actor == "CLI" && item.target == "Architect")
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.actor == "Architect" && item.target == "Explorer")
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.actor == "Architect" && item.target == "Coder")
+        );
         assert!(format_timeline(&events, 10).contains("Architect -> Coder"));
     }
 
@@ -381,5 +676,55 @@ mod tests {
         assert!(timeline.contains("Architect"));
         assert!(timeline.contains("Explorer -> Workspace"));
         assert!(timeline.contains("Coder -> Approval"));
+    }
+
+    #[test]
+    fn builds_timeline_from_normalized_run_events() {
+        let events = vec![
+            json!({
+                "type": "action.started",
+                "agent_name": "architect",
+                "summary": "Action started: explorer",
+                "payload": {
+                    "llm_event_type": "agent_call_start",
+                    "metadata": {"agent": "explorer", "action": "infer"}
+                }
+            }),
+            json!({
+                "type": "action.started",
+                "agent_name": "explorer",
+                "summary": "Action started: read_file",
+                "payload": {
+                    "llm_event_type": "tool_start",
+                    "metadata": {"tool": "read_file"}
+                }
+            }),
+            json!({
+                "type": "approval.required",
+                "agent_name": "coder",
+                "summary": "Approval required: replace_file",
+                "payload": {"request": {"action": {"name": "replace_file"}}}
+            }),
+            json!({
+                "type": "llm.stream",
+                "agent_name": "architect",
+                "payload": {"llm_event_type": "llm_final"}
+            }),
+        ];
+
+        let items = build_timeline_from_run_events(&events, &[]);
+        assert!(
+            items
+                .iter()
+                .any(|item| item.actor == "Architect" && item.target == "Explorer")
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.actor == "Explorer" && item.target == "Read_file")
+        );
+        assert!(items.iter().any(|item| item.kind == "APPROVAL"));
+        assert!(format_timeline_from_run_events(&events, &[], 10)
+            .contains("returned final answer"));
     }
 }
