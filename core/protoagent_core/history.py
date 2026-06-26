@@ -1,30 +1,25 @@
-"""ProtoLink-owned conversation history policy for ProtoAgent."""
+"""ProtoLink-owned conversation state controls for ProtoAgent."""
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Iterable
 
+from protolink import Agent, CapabilityPolicy, StateOperationResult
 from protolink.llms.metrics import estimate_token_count
-from protolink.state.conversation import ConversationState
 
-from .agents.common import conversation_storage
-from .llm import create_llm_from_config
+from .agents.common import QUIET_LOGGER, conversation_storage
 
 AGENT_NAMES = ("architect", "explorer", "coder")
 DEFAULT_HISTORY_BUDGET_RATIO = 0.7
 
 
-def compact_agent_histories_for_run(
+async def compact_agent_histories_for_run(
     agents: Iterable[Any],
     session_id: str | None,
 ) -> list[dict[str, Any]]:
-    """Apply ProtoLink token compaction before agents resume a session.
-
-    The model profile supplies the real context window. Histories without a
-    configured window remain untouched; compaction remains an application
-    maintenance action rather than a model-visible tool.
-    """
+    """Compact each running agent's persisted conversation through ProtoLink."""
     if not session_id:
         return []
 
@@ -38,25 +33,20 @@ def compact_agent_histories_for_run(
             continue
 
         max_tokens = max(1_024, int(context_window * ratio))
-        state = ConversationState(agent.storage)
-        if session_id not in state.to_dict():
-            continue
-
-        llm.history = state.get_history(session_id, default_system_prompt=llm.system_prompt)
-        result = llm.compact_history(
+        result = await agent.compact_state(
+            session_id=session_id,
             strategy="tokens",
             max_tokens=max_tokens,
             preserve_recent=6,
         )
-        report = {
-            "agent": str(agent.card.name),
-            "context_window": context_window,
-            "max_tokens": max_tokens,
-            **result.to_dict(),
-        }
-        reports.append(report)
-        if result.changed:
-            state.save_history(session_id, llm.history)
+        reports.append(
+            _compact_agent_report(
+                _agent_name(agent),
+                result,
+                context_window=context_window,
+                max_tokens=max_tokens,
+            )
+        )
     return reports
 
 
@@ -68,109 +58,133 @@ def compact_saved_histories(
     strategy: str = "tokens",
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Compact every agent's durable session through ``LLM.compact_history``."""
-    if strategy not in {"recent", "tokens", "summary"}:
-        raise ValueError("Compaction strategy must be recent, tokens, or summary")
-
-    reports: list[dict[str, Any]] = []
-    for agent_name in AGENT_NAMES:
-        storage = conversation_storage(agent_name)
-        if storage is None:
-            reports.append({"agent": agent_name, "found": False, "error": "storage unavailable"})
-            continue
-        state = ConversationState(storage)
-        if session_id not in state.to_dict():
-            reports.append({"agent": agent_name, "found": False})
-            continue
-
-        llm = create_llm_from_config(provider, model)
-        llm.history = state.get_history(session_id, default_system_prompt=llm.system_prompt)
-        options = _compaction_options(llm, strategy, limit)
-        try:
-            result = llm.compact_history(strategy=strategy, **options)
-        except Exception as exc:
-            reports.append({"agent": agent_name, "found": True, "error": str(exc)})
-            continue
-        if result.changed:
-            state.save_history(session_id, llm.history)
-        reports.append(
-            {
-                "agent": agent_name,
-                "found": True,
-                **result.to_dict(),
-            }
+    """Compact every agent's durable session through ProtoLink state APIs."""
+    return asyncio.run(
+        _compact_saved_histories(
+            session_id,
+            provider,
+            model,
+            strategy=strategy,
+            limit=limit,
         )
-
-    return {
-        "session_id": session_id,
-        "strategy": strategy,
-        "agents": reports,
-        "found": any(report.get("found") for report in reports),
-        "removed_messages": sum(int(report.get("removed_messages", 0)) for report in reports),
-        "errors": [
-            f"{report['agent']}: {report['error']}"
-            for report in reports
-            if report.get("error")
-        ],
-    }
+    )
 
 
 def reset_saved_histories(session_id: str) -> dict[str, Any]:
     """Clear one durable ProtoLink session across the full agent deck."""
-    cleared: list[str] = []
-    for agent_name in AGENT_NAMES:
-        storage = conversation_storage(agent_name)
-        if storage is None:
-            continue
-        state = ConversationState(storage)
-        if session_id not in state.to_dict():
-            continue
-        state.clear_session(session_id)
-        cleared.append(agent_name)
-    return {"session_id": session_id, "cleared_agents": cleared, "found": bool(cleared)}
+    return asyncio.run(_reset_saved_histories(session_id))
 
 
 def describe_saved_histories(session_id: str, *, recent_messages: int = 6) -> dict[str, Any]:
     """Return a read-only summary of model-facing ProtoLink conversation state."""
-    agents: list[dict[str, Any]] = []
-    for agent_name in AGENT_NAMES:
-        storage = conversation_storage(agent_name)
-        if storage is None:
-            agents.append({"agent": agent_name, "found": False, "error": "storage unavailable"})
-            continue
+    return asyncio.run(_describe_saved_histories(session_id, recent_messages=recent_messages))
 
-        sessions = ConversationState(storage).to_dict()
-        messages = sessions.get(session_id) or []
-        if not messages:
-            agents.append({"agent": agent_name, "found": False})
-            continue
 
-        recent = [
-            {
-                "role": str(message.get("role", "unknown")),
-                "name": str(message.get("name", "") or ""),
-                "preview": _preview_text(message.get("content")),
-            }
-            for message in messages[-recent_messages:]
-        ]
-        agents.append(
-            {
-                "agent": agent_name,
-                "found": True,
-                "message_count": len(messages),
-                "estimated_tokens": estimate_token_count(messages),
-                "recent": recent,
-            }
+async def _compact_saved_histories(
+    session_id: str,
+    provider: str,
+    model: str | None,
+    *,
+    strategy: str,
+    limit: int | None,
+) -> dict[str, Any]:
+    if strategy not in {"recent", "tokens", "summary"}:
+        raise ValueError("Compaction strategy must be recent, tokens, or summary")
+
+    reports: list[dict[str, Any]] = []
+    for agent_name, agent in _compaction_agents(provider, model):
+        options = _compaction_options(agent, strategy, limit)
+        result = await agent.compact_state(
+            session_id=session_id,
+            strategy=strategy,
+            **options,
         )
+        reports.append(_compact_agent_report(agent_name, result))
 
+    return _compact_summary(session_id, strategy, reports)
+
+
+async def _reset_saved_histories(session_id: str) -> dict[str, Any]:
+    reports: list[dict[str, Any]] = []
+    cleared: list[str] = []
+    for agent_name, agent in _control_agents():
+        result = await agent.reset_state(session_id=session_id, stores=("conversation",))
+        report = _state_agent_report(agent_name, result)
+        reports.append(report)
+        if _state_existed_before(result):
+            cleared.append(agent_name)
     return {
         "session_id": session_id,
-        "agents": agents,
-        "found": any(agent.get("found") for agent in agents),
+        "agents": reports,
+        "cleared_agents": cleared,
+        "found": bool(cleared),
+        "state_results": [report["state_result"] for report in reports],
     }
 
 
-def _compaction_options(llm: Any, strategy: str, limit: int | None) -> dict[str, int]:
+async def _describe_saved_histories(session_id: str, *, recent_messages: int) -> dict[str, Any]:
+    reports: list[dict[str, Any]] = []
+    for agent_name, agent in _control_agents():
+        result = await agent.describe_state(
+            session_id=session_id,
+            stores=("conversation",),
+            include_data=True,
+        )
+        reports.append(_describe_agent_report(agent_name, result, recent_messages=recent_messages))
+    return {
+        "session_id": session_id,
+        "agents": reports,
+        "found": any(report.get("found") for report in reports),
+        "state_results": [report["state_result"] for report in reports],
+    }
+
+
+def _control_agents() -> list[tuple[str, Agent]]:
+    return [(name, _control_agent(name)) for name in AGENT_NAMES]
+
+
+def _control_agent(agent_name: str) -> Agent:
+    return Agent(
+        card={
+            "name": agent_name,
+            "description": f"ProtoAgent {agent_name} state control facade.",
+            "url": f"runtime://protoagent-state-{agent_name}",
+        },
+        transport=None,
+        llm=None,
+        storage=conversation_storage(agent_name),
+        state=["conversation"],
+        policy=_state_policy(),
+        logger=QUIET_LOGGER,
+        verbosity=0,
+    )
+
+
+def _compaction_agents(provider: str, model: str | None) -> list[tuple[str, Any]]:
+    from .agents.architect import create_architect_agent
+    from .agents.coder import create_coder_agent
+    from .agents.explorer import create_explorer_agent
+
+    return [
+        ("architect", create_architect_agent(provider=provider, model=model, transport=None)),
+        ("explorer", create_explorer_agent(provider=provider, model=model, transport=None)),
+        ("coder", create_coder_agent(provider=provider, model=model, transport=None)),
+    ]
+
+
+def _state_policy() -> CapabilityPolicy:
+    return CapabilityPolicy(
+        {
+            "llm.history.compact": "allow",
+            "state.compact": "allow",
+            "state.describe": "allow",
+            "state.reset": "allow",
+        },
+        default_effect="deny",
+    )
+
+
+def _compaction_options(agent: Any, strategy: str, limit: int | None) -> dict[str, int]:
     if strategy == "recent":
         return {"max_messages": limit or 20}
     if strategy == "summary":
@@ -178,10 +192,119 @@ def _compaction_options(llm: Any, strategy: str, limit: int | None) -> dict[str,
 
     if limit is not None:
         return {"max_tokens": limit, "preserve_recent": 6}
+    llm = getattr(agent, "llm", None)
     profile = getattr(llm, "metrics_profile", None)
     context_window = getattr(profile, "context_window", None)
     max_tokens = int(context_window * _history_budget_ratio()) if context_window else 4_000
     return {"max_tokens": max(1_024, max_tokens), "preserve_recent": 6}
+
+
+def _compact_summary(session_id: str, strategy: str, reports: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "strategy": strategy,
+        "agents": reports,
+        "found": any(report.get("found") for report in reports),
+        "removed_messages": sum(int(report.get("removed_messages", 0)) for report in reports),
+        "errors": [
+            f"{report['agent']}: {error['message']}"
+            for report in reports
+            for error in report.get("errors", [])
+        ],
+        "state_results": [report["state_result"] for report in reports],
+    }
+
+
+def _compact_agent_report(
+    agent_name: str,
+    result: StateOperationResult,
+    *,
+    context_window: int | None = None,
+    max_tokens: int | None = None,
+) -> dict[str, Any]:
+    store = _conversation_store(result)
+    compaction = _compaction_metadata(store)
+    found = bool(store and store.exists)
+    report = {
+        "agent": agent_name,
+        "found": found,
+        "changed": bool(compaction.get("changed", False)),
+        "removed_messages": int(compaction.get("removed_messages", 0) or 0),
+        "before_tokens": int(compaction.get("before_tokens", 0) or 0),
+        "after_tokens": int(compaction.get("after_tokens", 0) or 0),
+        "context_window": context_window,
+        "max_tokens": max_tokens,
+        "errors": [dict(error) for error in result.errors],
+        "state_result": result.to_dict(),
+    }
+    if store is not None:
+        report["message_count"] = store.message_count
+    return report
+
+
+def _describe_agent_report(
+    agent_name: str,
+    result: StateOperationResult,
+    *,
+    recent_messages: int,
+) -> dict[str, Any]:
+    store = _conversation_store(result)
+    messages = store.data if store is not None and isinstance(store.data, list) else []
+    found = bool(store and store.exists and messages)
+    return {
+        "agent": agent_name,
+        "found": found,
+        "message_count": len(messages) if messages else (store.message_count if store else 0),
+        "estimated_tokens": estimate_token_count(messages) if messages else 0,
+        "recent": [
+            {
+                "role": str(message.get("role", "unknown")),
+                "name": str(message.get("name", "") or ""),
+                "preview": _preview_text(message.get("content")),
+            }
+            for message in messages[-recent_messages:]
+        ],
+        "errors": [dict(error) for error in result.errors],
+        "state_result": result.to_dict(),
+    }
+
+
+def _state_agent_report(agent_name: str, result: StateOperationResult) -> dict[str, Any]:
+    store = _conversation_store(result)
+    return {
+        "agent": agent_name,
+        "found": _state_existed_before(result),
+        "cleared": bool(store and store.cleared),
+        "message_count": store.message_count if store else 0,
+        "errors": [dict(error) for error in result.errors],
+        "state_result": result.to_dict(),
+    }
+
+
+def _conversation_store(result: StateOperationResult):
+    return next((store for store in result.stores if store.name == "conversation"), None)
+
+
+def _compaction_metadata(store) -> dict[str, Any]:
+    if store is None:
+        return {}
+    compaction = store.metadata.get("compaction") if isinstance(store.metadata, dict) else None
+    return dict(compaction or {})
+
+
+def _state_existed_before(result: StateOperationResult) -> bool:
+    store = _conversation_store(result)
+    if store is None or not isinstance(store.metadata, dict):
+        return False
+    before = store.metadata.get("before")
+    if isinstance(before, dict):
+        return bool(before.get("exists"))
+    return bool(store.exists)
+
+
+def _agent_name(agent: Any) -> str:
+    card = getattr(agent, "card", None)
+    return str(getattr(card, "name", None) or "agent")
 
 
 def _history_budget_ratio() -> float:

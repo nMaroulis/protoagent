@@ -46,6 +46,8 @@ struct CoreResponse {
     #[serde(default)]
     run_context: Value,
     #[serde(default)]
+    run_report: Value,
+    #[serde(default)]
     provider: String,
     #[serde(default)]
     model: String,
@@ -157,6 +159,12 @@ struct ProtolinkStatus {
     metrics_ready: bool,
     #[serde(default)]
     compaction_ready: bool,
+    #[serde(default)]
+    context_manifest_ready: bool,
+    #[serde(default)]
+    run_report_ready: bool,
+    #[serde(default)]
+    state_ready: bool,
     #[serde(default)]
     cancellation_ready: bool,
     #[serde(default)]
@@ -1019,11 +1027,14 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, cancellation {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
                         readiness(report.protolink.compaction_ready),
+                        readiness(report.protolink.context_manifest_ready),
+                        readiness(report.protolink.state_ready),
+                        readiness(report.protolink.run_report_ready),
                         readiness(report.protolink.cancellation_ready),
                     )
                 } else if report.protolink.installed {

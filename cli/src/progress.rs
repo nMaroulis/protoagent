@@ -405,13 +405,14 @@ fn is_hidden_run_event(value: &Value) -> bool {
 }
 
 fn is_context_metric_event(value: &Value) -> bool {
-    matches!(
-        value
-            .get("payload")
-            .and_then(|payload| payload.get("llm_event_type"))
-            .and_then(Value::as_str),
-        Some("llm_context" | "llm_call_metrics")
-    )
+    value_string(value, &["type"]) == "context.prepared"
+        || matches!(
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("llm_event_type"))
+                .and_then(Value::as_str),
+            Some("llm_context" | "llm_call_metrics")
+        )
 }
 
 fn run_event_agent(value: &Value) -> String {
@@ -425,6 +426,27 @@ fn run_event_agent(value: &Value) -> String {
 
 fn context_sample_from_run_event(value: &Value) -> Option<ContextSample> {
     let payload = value.get("payload")?;
+    if value_string(value, &["type"]) == "context.prepared" {
+        let manifest = payload.get("manifest")?;
+        let used_tokens = manifest.get("total_estimated_tokens")?.as_u64()?;
+        let window_tokens = manifest.get("context_window").and_then(Value::as_u64);
+        let used_percent = window_tokens
+            .filter(|window| *window > 0)
+            .map(|window| used_tokens as f64 * 100.0 / window as f64);
+        return Some(ContextSample {
+            used_tokens,
+            window_tokens,
+            used_percent,
+            estimated: manifest.get("estimated").and_then(Value::as_bool).unwrap_or(true),
+            agent_name: value_string(value, &["agent_name"])
+                .if_empty_then(|| value_string(manifest, &["agent_name"])),
+            model: value_string(manifest, &["model"]),
+            task_id: value_string(value, &["task_id"]),
+            step: value.get("step").and_then(Value::as_u64),
+            finalized: false,
+        });
+    }
+
     let event_type = payload.get("llm_event_type").and_then(Value::as_str)?;
     if !matches!(event_type, "llm_context" | "llm_call_metrics") {
         return None;
@@ -905,6 +927,44 @@ mod tests {
         assert_eq!(batch.context_samples.len(), 1);
         assert_eq!(batch.context_samples[0].used_tokens, 5116);
         assert_eq!(batch.context_samples[0].window_tokens, Some(8192));
+        assert_eq!(batch.context_samples[0].model, "gemma4:e4b");
+        progress.cleanup();
+    }
+
+    #[test]
+    fn extracts_context_prepared_manifests_without_polluting_the_live_trace() {
+        let mut progress = ProgressFile::new("context-manifest-test");
+        fs::write(
+            &progress.path,
+            serde_json::to_string(&json!({
+                "event": "context prepared",
+                "run_event": {
+                    "type": "context.prepared",
+                    "agent_name": "architect",
+                    "task_id": "task-1",
+                    "step": 1,
+                    "summary": "Context prepared: 7000 estimated tokens",
+                    "payload": {
+                        "manifest": {
+                            "agent_name": "architect",
+                            "model": "gemma4:e4b",
+                            "total_estimated_tokens": 7000,
+                            "context_window": 8192,
+                            "estimated": true
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let batch = progress.read_new_batch();
+        assert!(batch.events.is_empty());
+        assert_eq!(batch.context_samples.len(), 1);
+        assert_eq!(batch.context_samples[0].used_tokens, 7000);
+        assert_eq!(batch.context_samples[0].window_tokens, Some(8192));
+        assert_eq!(batch.context_samples[0].agent_name, "architect");
         assert_eq!(batch.context_samples[0].model, "gemma4:e4b");
         progress.cleanup();
     }

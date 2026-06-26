@@ -65,6 +65,10 @@ def create_explorer_agent(
         logger=QUIET_LOGGER,
         policy=CapabilityPolicy(
             {
+                "llm.history.compact": "allow",
+                "state.compact": "allow",
+                "state.describe": "allow",
+                "state.reset": "allow",
                 "workspace.read": "allow",
             },
             default_effect="deny",

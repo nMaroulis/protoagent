@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from protolink import LLMModelProfile
+from protolink import Agent, CapabilityPolicy, LLMModelProfile
 from protolink.llms.history import ConversationHistory
 from protolink.llms.mock_client import MockLLM
 from protolink.state.conversation import ConversationState
@@ -35,17 +35,14 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             state.save_history("session-test", history)
             llm = MockLLM()
             llm.configure_metrics(LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt"))
-            agent = SimpleNamespace(
-                llm=llm,
-                storage=storage,
-                card=SimpleNamespace(name="architect"),
-            )
+            agent = _test_agent("architect", storage, llm)
 
-            reports = compact_agent_histories_for_run([agent], "session-test")
+            reports = asyncio.run(compact_agent_histories_for_run([agent], "session-test"))
 
             self.assertEqual(len(reports), 1)
             self.assertTrue(reports[0]["changed"])
             self.assertGreater(reports[0]["removed_messages"], 0)
+            self.assertEqual(reports[0]["state_result"]["operation"], "compact")
             compacted = state.get_history("session-test")
             self.assertLess(len(compacted), original_messages)
             self.assertEqual(compacted.messages[0]["role"], "system")
@@ -62,6 +59,7 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             }
             for storage in storages.values():
                 ConversationState(storage).save_history("session-test", _large_history())
+            agents = [(name, _test_agent(name, storage, MockLLM())) for name, storage in storages.items()]
 
             with (
                 patch(
@@ -69,8 +67,8 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
                     side_effect=lambda name: storages[name],
                 ),
                 patch(
-                    "protoagent_core.history.create_llm_from_config",
-                    side_effect=lambda *_args: MockLLM(),
+                    "protoagent_core.history._compaction_agents",
+                    return_value=agents,
                 ),
             ):
                 report = compact_saved_histories(
@@ -84,6 +82,7 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
 
             self.assertTrue(report["found"])
             self.assertGreater(report["removed_messages"], 0)
+            self.assertEqual(report["state_results"][0]["operation"], "compact")
             self.assertEqual(set(reset["cleared_agents"]), set(AGENT_NAMES))
             for storage in storages.values():
                 self.assertNotIn("session-test", ConversationState(storage).to_dict())
@@ -113,7 +112,30 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertGreater(architect["message_count"], 0)
             self.assertGreater(architect["estimated_tokens"], 0)
             self.assertEqual(len(architect["recent"]), 2)
+            self.assertEqual(architect["state_result"]["operation"], "describe")
             self.assertFalse(explorer["found"])
+
+
+def _test_agent(name: str, storage: SQLiteStorage, llm: MockLLM | None = None) -> Agent:
+    if llm is not None:
+        llm.configure_metrics(LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt"))
+    return Agent(
+        card={"name": name, "description": f"{name} test agent", "url": f"runtime://{name}"},
+        transport=None,
+        llm=llm,
+        storage=storage,
+        state=["conversation"],
+        policy=CapabilityPolicy(
+            {
+                "llm.history.compact": "allow",
+                "state.compact": "allow",
+                "state.describe": "allow",
+                "state.reset": "allow",
+            },
+            default_effect="deny",
+        ),
+        verbosity=0,
+    )
 
 
 def _large_history() -> ConversationHistory:

@@ -281,6 +281,9 @@ fn parse_run_event(event: &Value) -> Option<TimelineItem> {
             summary,
         )),
         "action.failed" => Some(item("ERROR", &actor, "", "runtime action failed", summary)),
+        "context.prepared" => Some(item("CONTEXT", &actor, "Model", "prepared model context", summary)),
+        "budget.warning" => Some(item("BUDGET", &actor, "Policy", "budget warning", summary)),
+        "budget.exceeded" => Some(item("BUDGET", &actor, "Policy", "budget exceeded", summary)),
         "task.status" => Some(item(
             "TASK",
             "ProtoLink",
@@ -296,10 +299,11 @@ fn parse_run_event(event: &Value) -> Option<TimelineItem> {
 }
 
 fn is_trace_noise(event: &Value) -> bool {
-    matches!(
-        value_string(event.get("payload").unwrap_or(&Value::Null), &["llm_event_type"]).as_str(),
-        "llm_chunk" | "llm_context" | "llm_call_metrics"
-    )
+    value_string(event, &["type"]) == "context.prepared"
+        || matches!(
+            value_string(event.get("payload").unwrap_or(&Value::Null), &["llm_event_type"]).as_str(),
+            "context_prepared" | "llm_chunk" | "llm_context" | "llm_call_metrics"
+        )
 }
 
 fn trace_route(event: &Value) -> String {
@@ -448,7 +452,7 @@ fn parse_llm_run_event(
             summary,
         )),
         "llm_error" => Some(item("ERROR", actor, "", "model call failed", summary)),
-        "llm_context" | "llm_call_metrics" | "llm_chunk" => None,
+        "context_prepared" | "llm_context" | "llm_call_metrics" | "llm_chunk" => None,
         _ => None,
     }
 }
@@ -762,6 +766,12 @@ mod tests {
     fn builds_timeline_from_normalized_run_events() {
         let events = vec![
             json!({
+                "type": "context.prepared",
+                "agent_name": "architect",
+                "summary": "Context prepared: 7000 estimated tokens",
+                "payload": {"manifest": {"total_estimated_tokens": 7000}}
+            }),
+            json!({
                 "type": "action.started",
                 "agent_name": "architect",
                 "summary": "Action started: explorer",
@@ -786,6 +796,12 @@ mod tests {
                 "payload": {"request": {"action": {"name": "replace_file"}}}
             }),
             json!({
+                "type": "budget.warning",
+                "agent_name": "architect",
+                "summary": "Approaching input budget",
+                "payload": {"decision": {"message": "Approaching input budget"}}
+            }),
+            json!({
                 "type": "llm.stream",
                 "agent_name": "architect",
                 "payload": {"llm_event_type": "llm_final"}
@@ -803,6 +819,8 @@ mod tests {
                 .iter()
                 .any(|item| item.actor == "Explorer" && item.target == "Read_file")
         );
+        assert!(items.iter().any(|item| item.kind == "CONTEXT"));
+        assert!(items.iter().any(|item| item.kind == "BUDGET"));
         assert!(items.iter().any(|item| item.kind == "APPROVAL"));
         assert!(format_timeline_from_run_events(&events, &[], 10)
             .contains("returned final answer"));
@@ -814,13 +832,20 @@ mod tests {
             &[
                 json!({
                     "sequence": 1,
+                    "type": "context.prepared",
+                    "agent_name": "architect",
+                    "summary": "Context prepared",
+                    "payload": {"manifest": {"total_estimated_tokens": 7000}}
+                }),
+                json!({
+                    "sequence": 2,
                     "type": "llm.stream",
                     "agent_name": "architect",
                     "summary": "llm_chunk",
                     "payload": {"llm_event_type": "llm_chunk", "content": "hello"}
                 }),
                 json!({
-                    "sequence": 2,
+                    "sequence": 3,
                     "type": "action.started",
                     "agent_name": "architect",
                     "summary": "Action started: explorer",
@@ -834,8 +859,9 @@ mod tests {
         );
 
         assert!(!trace.contains("llm_chunk"));
+        assert!(!trace.contains("context.prepared"));
         assert!(trace.contains("action.started"));
         assert!(trace.contains("Architect -> Explorer"));
-        assert!(trace.contains("suppressed 1"));
+        assert!(trace.contains("suppressed 2"));
     }
 }

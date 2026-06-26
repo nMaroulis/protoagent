@@ -104,7 +104,7 @@ def compact_protolink_history(
     strategy: str = "tokens",
     limit: int | None = None,
 ) -> str:
-    """Compact the current per-agent session through ProtoLink 0.6.2."""
+    """Compact the current per-agent session through ProtoLink state APIs."""
     strategy = strategy.strip().lower()
     if limit is not None and limit < (2 if strategy == "recent" else 1):
         minimum = 2 if strategy == "recent" else 1

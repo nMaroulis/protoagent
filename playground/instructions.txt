@@ -1,0 +1,64 @@
+This directory contains example dummy projects you can use to test the ProtoAgent CLI or ACP.
+
+1. taskflow (task management REST API)
+
+Overview:
+Small enough to understand in a few minutes.
+Large enough to require navigating multiple files.
+Contains a few code smells and missing documentation.
+Has business logic that can be refactored.
+Has opportunities for adding tests, types, logging, async, etc.
+
+You can ask questions like:
+"Explain how task creation works."
+"Trace the execution of client.add()."
+"Which files are involved when creating a task?"
+"Refactor storage.py into a class."
+"Convert this to FastAPI."
+"Add type hints."
+"Add docstrings everywhere."
+"Find code smells."
+"Optimize the search function."
+"Replace the in-memory DB with SQLite."
+"Add unit tests."
+"Add logging."
+"Make the storage thread-safe."
+"Convert to async."
+"Implement pagination."
+"Create a DELETE endpoint."
+"Where should authentication be added?"
+"Generate a sequence diagram."
+"Rename confusing variables."
+"Find duplicated logic."
+"Generate a README."
+"Explain the architecture."
+
+
+2. recipe-reco (Recipe Recommendation Engine)
+
+Overview:
+- stores recipes
+- filters by ingredients/diet
+- scores recommendations
+- supports “what should I cook with X?” queries
+- is intentionally a bit imperfect (good for refactoring prompts)
+
+This project lets you test:
+- Understanding
+How does recommendation work?
+Why is this recipe ranked higher?
+- Cross-file reasoning
+filters.py + scoring.py + recommender.py interaction
+- Refactoring prompts
+“merge filters + scoring into one pipeline”
+“make scoring pluggable strategy”
+“convert to dataclass + typed pipeline”
+- Real AI coding tasks
+“why is avocado toast always ranked high?”
+“fix bias toward quick recipes”
+“add ingredient substitution logic”
+“support pantry + missing ingredients”
+“add dietary constraints (vegan strict)”
+“turn this into async API”
+“add caching layer”
+“explain recommendation flow”

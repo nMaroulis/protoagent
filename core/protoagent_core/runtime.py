@@ -54,7 +54,7 @@ async def _run_agent_deck(
     bridge: RuntimeBridge,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
-    from protolink import InMemoryEventSink, RunBudget, RunContext, Task
+    from protolink import DEFAULT_REDACTION_POLICY, RunBudget, RunContext, RunRecorder, Task
     from protolink.client import AgentClient
     from protolink.discovery import Registry
 
@@ -62,7 +62,7 @@ async def _run_agent_deck(
     agent_transport = _agent_transport()
     streaming = _streaming_enabled(agent_transport)
     events: list[str] = []
-    sink = InMemoryEventSink()
+    recorder = RunRecorder()
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
     task = Task.create_infer(prompt=prompt)
     context = RunContext(
@@ -78,6 +78,7 @@ async def _run_agent_deck(
     )
     context.trace_id = context.run_id
     context.attach_to_task(task)
+    recorder.context = context
 
     def emit(message: str) -> None:
         events.append(message)
@@ -88,7 +89,7 @@ async def _run_agent_deck(
             bridge=bridge,
             context=context,
             task=task,
-            sink=sink,
+            recorder=recorder,
             events=events,
             emit=emit,
             provider=provider,
@@ -133,7 +134,7 @@ async def _run_agent_deck(
             approval_handler=bridge.approval_handler,
             telemetry=telemetry,
         )
-        compaction_reports = compact_agent_histories_for_run(deck.values(), session_id)
+        compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
             if report.get("changed"):
                 emit(
@@ -179,7 +180,7 @@ async def _run_agent_deck(
                     agent_url=deck["architect"].card.url,
                     task=task,
                     context=context,
-                    sink=sink,
+                    recorder=recorder,
                     events=events,
                     bridge=bridge,
                 )
@@ -195,6 +196,14 @@ async def _run_agent_deck(
         status = str(delivery.get("status") or "completed")
         raw_answer = delivery.get("content")
         final_context = _context_from_delivery(delivery) or context
+        run_report = _run_report_to_dict(
+            recorder,
+            context=final_context,
+            final_task=delivery.get("task"),
+            provider=provider,
+            model=model,
+            redaction_policy=DEFAULT_REDACTION_POLICY,
+        )
         emit("Architect returned a final task response.")
 
         answer = _content_to_text(raw_answer)
@@ -215,7 +224,8 @@ async def _run_agent_deck(
             "answer": answer,
             "status": status,
             "events": events,
-            "run_events": sink.to_list(),
+            "run_events": _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY),
+            "run_report": run_report,
             "diffs": previews["diffs"],
             "targets": previews["targets"],
             "approval_requests": bridge.approval_requests,
@@ -386,11 +396,13 @@ async def _send_task_streaming(
     agent_url: str,
     task,
     context,
-    sink,
+    recorder,
     events: list[str],
     bridge: RuntimeBridge,
 ) -> Any:
     """Consume ProtoLink streaming events and return the final answer payload."""
+    from protolink import DEFAULT_REDACTION_POLICY
+
     final_task: dict[str, Any] | None = None
     final_content: Any = None
     artifact_content: Any = None
@@ -405,8 +417,8 @@ async def _send_task_streaming(
         if _is_llm_chunk_payload(payload):
             continue
 
-        run_event = await sink.emit_task_event(event, context=context)
-        run_event_data = run_event.to_dict()
+        run_event = await recorder.record_task_event(event, context=context)
+        run_event_data = run_event.to_dict(redaction_policy=DEFAULT_REDACTION_POLICY)
         summary = _run_event_summary(run_event_data)
         if summary:
             _append_event(events, summary, bridge, run_event=run_event_data)
@@ -457,6 +469,34 @@ def _normalize(value: Any) -> Any:
     if isinstance(value, list):
         return [_normalize(item) for item in value]
     return value
+
+
+def _run_events_to_list(recorder, *, redaction_policy=None) -> list[dict[str, Any]]:
+    """Serialize recorded RunEvents for the Rust UI."""
+    return [event.to_dict(redaction_policy=redaction_policy) for event in recorder.events]
+
+
+def _run_report_to_dict(
+    recorder,
+    *,
+    context,
+    final_task: dict[str, Any] | None,
+    provider: str,
+    model: str,
+    redaction_policy=None,
+) -> dict[str, Any]:
+    """Build ProtoLink's durable application-facing run report."""
+    report = recorder.to_report(
+        context=context,
+        final_task=final_task,
+        metadata={
+            "application": "protoagent",
+            "interface": "rust-cli",
+            "provider": provider,
+            "model": model,
+        },
+    )
+    return report.to_dict(redaction_policy=redaction_policy)
 
 
 def _is_llm_chunk_payload(payload: dict[str, Any]) -> bool:
@@ -566,13 +606,15 @@ def _preflight_cancellation_result(
     bridge: RuntimeBridge,
     context,
     task,
-    sink,
+    recorder,
     events: list[str],
     emit,
     provider: str,
     model: str,
 ) -> dict[str, Any] | None:
     """Return a canceled result when the application canceled before task submission."""
+    from protolink import DEFAULT_REDACTION_POLICY
+
     reason = bridge.cancel_reason()
     if not reason:
         return None
@@ -587,7 +629,15 @@ def _preflight_cancellation_result(
         "answer": f"Task canceled: {reason}",
         "status": "canceled",
         "events": events,
-        "run_events": sink.to_list(),
+        "run_events": _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY),
+        "run_report": _run_report_to_dict(
+            recorder,
+            context=canceled_context,
+            final_task=task.to_dict(),
+            provider=provider,
+            model=model,
+            redaction_policy=DEFAULT_REDACTION_POLICY,
+        ),
         "diffs": [],
         "targets": [],
         "approval_requests": bridge.approval_requests,

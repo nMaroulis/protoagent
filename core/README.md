@@ -3,20 +3,20 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Install ProtoLink 0.6.2 or newer with the HTTP/SSE transport and LLM extras so
+Install ProtoLink 0.6.3 or newer with the HTTP/SSE transport and LLM extras so
 the embedded Agent runtime can import streaming agents, lifecycle-aware task
 status events, recursive stream serialization, history compaction, metrics,
-and provider clients:
+state operations, run reports, context manifests, and provider clients:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.2"
+pip install "protolink[http,llms]>=0.6.3"
 ```
 
 ## Layout
 
 - `protoagent_core/agent_engine.py` - PyO3-facing functions for prompts, model discovery, config, and doctor checks.
-- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget`, normalizes `RunEvent`s, can record local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
-- `protoagent_core/history.py` - ProtoLink `HistoryCompactor` policy for automatic token-budget compaction plus explicit compact/reset commands.
+- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget`, records `RunEvent`s with `RunRecorder`, can write local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
+- `protoagent_core/history.py` - ProtoLink state-operation facade for automatic token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider config and API-key storage at `~/.protoagent/config.json`.
@@ -34,14 +34,14 @@ plain HTTP.
 
 Each LLM is configured through `LLM.configure_metrics(LLMModelProfile(...))`.
 For Ollama, the same selected window is sent as `num_ctx` and recorded in the
-profile, so ProtoLink's `llm_context` and `llm_call_metrics` events drive the
-terminal context meter. Conversation continuity lives in ProtoLink's
-per-agent SQLite state. Before a session resumes, the core uses
-`LLM.compact_history(strategy="tokens")` when that profile's history budget is
-exceeded; `/context history` previews the saved model-facing history, while
-`/context compact` exposes recent, tokens, and summary strategies.
-The Rust trace and timeline views consume normalized `RunEvent`s first, then
-fall back to legacy text summaries for scaffold diagnostics.
+profile, so ProtoLink's `context.prepared`, `llm_context`, and
+`llm_call_metrics` events drive the terminal context meter. Conversation
+continuity lives in ProtoLink's per-agent SQLite state. Before a session
+resumes, the core uses `Agent.compact_state(strategy="tokens")` when that
+profile's history budget is exceeded; `/context history`, `/context compact`,
+and `/context reset` use ProtoLink state operation reports. The Rust trace and
+timeline views consume normalized `RunEvent`s first, and each run returns a
+redacted ProtoLink `RunReport` for diagnostics and replay.
 
 Before each model run, Context Loom refreshes a deterministic local index and
 injects a bounded Context Pack into the Architect prompt. Explorer also exposes
@@ -75,5 +75,5 @@ The embedded in-process fast path uses the same typed `TaskCancellationRequest`
 and falls back to the transport control plane when needed.
 Agent policies are deny-by-default: Architect explicitly allows delegation,
 Explorer allows read-only workspace capabilities, Coder requires approval for
-workspace writes, and history compaction stays an application maintenance path
-through `LLM.compact_history()` rather than a model-visible tool.
+workspace writes, and state describe/reset/compact remains an application
+control-plane path through ProtoLink rather than a model-visible tool.

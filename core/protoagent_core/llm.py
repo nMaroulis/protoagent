@@ -1,8 +1,7 @@
-"""Provider-to-protolink LLM wiring."""
+"""Provider-to-ProtoLink LLM wiring."""
 
 from __future__ import annotations
 
-import inspect
 import os
 from typing import Any
 
@@ -68,6 +67,11 @@ def llm_model_profile(provider: str, model: str | None = None):
         currency=str(cfg.get("currency") or "USD"),
         provider=provider,
         model=str(selected_model) if selected_model else None,
+        supports_tools=True,
+        supports_streaming=True,
+        supports_json_schema=True,
+        tokenizer=_optional_str(cfg.get("tokenizer")),
+        metadata={"configured_by": "protoagent"},
     )
 
 
@@ -78,7 +82,7 @@ def ollama_context_window(config: dict[str, Any] | None = None) -> int:
 
 def ollama_context_window_details(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the effective Ollama context window and where it came from."""
-    cfg = config or provider_config("ollama")
+    cfg = provider_config("ollama") if config is None else config
     model_params = cfg.get("model_params") if isinstance(cfg.get("model_params"), dict) else {}
     candidates = (
         (cfg.get("context_window"), "app config"),
@@ -117,94 +121,22 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
 
     llm = create_llm(protolink_provider(requested), **llm_kwargs(requested, model))
     llm.configure_metrics(llm_model_profile(requested, model))
-    _hide_model_visible_history_compaction(llm)
     return llm
-
-
-def _hide_model_visible_history_compaction(llm: Any) -> None:
-    """Use ProtoLink compaction as an app API without exposing its tool to LLMs.
-
-    ProtoLink 0.6.2 exposes ``protolink_compact_history`` as a reserved
-    model-selectable tool. ProtoAgent compacts histories deterministically at
-    run boundaries and through ``/context compact``, so advertising that
-    maintenance tool to the model wastes context and can be hallucinated during
-    ordinary chat turns.
-    """
-    if getattr(llm, "_protoagent_hides_history_compaction_tool", False):
-        return
-
-    compactor = getattr(llm, "compactor", None)
-    if compactor is not None and not isinstance(compactor, _AppManagedHistoryCompactor):
-        llm.compactor = _AppManagedHistoryCompactor(compactor)
-
-    try:
-        from protolink.llms.compaction import HISTORY_COMPACTION_TOOL_NAME
-    except Exception:
-        HISTORY_COMPACTION_TOOL_NAME = "protolink_compact_history"
-
-    def filtered_tools(tools: Any) -> Any:
-        if not isinstance(tools, dict) or HISTORY_COMPACTION_TOOL_NAME not in tools:
-            return tools
-        return {
-            name: tool
-            for name, tool in tools.items()
-            if name != HISTORY_COMPACTION_TOOL_NAME
-        }
-
-    for method_name in ("call_action", "call_action_stream"):
-        original = getattr(llm, method_name, None)
-        if original is None:
-            continue
-
-        async def wrapper(*args, _original=original, **kwargs):
-            if "tools" in kwargs:
-                kwargs["tools"] = filtered_tools(kwargs["tools"])
-            result = _original(*args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
-
-        setattr(llm, method_name, wrapper)
-
-    llm._protoagent_hides_history_compaction_tool = True
-    _rebuild_initial_system_prompt_without_compaction(llm, HISTORY_COMPACTION_TOOL_NAME)
-
-
-class _AppManagedHistoryCompactor:
-    """Delegate ProtoLink compaction while suppressing model-visible tool text."""
-
-    def __init__(self, wrapped: Any) -> None:
-        self._wrapped = wrapped
-
-    def append_tool_prompt(self, tools: str | None) -> str:
-        return tools or ""
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._wrapped, name)
-
-
-def _rebuild_initial_system_prompt_without_compaction(llm: Any, tool_name: str) -> None:
-    """Refresh constructor-built prompts that already advertised compaction."""
-    system_prompt = getattr(llm, "system_prompt", "")
-    build_system_prompt = getattr(llm, "build_system_prompt", None)
-    if not isinstance(system_prompt, str) or tool_name not in system_prompt or build_system_prompt is None:
-        return
-    try:
-        build_system_prompt(action_mode="json")
-    except TypeError:
-        try:
-            build_system_prompt()
-        except Exception:
-            return
-    except Exception:
-        return
 
 
 def validate_protolink() -> dict[str, Any]:
     """Report whether ProtoLink and its agent runtime can be imported."""
     try:
         import protolink
-        from protolink import HistoryCompactor, LLMModelProfile, TaskCancellationRequest
+        from protolink import (
+            ContextManifest,
+            HistoryCompactor,
+            LLMModelProfile,
+            RedactionPolicy,
+            RunRecorder,
+            StateOperationResult,
+            TaskCancellationRequest,
+        )
         from protolink.agents import Agent
         from protolink.client import AgentClient
         from protolink.llms.base import LLM
@@ -215,19 +147,44 @@ def validate_protolink() -> dict[str, Any]:
         )
         metrics_ready = hasattr(LLM, "configure_metrics") and LLMModelProfile is not None
         compaction_ready = hasattr(LLM, "compact_history") and HistoryCompactor is not None
+        context_manifest_ready = ContextManifest is not None
+        run_report_ready = RunRecorder is not None and RedactionPolicy is not None
+        state_ready = (
+            StateOperationResult is not None
+            and hasattr(Agent, "describe_state")
+            and hasattr(AgentClient, "describe_state")
+            and hasattr(Agent, "reset_state")
+            and hasattr(AgentClient, "reset_state")
+            and hasattr(Agent, "compact_state")
+            and hasattr(AgentClient, "compact_state")
+        )
         cancellation_ready = (
             hasattr(Agent, "cancel_task")
             and hasattr(AgentClient, "cancel_task")
             and TaskCancellationRequest is not None
         )
+        agent_ready = all(
+            (
+                streaming_ready,
+                metrics_ready,
+                compaction_ready,
+                context_manifest_ready,
+                run_report_ready,
+                state_ready,
+                cancellation_ready,
+            )
+        )
 
         return {
             "installed": True,
             "version": getattr(protolink, "__version__", ""),
-            "agent_ready": streaming_ready and metrics_ready and compaction_ready and cancellation_ready,
+            "agent_ready": agent_ready,
             "streaming_ready": streaming_ready,
             "metrics_ready": metrics_ready,
             "compaction_ready": compaction_ready,
+            "context_manifest_ready": context_manifest_ready,
+            "run_report_ready": run_report_ready,
+            "state_ready": state_ready,
             "cancellation_ready": cancellation_ready,
             "error": "",
         }
@@ -242,6 +199,9 @@ def validate_protolink() -> dict[str, Any]:
                 "streaming_ready": False,
                 "metrics_ready": False,
                 "compaction_ready": False,
+                "context_manifest_ready": False,
+                "run_report_ready": False,
+                "state_ready": False,
                 "cancellation_ready": False,
                 "error": str(exc),
             }
@@ -253,6 +213,9 @@ def validate_protolink() -> dict[str, Any]:
                 "streaming_ready": False,
                 "metrics_ready": False,
                 "compaction_ready": False,
+                "context_manifest_ready": False,
+                "run_report_ready": False,
+                "state_ready": False,
                 "cancellation_ready": False,
                 "error": str(exc),
             }
@@ -272,3 +235,10 @@ def _optional_nonnegative_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

@@ -68,6 +68,10 @@ def create_coder_agent(
         logger=QUIET_LOGGER,
         policy=CapabilityPolicy(
             {
+                "llm.history.compact": "allow",
+                "state.compact": "allow",
+                "state.describe": "allow",
+                "state.reset": "allow",
                 "workspace.write": "require_approval",
             },
             default_effect="deny",

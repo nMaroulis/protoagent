@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 import tempfile
 import unittest
@@ -12,7 +11,6 @@ from protoagent_core import agent_engine
 from protoagent_core.config import provider_config, set_context_window
 from protoagent_core.llm import (
     DEFAULT_OLLAMA_CONTEXT_WINDOW,
-    _hide_model_visible_history_compaction,
     create_llm_from_config,
     llm_kwargs,
     llm_model_profile,
@@ -38,6 +36,10 @@ class OllamaContextTests(unittest.TestCase):
         self.assertEqual(profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
         self.assertEqual(profile.provider, "ollama")
         self.assertEqual(profile.model, "gemma4:e4b")
+        self.assertTrue(profile.supports_streaming)
+        self.assertTrue(profile.supports_tools)
+        self.assertTrue(profile.supports_json_schema)
+        self.assertEqual(profile.metadata["configured_by"], "protoagent")
 
     def test_llm_is_configured_through_protolink_metrics_api(self) -> None:
         config = {
@@ -65,53 +67,6 @@ class OllamaContextTests(unittest.TestCase):
         self.assertIs(created, llm)
         self.assertEqual(llm.profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
         self.assertEqual(llm.profile.model, "gemma4:e4b")
-
-    def test_history_compaction_tool_is_hidden_from_model_prompt_and_tools(self) -> None:
-        class FakeCompactor:
-            __slots__ = ()
-
-            def append_tool_prompt(self, tools):
-                return f"{tools}\nprotolink_compact_history"
-
-            def compact(self, **_kwargs):
-                return {"changed": False}
-
-        class FakeLLM:
-            def __init__(self) -> None:
-                self.compactor = FakeCompactor()
-                self.seen_tools: list[dict] = []
-                self.system_prompt = "Built-in tool: protolink_compact_history"
-
-            def build_system_prompt(self, **_kwargs):
-                self.system_prompt = self.compactor.append_tool_prompt("TOOLS")
-                return self.system_prompt
-
-            async def call_action(self, _history, *, tools, **_kwargs):
-                self.seen_tools.append(dict(tools))
-                return "action-ok"
-
-            async def call_action_stream(self, _history, *, tools, **_kwargs):
-                self.seen_tools.append(dict(tools))
-                return "stream-ok"
-
-        llm = FakeLLM()
-        _hide_model_visible_history_compaction(llm)
-
-        self.assertEqual(llm.compactor.append_tool_prompt("TOOLS"), "TOOLS")
-        self.assertEqual(llm.compactor.compact(), {"changed": False})
-        self.assertNotIn("protolink_compact_history", llm.system_prompt)
-
-        tools = {
-            "read_file": object(),
-            "protolink_compact_history": object(),
-        }
-        self.assertEqual(asyncio.run(llm.call_action([], tools=tools)), "action-ok")
-        self.assertEqual(asyncio.run(llm.call_action_stream([], tools=tools)), "stream-ok")
-
-        self.assertEqual(len(llm.seen_tools), 2)
-        for seen in llm.seen_tools:
-            self.assertIn("read_file", seen)
-            self.assertNotIn("protolink_compact_history", seen)
 
     def test_context_window_honors_protoagent_environment_override(self) -> None:
         with patch.dict(os.environ, {"PROTOAGENT_OLLAMA_NUM_CTX": "16384"}, clear=False):

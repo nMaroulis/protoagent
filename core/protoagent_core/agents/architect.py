@@ -74,6 +74,10 @@ def create_architect_agent(
         policy=CapabilityPolicy(
             {
                 "agent.delegate": "allow",
+                "llm.history.compact": "allow",
+                "state.compact": "allow",
+                "state.describe": "allow",
+                "state.reset": "allow",
             },
             default_effect="deny",
         ),

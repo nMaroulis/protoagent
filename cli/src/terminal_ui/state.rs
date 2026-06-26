@@ -165,6 +165,11 @@ impl TerminalApp {
                 message.details.push(("Normalized RunEvents".to_string(), events));
             }
         }
+        if !response.run_report.is_null() {
+            if let Ok(report) = serde_json::to_string_pretty(&response.run_report) {
+                message.details.push(("RunReport".to_string(), report));
+            }
+        }
         if !response.diff.trim().is_empty() {
             message.details.push(("Proposed diff".to_string(), response.diff.clone()));
         }
@@ -398,11 +403,14 @@ fn provider_chip(provider: &crate::ModelProvider) -> String {
 fn doctor_summary(report: &DoctorReport) -> String {
     let protolink = if report.protolink.installed && report.protolink.agent_ready {
         format!(
-            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, cancellation {}",
+            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}",
             empty_as_unknown(&report.protolink.version),
             crate::readiness(report.protolink.streaming_ready),
             crate::readiness(report.protolink.metrics_ready),
             crate::readiness(report.protolink.compaction_ready),
+            crate::readiness(report.protolink.context_manifest_ready),
+            crate::readiness(report.protolink.state_ready),
+            crate::readiness(report.protolink.run_report_ready),
             crate::readiness(report.protolink.cancellation_ready),
         )
     } else if report.protolink.installed {

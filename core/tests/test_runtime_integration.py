@@ -49,15 +49,15 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ActionDeniedError):
             await agent.authorize_action(action, RunContext(session_id="session-test"))
 
-    async def test_reserved_history_compaction_tool_is_not_agent_authorized(self) -> None:
+    async def test_state_compaction_control_plane_is_agent_authorized(self) -> None:
         agent = explorer_module.create_explorer_agent(workspace=".", transport="http")
         action = RunAction(
-            kind="llm.history.compact",
-            name="protolink_compact_history",
-            capabilities=frozenset({"llm.history.compact"}),
+            kind="state.compact",
+            name="compact_state",
+            capabilities=frozenset({"state.compact", "llm.history.compact"}),
         )
-        with self.assertRaises(ActionDeniedError):
-            await agent.authorize_action(action, RunContext(session_id="session-test"))
+        authorization = await agent.authorize_action(action, RunContext(session_id="session-test"))
+        self.assertEqual(authorization.action.name, "compact_state")
 
     def test_run_budget_uses_protolink_budget_carrier(self) -> None:
         with patch.dict(
@@ -222,7 +222,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             bridge.cleanup()
 
     async def test_canceled_stream_does_not_echo_the_original_prompt_as_answer(self) -> None:
-        from protolink import InMemoryEventSink, RunContext, Task
+        from protolink import RunContext, RunRecorder, Task
         from protolink.core.events import TaskStatusUpdateEvent
 
         task = Task.create_infer(prompt="original prompt")
@@ -248,7 +248,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             agent_url="runtime://architect",
             task=task,
             context=context,
-            sink=InMemoryEventSink(),
+            recorder=RunRecorder(context=context),
             events=[],
             bridge=bridge,
         )
@@ -257,15 +257,27 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["content"])
 
     async def test_streaming_trace_does_not_store_token_chunks(self) -> None:
-        from protolink import InMemoryEventSink, RunContext, Task
+        from protolink import RunContext, RunRecorder, RunReplay, Task, assert_run_events
         from protolink.core.events import TaskLLMStreamEvent
 
         task = Task.create_infer(prompt="hello")
         context = RunContext(session_id="session-test")
-        sink = InMemoryEventSink()
+        recorder = RunRecorder(context=context)
 
         class Client:
             async def send_task_streaming(self, **_kwargs):
+                yield TaskLLMStreamEvent(
+                    task_id=task.id,
+                    agent_name="architect",
+                    llm_event_type="context_prepared",
+                    step=1,
+                    metadata={
+                        "manifest": {
+                            "total_estimated_tokens": 128,
+                            "context_window": 8192,
+                        }
+                    },
+                )
                 yield TaskLLMStreamEvent(
                     task_id=task.id,
                     agent_name="architect",
@@ -287,18 +299,22 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             agent_url="runtime://architect",
             task=task,
             context=context,
-            sink=sink,
+            recorder=recorder,
             events=[],
             bridge=RuntimeBridge(None),
         )
 
         self.assertEqual(result["content"], "done")
-        event_payloads = [event["payload"].get("llm_event_type") for event in sink.to_list()]
+        event_payloads = [event.payload.get("llm_event_type") for event in recorder.events]
         self.assertNotIn("llm_chunk", event_payloads)
+        self.assertIn("context_prepared", event_payloads)
         self.assertIn("llm_final", event_payloads)
+        report = recorder.to_report(context=context)
+        self.assertEqual(report.context_manifests[0]["total_estimated_tokens"], 128)
+        assert_run_events(RunReplay(report), ["context.prepared", "llm.stream"])
 
     def test_preflight_cancel_skips_model_execution(self) -> None:
-        from protolink import InMemoryEventSink, RunContext, Task
+        from protolink import RunContext, RunRecorder, Task
 
         with tempfile.TemporaryDirectory() as root:
             bridge = RuntimeBridge(str(Path(root) / "runtime.jsonl"))
@@ -314,7 +330,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 bridge=bridge,
                 context=context,
                 task=task,
-                sink=InMemoryEventSink(),
+                recorder=RunRecorder(context=context),
                 events=events,
                 emit=events.append,
                 provider="ollama",
@@ -324,6 +340,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(result)
             self.assertEqual(result["status"], "canceled")
             self.assertTrue(result["run_context"]["canceled"])
+            self.assertEqual(result["run_report"]["context"]["cancel_reason"], "Canceled during startup")
             self.assertIn("before model execution", result["events"][-1])
             bridge.cleanup()
 
