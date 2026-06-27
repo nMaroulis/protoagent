@@ -7,6 +7,22 @@ Use this page before publishing changes.
 
 ## Python Core
 
+Style, lint, and type-check the Python surface:
+
+```bash
+ruff format --check .
+ruff check .
+ty check --extra-search-path core
+```
+
+Ty is currently scoped to the core runtime and the CLI compatibility shim in the
+repo-level `pyproject.toml`.
+
+GitHub Actions runs these Python quality checks on every push and pull request
+through `.github/workflows/python-quality.yml`.
+
+Run the Python unit tests:
+
 ```bash
 PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
 ```
@@ -23,8 +39,17 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_help_agent
 ## Rust CLI
 
 ```bash
+cargo fmt --manifest-path cli/Cargo.toml -- --check
+cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path cli/Cargo.toml
 cargo check --manifest-path cli/Cargo.toml
+```
+
+If formatting or Clippy are missing from a local Rust toolchain, install them
+with:
+
+```bash
+rustup component add rustfmt clippy
 ```
 
 Runtime diagnostics:

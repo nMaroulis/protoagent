@@ -8,7 +8,7 @@ import socket
 from contextlib import suppress
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
@@ -17,6 +17,7 @@ from .llm import ollama_context_window
 from .runtime_bridge import RuntimeBridge
 
 _FALLBACK_PORT = 19100
+TransportName = Literal["http", "websocket", "sse", "json-rpc", "sse-json-rpc", "grpc", "runtime"]
 
 
 def run_selected_model(
@@ -98,7 +99,9 @@ async def _run_agent_deck(
 
     emit(f"Registry prepared at {urls['registry']}.")
     emit(f"All LLM-capable agents configured with {provider} / {model}.")
-    emit(f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'}).")
+    emit(
+        f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'})."
+    )
     emit(f"Active project workspace: {project}.")
     emit(f"Conversation session: {session_id or 'task-local'}.")
     if provider == "ollama":
@@ -160,7 +163,9 @@ async def _run_agent_deck(
         if canceled := canceled_before_execution():
             return canceled
 
-        client = AgentClient(url=urls["client"], transport=agent_transport, timeout=_runtime_timeout())
+        client = AgentClient(
+            url=urls["client"], transport=agent_transport, timeout=_runtime_timeout()
+        )
         cancellation_monitor = asyncio.create_task(
             _monitor_cancellation(
                 bridge=bridge,
@@ -215,7 +220,9 @@ async def _run_agent_deck(
             )
 
         previews = _approval_previews(bridge.approval_requests)
-        events.extend(_approval_event_summaries(bridge.approval_requests, bridge.approval_decisions))
+        events.extend(
+            _approval_event_summaries(bridge.approval_requests, bridge.approval_decisions)
+        )
 
         return {
             "provider": provider,
@@ -256,7 +263,8 @@ def _runtime_urls() -> dict[str, str]:
     return {
         "registry": _env_url("PROTOAGENT_REGISTRY_URL", "REGISTRY_URL") or _local_url(host),
         "client": _env_url("PROTOAGENT_CLIENT_URL", "CLIENT_URL") or _local_url(host),
-        "architect": _env_url("PROTOAGENT_ARCHITECT_URL", "ARCHITECT_AGENT_URL") or _local_url(host),
+        "architect": _env_url("PROTOAGENT_ARCHITECT_URL", "ARCHITECT_AGENT_URL")
+        or _local_url(host),
         "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
         "coder": _env_url("PROTOAGENT_CODER_URL", "CODER_AGENT_URL") or _local_url(host),
     }
@@ -301,9 +309,13 @@ def _runtime_timeout() -> int:
 def _run_budget(provider: str, model: str, budget_type):
     """Build ProtoLink's typed budget carrier for this application run."""
     cfg = provider_config(provider)
-    context_window = ollama_context_window(cfg) if provider == "ollama" else _env_or_config_int(
-        "PROTOAGENT_RUN_MAX_INPUT_TOKENS",
-        cfg.get("context_window"),
+    context_window = (
+        ollama_context_window(cfg)
+        if provider == "ollama"
+        else _env_or_config_int(
+            "PROTOAGENT_RUN_MAX_INPUT_TOKENS",
+            cfg.get("context_window"),
+        )
     )
     return budget_type(
         max_steps=_env_int("PROTOAGENT_RUN_MAX_STEPS"),
@@ -358,7 +370,7 @@ def _optional_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _agent_transport() -> str:
+def _agent_transport() -> TransportName:
     """Return the ProtoLink transport used by local agents and the client."""
     transport = os.getenv("PROTOAGENT_AGENT_TRANSPORT", "sse").strip().lower()
     aliases = {
@@ -367,10 +379,21 @@ def _agent_transport() -> str:
         "sse-jsonrpc": "sse",
         "sse-json-rpc": "sse",
     }
-    return aliases.get(transport, transport or "sse")
+    normalized = aliases.get(transport, transport or "sse")
+    if normalized not in {
+        "http",
+        "websocket",
+        "sse",
+        "json-rpc",
+        "sse-json-rpc",
+        "grpc",
+        "runtime",
+    }:
+        return "sse"
+    return cast(TransportName, normalized)
 
 
-def _streaming_enabled(transport: str) -> bool:
+def _streaming_enabled(transport: TransportName) -> bool:
     """Decide whether to consume ProtoLink task streams for this run."""
     raw = os.getenv("PROTOAGENT_STREAM", "1").strip().lower()
     if raw in {"0", "false", "no", "off"}:
@@ -430,7 +453,11 @@ async def _send_task_streaming(
         if event_type == "task_status_update":
             final_status = str(payload.get("new_state") or final_status)
             metadata = payload.get("metadata", {})
-            if payload.get("final") and isinstance(metadata, dict) and isinstance(metadata.get("task"), dict):
+            if (
+                payload.get("final")
+                and isinstance(metadata, dict)
+                and isinstance(metadata.get("task"), dict)
+            ):
                 final_task = metadata["task"]
             continue
 
@@ -521,14 +548,17 @@ def _append_event(
         events.append(message)
         bridge.emit(message, run_event=run_event)
     elif not events[-1].startswith("Stream trace limit reached"):
-        limit_message = f"Stream trace limit reached ({limit}); suppressing further event summaries."
+        limit_message = (
+            f"Stream trace limit reached ({limit}); suppressing further event summaries."
+        )
         events.append(limit_message)
         bridge.emit(limit_message)
 
 
 def _run_event_summary(event: dict[str, Any]) -> str:
     """Return the stable RunEvent summary while suppressing token chunks."""
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    raw_payload = event.get("payload")
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
     if payload.get("llm_event_type") == "llm_chunk":
         return ""
     return str(event.get("summary") or event.get("type") or "runtime event")
@@ -693,10 +723,14 @@ def _approval_previews(requests: list[dict[str, Any]]) -> dict[str, list[Any]]:
     targets: list[str] = []
     diffs: list[dict[str, str]] = []
     for request in requests:
-        action = request.get("action") if isinstance(request.get("action"), dict) else {}
-        metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
-        payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
-        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        raw_action = request.get("action")
+        action: dict[str, Any] = raw_action if isinstance(raw_action, dict) else {}
+        raw_metadata = action.get("metadata")
+        metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+        raw_payload = action.get("payload")
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        raw_arguments = payload.get("arguments")
+        arguments: dict[str, Any] = raw_arguments if isinstance(raw_arguments, dict) else {}
         path = str(metadata.get("path") or arguments.get("path") or "")
         if path:
             targets.append(path)
@@ -721,7 +755,8 @@ def _approval_event_summaries(
     summaries = []
     for request in requests:
         request_id = str(request.get("request_id") or "")
-        action = request.get("action") if isinstance(request.get("action"), dict) else {}
+        raw_action = request.get("action")
+        action: dict[str, Any] = raw_action if isinstance(raw_action, dict) else {}
         name = str(action.get("description") or action.get("name") or "runtime action")
         decision = by_request.get(request_id, {})
         outcome = "approved" if decision.get("approved") else "denied"

@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any
 
 from protolink import Agent, CapabilityPolicy
+from protolink.types import TransportType
 
-from ..context import build_context_pack as loom_context_pack
 from .. import tools
+from ..context import build_context_pack as loom_context_pack
 from .common import (
     QUIET_LOGGER,
     conversation_storage,
@@ -35,7 +36,7 @@ def create_explorer_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: str = "sse",
+    transport: TransportType | None = "sse",
     telemetry=None,
 ):
     """Create the read-only repository cartographer."""

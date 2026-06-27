@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from protolink import Agent, Artifact, CapabilityPolicy, Part, RunAction, RunContext
+from protolink.types import TransportType
 
 from .. import tools
 from .common import (
@@ -38,7 +39,7 @@ def create_coder_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: str = "sse",
+    transport: TransportType | None = "sse",
     approval_handler=None,
     telemetry=None,
 ):

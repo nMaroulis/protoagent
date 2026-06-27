@@ -12,4 +12,4 @@ CORE_DIR = Path(__file__).resolve().parents[2] / "core"
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
-from protoagent_core.agent_engine import *  # noqa: F401,F403
+from protoagent_core.agent_engine import *  # noqa: E402,F401,F403

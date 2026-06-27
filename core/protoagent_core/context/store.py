@@ -47,8 +47,7 @@ class ContextStore:
         with self.connect() as conn:
             count = conn.execute("select count(*) from files").fetchone()[0]
             meta = {
-                row["key"]: row["value"]
-                for row in conn.execute("select key, value from metadata")
+                row["key"]: row["value"] for row in conn.execute("select key, value from metadata")
             }
         return {
             "name": "Context Loom",
@@ -121,7 +120,9 @@ class ContextStore:
                     (key, str(value)),
                 )
 
-    def mark_indexed(self, duration_ms: int, files_seen: int, files_updated: int, files_removed: int) -> None:
+    def mark_indexed(
+        self, duration_ms: int, files_seen: int, files_updated: int, files_removed: int
+    ) -> None:
         self.update_metadata(
             {
                 "schema": 1,

@@ -37,6 +37,16 @@ pages that should usually move with them.
 | `core/protoagent_core/agents/*.py` | `Core / Agent Deck`, `Core / Safety And Tools` |
 | `core/protoagent_core/context/*.py` | `Core / Context Loom Internals`, `CLI / Context Loom In The CLI` |
 
+## Tooling And Contribution Workflow
+
+| Source | Update docs |
+| --- | --- |
+| `pyproject.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
+| `rustfmt.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
+| `CONTRIBUTING.md` | `Contributing / Development Workflow` |
+| `.github/workflows/python-quality.yml` | `Contributing / Development Workflow`, `Reference / Verification` |
+| `.gitignore` | `Contributing / Development Workflow` when generated or local-only paths change |
+
 ## Planning And Samples
 
 | Source | Update docs |

@@ -116,7 +116,7 @@ def _discover_ollama() -> dict[str, Any]:
         status="online" if response.get("ok") else ("detected" if models else "offline"),
         base_url=base_url,
         models=models,
-        hint=response.get("error") if not response.get("ok") else "",
+        hint=_error_hint(response) if not response.get("ok") else "",
     )
 
 
@@ -138,7 +138,7 @@ def _discover_lmstudio() -> dict[str, Any]:
         status="online" if response.get("ok") else ("detected" if models else "offline"),
         base_url=base_url,
         models=models,
-        hint=response.get("error") if not response.get("ok") else "",
+        hint=_error_hint(response) if not response.get("ok") else "",
     )
 
 
@@ -161,7 +161,7 @@ def _discover_openai_compatible() -> dict[str, Any]:
         status="online" if response.get("ok") else "offline",
         base_url=base_url,
         models=models,
-        hint=response.get("error") if not response.get("ok") else "",
+        hint=_error_hint(response) if not response.get("ok") else "",
         configured=bool(response.get("ok") or cfg.get("model") or api_key),
         api_key_set=bool(api_key),
         key_status=key_status,
@@ -183,7 +183,9 @@ def _discover_llamacpp_server() -> dict[str, Any]:
         props = _get_json(f"{base_url}/props")
         if props.get("ok"):
             data = props.get("data", {})
-            name = data.get("model_path") or data.get("default_generation_settings", {}).get("model")
+            name = data.get("model_path") or data.get("default_generation_settings", {}).get(
+                "model"
+            )
             if name:
                 models.append(_model(str(name), source="llama.cpp-server", metadata=data))
             response = props
@@ -194,7 +196,7 @@ def _discover_llamacpp_server() -> dict[str, Any]:
         status="online" if response.get("ok") else "offline",
         base_url=base_url,
         models=models,
-        hint=response.get("error") if not response.get("ok") else "",
+        hint=_error_hint(response) if not response.get("ok") else "",
     )
 
 
@@ -258,7 +260,9 @@ def _api_provider(provider: str, *, validate_key: bool = False) -> dict[str, Any
     )
 
 
-def _get_json(url: str, timeout: float = 1.2, headers: dict[str, str] | None = None) -> dict[str, Any]:
+def _get_json(
+    url: str, timeout: float = 1.2, headers: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Fetch JSON with a short timeout and return a status envelope."""
     request_headers = {"Accept": "application/json"}
     if headers:
@@ -274,7 +278,9 @@ def _get_json(url: str, timeout: float = 1.2, headers: dict[str, str] | None = N
         return {"ok": False, "error": str(exc)}
 
 
-def _validate_api_key(provider: str, api_key: str, base_url: str = "", model: str = "") -> dict[str, str]:
+def _validate_api_key(
+    provider: str, api_key: str, base_url: str = "", model: str = ""
+) -> dict[str, str]:
     """Validate an API key with a lightweight models endpoint request."""
     cache_key = _validation_cache_key(provider, api_key, base_url, model)
     cached = _cached_validation(cache_key)
@@ -294,7 +300,10 @@ def _validate_api_key(provider: str, api_key: str, base_url: str = "", model: st
     url, headers = request
     response = _get_json(url, timeout=2.0, headers=headers)
     if response.get("ok"):
-        validation = {"status": "valid", "hint": "API key validated against the provider models endpoint."}
+        validation = {
+            "status": "valid",
+            "hint": "API key validated against the provider models endpoint.",
+        }
         _store_validation(cache_key, validation)
         return validation
     if response.get("status_code") in {401, 403}:
@@ -304,7 +313,10 @@ def _validate_api_key(provider: str, api_key: str, base_url: str = "", model: st
     error = str(response.get("error", "provider did not return a validation response"))
     if protolink_validation["hint"]:
         error = f"{error}; {protolink_validation['hint']}"
-    validation = {"status": "unverified", "hint": f"API key present, but validation was inconclusive: {error}"}
+    validation = {
+        "status": "unverified",
+        "hint": f"API key present, but validation was inconclusive: {error}",
+    }
     _store_validation(cache_key, validation)
     return validation
 
@@ -326,7 +338,11 @@ def _cached_validation(cache_key: tuple[str, str, str, str]) -> dict[str, str] |
     if cached is None:
         return None
     timestamp, validation = cached
-    ttl = VALIDATION_CACHE_TTL_SECONDS if validation.get("status") == "valid" else VALIDATION_RETRY_TTL_SECONDS
+    ttl = (
+        VALIDATION_CACHE_TTL_SECONDS
+        if validation.get("status") == "valid"
+        else VALIDATION_RETRY_TTL_SECONDS
+    )
     if time.monotonic() - timestamp > ttl:
         _VALIDATION_CACHE.pop(cache_key, None)
         return None
@@ -404,7 +420,9 @@ def _api_key_validation_request(
         query = urllib.parse.urlencode({"key": api_key})
         return f"https://generativelanguage.googleapis.com/v1beta/models?{query}", {}
     if provider == "deepseek":
-        endpoint = _openai_compatible_models_url((base_url or "https://api.deepseek.com").rstrip("/"))
+        endpoint = _openai_compatible_models_url(
+            (base_url or "https://api.deepseek.com").rstrip("/")
+        )
         return endpoint, {"Authorization": f"Bearer {api_key}"}
     return None
 
@@ -513,7 +531,9 @@ def _provider(
         "name": PROVIDER_LABELS.get(provider_id, provider_id),
         "kind": kind,
         "status": status,
-        "configured": bool(configured) if configured is not None else status in {"online", "detected", "configured"},
+        "configured": bool(configured)
+        if configured is not None
+        else status in {"online", "detected", "configured"},
         "base_url": base_url,
         "hint": hint,
         "api_key_set": api_key_set,
@@ -522,6 +542,10 @@ def _provider(
         "env_key": env_key,
         "models": [model for model in models if model.get("id")],
     }
+
+
+def _error_hint(response: dict[str, Any]) -> str:
+    return str(response.get("error") or "")
 
 
 def _model(

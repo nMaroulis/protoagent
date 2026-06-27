@@ -68,7 +68,7 @@ const sidebars = {
       type: 'category',
       label: 'Contributing',
       collapsed: true,
-      items: ['contributing/maintenance'],
+      items: ['contributing/development-workflow', 'contributing/maintenance'],
     },
   ],
 };

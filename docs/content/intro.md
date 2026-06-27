@@ -71,6 +71,7 @@ updating one page, not rewriting a manual.
 | Context Loom scoring, index schema, or prompt format | `CLI / Context Loom` and `Core / Context Loom` |
 | Runtime transport, budgets, streaming, tracing, or cancellation | `Core / Runtime` and `Reference / Environment` |
 | Agent prompts, tools, or policies | `Core / Agent Deck` and `Core / Safety and Tools` |
+| Contributor tooling, linting, type-checking, or formatting | `Contributing / Development Workflow` and `Reference / Verification` |
 | ACP implementation | `ACP / Plan` |
 
 ## Source Of Truth
@@ -95,3 +96,6 @@ Useful source entrypoints:
 | `core/protoagent_core/context/` | Context Loom index, SQLite store, pack builder, schemas. |
 | `core/protoagent_core/history.py` | ProtoLink state describe, compact, reset, and persistence helpers. |
 | `core/protoagent_core/tools.py` | Workspace-safe read, search, diff preview, and writes. |
+| `pyproject.toml` | Ruff and ty configuration for the Python surface. |
+| `rustfmt.toml` | Rust formatting configuration for the CLI crate. |
+| `CONTRIBUTING.md` | GitHub-facing contributor setup and pull request workflow. |

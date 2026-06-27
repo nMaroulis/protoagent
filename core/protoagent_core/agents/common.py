@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
+
+from protolink.logging import BaseLogger
 
 from ..config import normalize_provider
 from ..llm import create_llm_from_config
@@ -15,22 +18,26 @@ DEFAULT_AGENT_URLS = {
 }
 
 
-class QuietLogger:
+class QuietLogger(BaseLogger):
     """Small logger shim for embedded CLI runs."""
 
-    def debug(self, *_args, **_kwargs):
+    @property
+    def name(self) -> str:
+        return "protoagent-quiet"
+
+    def debug(self, message: str, **kwargs: Any) -> None:
         pass
 
-    def info(self, *_args, **_kwargs):
+    def info(self, message: str, **kwargs: Any) -> None:
         pass
 
-    def warning(self, *_args, **_kwargs):
+    def warning(self, message: str, **kwargs: Any) -> None:
         pass
 
-    def error(self, *_args, **_kwargs):
+    def error(self, message: str, **kwargs: Any) -> None:
         pass
 
-    def exception(self, *_args, **_kwargs):
+    def exception(self, message: str, **kwargs: Any) -> None:
         pass
 
 

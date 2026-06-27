@@ -340,7 +340,9 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(result)
             self.assertEqual(result["status"], "canceled")
             self.assertTrue(result["run_context"]["canceled"])
-            self.assertEqual(result["run_report"]["context"]["cancel_reason"], "Canceled during startup")
+            self.assertEqual(
+                result["run_report"]["context"]["cancel_reason"], "Canceled during startup"
+            )
             self.assertIn("before model execution", result["events"][-1])
             bridge.cleanup()
 

@@ -18,7 +18,9 @@ MAX_INDEX_FILES = 1_200
 MAX_INDEX_CONTENT_CHARS = 80_000
 
 
-def refresh_context_index(workspace: str | None = None, max_files: int = MAX_INDEX_FILES) -> dict[str, Any]:
+def refresh_context_index(
+    workspace: str | None = None, max_files: int = MAX_INDEX_FILES
+) -> dict[str, Any]:
     """Refresh the deterministic local index for a workspace."""
     started = time.time()
     root = workspace_root(workspace)
@@ -152,7 +154,10 @@ def _python_metadata(content: str) -> tuple[list[str], list[str], list[str]]:
     except SyntaxError:
         return _regex_metadata(
             content,
-            symbol_patterns=[r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)", r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)"],
+            symbol_patterns=[
+                r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)",
+                r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)",
+            ],
             import_pattern=r"^\s*(?:from\s+([A-Za-z0-9_.]+)\s+import|import\s+([A-Za-z0-9_., ]+))",
         )
     symbols: list[str] = []
@@ -175,7 +180,9 @@ def _regex_metadata(
 ) -> tuple[list[str], list[str], list[str]]:
     symbols: list[str] = []
     for pattern in symbol_patterns:
-        symbols.extend(match.group(1).strip() for match in re.finditer(pattern, content, flags=re.MULTILINE))
+        symbols.extend(
+            match.group(1).strip() for match in re.finditer(pattern, content, flags=re.MULTILINE)
+        )
     imports: list[str] = []
     for match in re.finditer(import_pattern, content, flags=re.MULTILINE):
         imports.extend(group.strip() for group in match.groups() if group and group.strip())

@@ -136,7 +136,9 @@ def format_context_pack_for_prompt(pack: dict[str, Any]) -> str:
             sections.extend(["Snippet:", snippet])
     questions = pack.get("open_questions", [])
     if questions:
-        sections.extend(["", "Context Loom open questions:", *[f"- {question}" for question in questions]])
+        sections.extend(
+            ["", "Context Loom open questions:", *[f"- {question}" for question in questions]]
+        )
     return "\n".join(sections)
 
 
@@ -311,5 +313,7 @@ def _open_questions(query: str, items: list[dict[str, Any]]) -> list[str]:
     if items:
         return []
     if query.strip():
-        return ["No high-confidence files matched the request; Explorer should verify with targeted search."]
+        return [
+            "No high-confidence files matched the request; Explorer should verify with targeted search."
+        ]
     return ["No query was provided; run Context Loom with a task to build a focused pack."]

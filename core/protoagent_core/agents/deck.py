@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from protolink.types import TransportType
+
 from ..config import normalize_provider
 from .architect import create_architect_agent
 from .coder import create_coder_agent
@@ -16,7 +18,7 @@ def create_agent_deck(
     model: str | None = None,
     workspace: str | None = None,
     urls: dict[str, str] | None = None,
-    transport: str = "sse",
+    transport: TransportType = "sse",
     approval_handler=None,
     telemetry=None,
 ) -> dict[str, Any]:
@@ -77,7 +79,13 @@ def agent_manifest() -> dict[str, Any]:
                 "name": "explorer",
                 "role": "context",
                 "memory": "protoagent-explorer",
-                "tools": ["build_context_pack", "read_file", "list_directory", "search_regex", "get_git_status"],
+                "tools": [
+                    "build_context_pack",
+                    "read_file",
+                    "list_directory",
+                    "search_regex",
+                    "get_git_status",
+                ],
             },
             {
                 "name": "coder",

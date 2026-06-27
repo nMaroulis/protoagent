@@ -1,6 +1,5 @@
 import recipes
 import recommender
-import storage
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)

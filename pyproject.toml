@@ -1,0 +1,23 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+indent-width = 4
+src = ["core", "cli/python", "playground"]
+include = ["pyproject.toml", "core/**/*.py", "cli/python/**/*.py", "playground/**/*.py"]
+extend-exclude = [
+    "docs/.docusaurus",
+    "docs/build",
+    "docs/node_modules",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.ty.src]
+include = ["core/protoagent_core", "cli/python"]
+exclude = ["core/tests", "docs", "playground"]

@@ -19,6 +19,7 @@ runtime contracts, or architecture boundaries change.
 | New agent, tool, or capability | `Core / Agent Deck`, `Core / Safety And Tools` |
 | New Context Loom signal or schema field | `Core / Context Loom Internals`, `CLI / Context Loom In The CLI` |
 | New memory behavior | `Core / State And Memory`, `CLI / Projects And Sessions` |
+| New lint, type-check, formatter, or contributor workflow | `Contributing / Development Workflow`, `Reference / Verification` |
 | ACP implementation | `ACP / Overview`, `ACP / Plan`, `Reference / File Map` |
 
 ## Writing Style

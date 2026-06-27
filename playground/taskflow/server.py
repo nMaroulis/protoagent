@@ -5,10 +5,12 @@ from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
+
 @app.get("/tasks")
 def tasks():
     """List all tasks and return them as JSON."""
     return jsonify([utils.serialize(t) for t in storage.list_tasks()])
+
 
 @app.post("/tasks")
 def create():
@@ -18,6 +20,7 @@ def create():
     task = service.add_task(data["title"])
 
     return jsonify(utils.serialize(task))
+
 
 @app.post("/tasks/<int:id>/complete")
 def complete(id):
@@ -29,6 +32,7 @@ def complete(id):
 
     return jsonify(utils.serialize(task))
 
+
 @app.get("/search")
 def search():
     """Search for tasks based on a keyword query (q)."""
@@ -37,6 +41,7 @@ def search():
     results = service.search(keyword)
 
     return jsonify([utils.serialize(t) for t in results])
+
 
 @app.get("/stats")
 def stats():

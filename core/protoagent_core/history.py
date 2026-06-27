@@ -101,7 +101,9 @@ def persist_architect_turn(
         return {"agent": "architect", "changed": False, "reason": "storage unavailable"}
 
     state = ConversationState(storage)
-    history = state.get_history(session_id, default_system_prompt=_architect_system_prompt(workspace))
+    history = state.get_history(
+        session_id, default_system_prompt=_architect_system_prompt(workspace)
+    )
     existing = history.to_list()
     if _has_current_top_level_turn(existing, user_prompt, assistant_answer):
         return {
@@ -242,7 +244,9 @@ def _compaction_options(agent: Any, strategy: str, limit: int | None) -> dict[st
     return {"max_tokens": max(1_024, max_tokens), "preserve_recent": 6}
 
 
-def _compact_summary(session_id: str, strategy: str, reports: list[dict[str, Any]]) -> dict[str, Any]:
+def _compact_summary(
+    session_id: str, strategy: str, reports: list[dict[str, Any]]
+) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "strategy": strategy,

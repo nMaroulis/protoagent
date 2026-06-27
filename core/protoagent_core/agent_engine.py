@@ -25,22 +25,23 @@ from .context import (
     build_context_pack,
     context_pack_events,
     context_pack_summary,
-    context_status as loom_status,
     format_context_pack_for_prompt,
     refresh_context_index,
 )
+from .context import (
+    context_status as loom_status,
+)
+from .help_agent import answer_help_question as guide_answer_help_question
 from .history import (
     compact_saved_histories,
     describe_saved_histories,
     persist_architect_turn,
     reset_saved_histories,
 )
-from .help_agent import answer_help_question as guide_answer_help_question
 from .llm import ollama_context_window_details, validate_protolink
 from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
 from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
-
 
 MAX_TAGGED_FILES = 6
 MAX_TAGGED_CONTEXT_CHARS = 12_000
@@ -136,7 +137,9 @@ def compact_protolink_history(
         if report.get("changed")
     ]
     if result["errors"]:
-        result["summary"] = "ProtoLink compaction completed with warnings: " + "; ".join(result["errors"])
+        result["summary"] = "ProtoLink compaction completed with warnings: " + "; ".join(
+            result["errors"]
+        )
     elif changed_agents:
         names = ", ".join(changed_agents)
         result["summary"] = (
@@ -144,7 +147,9 @@ def compact_protolink_history(
             f"removed {result['removed_messages']} message(s)."
         )
     elif result["found"]:
-        result["summary"] = "ProtoLink histories were already within the requested compaction boundary."
+        result["summary"] = (
+            "ProtoLink histories were already within the requested compaction boundary."
+        )
     else:
         result["summary"] = "No saved ProtoLink conversation history exists for this project."
     return _json(result)
@@ -217,7 +222,9 @@ def doctor(workspace: str | None = None) -> str:
             "protolink": protolink,
             "active_provider": active_provider,
             "active_model": active.get("model", ""),
-            "active_provider_status": provider_inventory.get("status") if provider_inventory else "unknown",
+            "active_provider_status": provider_inventory.get("status")
+            if provider_inventory
+            else "unknown",
             "agents": agent_manifest()["agents"],
         }
     )
@@ -270,7 +277,9 @@ def process_prompt(
         _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
-        _emit_progress(progress_path, "Scaffold mode selected; returning diagnostics without a model call.")
+        _emit_progress(
+            progress_path, "Scaffold mode selected; returning diagnostics without a model call."
+        )
         return _json(
             _fallback_response(
                 prompt,
@@ -338,7 +347,9 @@ def _fallback_response(
     if not protolink_status["installed"]:
         events.append("Protolink is not importable in this Python environment yet.")
     elif not protolink_status.get("agent_ready"):
-        events.append(f"Protolink Agent runtime is blocked: {protolink_status.get('error', 'unknown error')}")
+        events.append(
+            f"Protolink Agent runtime is blocked: {protolink_status.get('error', 'unknown error')}"
+        )
     if not model:
         events.append("No active model is selected for the current provider.")
     events.extend(_tag_events(tagged_context))
@@ -416,7 +427,11 @@ def _model_response(
             user_prompt=prompt,
             assistant_answer=answer,
         )
-    target_label = ", ".join(sorted(set([*targets, *action_targets, *diff_targets]))) if [*targets, *action_targets, *diff_targets] else ""
+    target_label = (
+        ", ".join(sorted(set([*targets, *action_targets, *diff_targets])))
+        if [*targets, *action_targets, *diff_targets]
+        else ""
+    )
     diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
     return {
         "status": "canceled" if runtime_status == "canceled" else "answered",
@@ -568,7 +583,9 @@ def _runtime_context_char_limit() -> int:
         except ValueError:
             pass
     provider = str(visible_config().get("active_provider", "ollama"))
-    return LOCAL_RUNTIME_CONTEXT_CHARS if provider in LOCAL_PROVIDERS else REMOTE_RUNTIME_CONTEXT_CHARS
+    return (
+        LOCAL_RUNTIME_CONTEXT_CHARS if provider in LOCAL_PROVIDERS else REMOTE_RUNTIME_CONTEXT_CHARS
+    )
 
 
 def _bounded_text(value: str, limit: int) -> str:
@@ -583,7 +600,9 @@ def _prompt_with_tagged_context(prompt: str, tagged_context: dict[str, Any]) -> 
     return _runtime_prompt(prompt, tagged_context)
 
 
-def _context_pack_for_prompt(prompt: str, workspace: str, tagged_context: dict[str, Any]) -> dict[str, Any]:
+def _context_pack_for_prompt(
+    prompt: str, workspace: str, tagged_context: dict[str, Any]
+) -> dict[str, Any]:
     """Build Context Loom context without letting index failures break a run."""
     try:
         tagged_paths = [str(item.get("path", "")) for item in tagged_context.get("items", [])]
@@ -597,7 +616,9 @@ def _context_pack_for_prompt(prompt: str, workspace: str, tagged_context: dict[s
             "errors": [f"Context Loom unavailable: {exc}"],
             "index": {"files_indexed": 0, "duration_ms": 0},
             "git": {"success": False, "status": []},
-            "open_questions": ["Context Loom failed; Explorer should use direct read/search tools."],
+            "open_questions": [
+                "Context Loom failed; Explorer should use direct read/search tools."
+            ],
         }
 
 

@@ -12,7 +12,6 @@ from protolink import Agent, CapabilityPolicy, Task
 from .config import CONFIG_DIR, visible_config
 from .llm import create_llm_from_config
 
-
 GUIDE_SYSTEM_PROMPT = """You are Guide, ProtoAgent's isolated interactive help agent.
 
 You answer questions about using ProtoAgent itself. You are not part of the

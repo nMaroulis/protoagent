@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from protolink import Agent, CapabilityPolicy
+from protolink.types import TransportType
 
 from .common import (
     QUIET_LOGGER,
@@ -43,7 +44,7 @@ def create_architect_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: str = "sse",
+    transport: TransportType | None = "sse",
     telemetry=None,
 ):
     """Create the user-facing orchestrator agent."""

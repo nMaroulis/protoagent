@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_VERSION = 1
-CONFIG_DIR = Path(os.getenv("PROTOAGENT_CONFIG_DIR", os.getenv("PROTOAGENT_HOME", "~/.protoagent"))).expanduser()
+CONFIG_DIR = Path(
+    os.getenv("PROTOAGENT_CONFIG_DIR", os.getenv("PROTOAGENT_HOME", "~/.protoagent"))
+).expanduser()
 CONFIG_PATH = CONFIG_DIR / "config.json"
 MIN_CONTEXT_WINDOW = 2_048
 MAX_CONTEXT_WINDOW = 2_097_152
@@ -159,7 +161,9 @@ def set_context_window(provider: str, window_tokens: int | None) -> dict[str, An
     return visible_config(config)
 
 
-def provider_config(provider: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
+def provider_config(
+    provider: str | None = None, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Return a provider config with environment API keys resolved."""
     config = config or load_config()
     provider = normalize_provider(provider or config.get("active_provider", "ollama"))

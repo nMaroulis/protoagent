@@ -50,7 +50,9 @@ def to_relative(path: Path, workspace: str | None = None) -> str:
         return str(path)
 
 
-def read_file(path: str, workspace: str | None = None, with_line_numbers: bool = True) -> dict[str, Any]:
+def read_file(
+    path: str, workspace: str | None = None, with_line_numbers: bool = True
+) -> dict[str, Any]:
     """Read a UTF-8 text file with optional line-number formatting."""
     target = safe_path(path, workspace)
     if not target.exists():
@@ -69,7 +71,9 @@ def read_file(path: str, workspace: str | None = None, with_line_numbers: bool =
     except UnicodeDecodeError:
         return {"success": False, "error": f"File is not UTF-8 text: {path}"}
 
-    numbered = "".join(f"{idx + 1:4d} | {line}" for idx, line in enumerate(content.splitlines(True)))
+    numbered = "".join(
+        f"{idx + 1:4d} | {line}" for idx, line in enumerate(content.splitlines(True))
+    )
     return {
         "success": True,
         "path": to_relative(target, workspace),
@@ -89,7 +93,9 @@ def list_directory(path: str = ".", workspace: str | None = None) -> dict[str, A
 
     entries = []
     try:
-        children = sorted(target.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower()))
+        children = sorted(
+            target.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower())
+        )
     except OSError as exc:
         return {"success": False, "error": str(exc)}
 
@@ -108,7 +114,12 @@ def list_directory(path: str = ".", workspace: str | None = None) -> dict[str, A
                 entry["size_bytes"] = None
         entries.append(entry)
 
-    return {"success": True, "path": to_relative(target, workspace), "entries": entries, "count": len(entries)}
+    return {
+        "success": True,
+        "path": to_relative(target, workspace),
+        "entries": entries,
+        "count": len(entries),
+    }
 
 
 def search_regex(
@@ -273,7 +284,9 @@ def _walk_text_files(root: Path):
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name not in DEFAULT_IGNORES and not name.startswith(".")]
+        dirs[:] = [
+            name for name in dirs if name not in DEFAULT_IGNORES and not name.startswith(".")
+        ]
         for filename in files:
             if filename.startswith("."):
                 continue

@@ -35,7 +35,9 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             original_messages = len(history)
             state.save_history("session-test", history)
             llm = MockLLM()
-            llm.configure_metrics(LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt"))
+            llm.configure_metrics(
+                LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt")
+            )
             agent = _test_agent("architect", storage, llm)
 
             reports = asyncio.run(compact_agent_histories_for_run([agent], "session-test"))
@@ -60,7 +62,9 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             }
             for storage in storages.values():
                 ConversationState(storage).save_history("session-test", _large_history())
-            agents = [(name, _test_agent(name, storage, MockLLM())) for name, storage in storages.items()]
+            agents = [
+                (name, _test_agent(name, storage, MockLLM())) for name, storage in storages.items()
+            ]
 
             with (
                 patch(
@@ -186,7 +190,9 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
 
 def _test_agent(name: str, storage: SQLiteStorage, llm: MockLLM | None = None) -> Agent:
     if llm is not None:
-        llm.configure_metrics(LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt"))
+        llm.configure_metrics(
+            LLMModelProfile(context_window=2_048, provider="mock", model="mock-gpt")
+        )
     return Agent(
         card={"name": name, "description": f"{name} test agent", "url": f"runtime://{name}"},
         transport=None,

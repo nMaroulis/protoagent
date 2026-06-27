@@ -35,7 +35,10 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
         kwargs["api_key"] = api_key
 
     base_url = cfg.get("base_url")
-    if provider in {"ollama", "lmstudio", "llama.cpp-server", "deepseek", "openai-compatible"} and base_url:
+    if (
+        provider in {"ollama", "lmstudio", "llama.cpp-server", "deepseek", "openai-compatible"}
+        and base_url
+    ):
         kwargs["base_url"] = base_url
 
     if provider == "lmstudio" and "api_key" not in kwargs:
@@ -57,8 +60,10 @@ def llm_model_profile(provider: str, model: str | None = None):
     provider = normalize_provider(provider)
     cfg = provider_config(provider)
     selected_model = model or cfg.get("model") or None
-    context_window = ollama_context_window(cfg) if provider == "ollama" else _optional_positive_int(
-        cfg.get("context_window")
+    context_window = (
+        ollama_context_window(cfg)
+        if provider == "ollama"
+        else _optional_positive_int(cfg.get("context_window"))
     )
     return LLMModelProfile(
         context_window=context_window,
@@ -83,7 +88,8 @@ def ollama_context_window(config: dict[str, Any] | None = None) -> int:
 def ollama_context_window_details(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the effective Ollama context window and where it came from."""
     cfg = provider_config("ollama") if config is None else config
-    model_params = cfg.get("model_params") if isinstance(cfg.get("model_params"), dict) else {}
+    raw_model_params = cfg.get("model_params")
+    model_params: dict[str, Any] = raw_model_params if isinstance(raw_model_params, dict) else {}
     candidates = (
         (cfg.get("context_window"), "app config"),
         (os.getenv("PROTOAGENT_OLLAMA_NUM_CTX"), "PROTOAGENT_OLLAMA_NUM_CTX"),
@@ -92,6 +98,8 @@ def ollama_context_window_details(config: dict[str, Any] | None = None) -> dict[
         (DEFAULT_OLLAMA_CONTEXT_WINDOW, "ProtoAgent default"),
     )
     for value, source in candidates:
+        if value is None:
+            continue
         try:
             parsed = int(value)
         except (TypeError, ValueError):

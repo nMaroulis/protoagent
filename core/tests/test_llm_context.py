@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from protoagent_core import config as config_module
 from protoagent_core import agent_engine
+from protoagent_core import config as config_module
 from protoagent_core.config import provider_config, set_context_window
 from protoagent_core.llm import (
     DEFAULT_OLLAMA_CONTEXT_WINDOW,
