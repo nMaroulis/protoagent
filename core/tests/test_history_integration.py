@@ -17,6 +17,7 @@ from protoagent_core.history import (
     compact_agent_histories_for_run,
     compact_saved_histories,
     describe_saved_histories,
+    persist_architect_turn,
     reset_saved_histories,
 )
 
@@ -114,6 +115,39 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertEqual(len(architect["recent"]), 2)
             self.assertEqual(architect["state_result"]["operation"], "describe")
             self.assertFalse(explorer["found"])
+
+    def test_persist_architect_turn_bootstraps_missing_top_level_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            storage = SQLiteStorage(
+                db_path=str(Path(directory) / "history.sqlite"),
+                table_name="agent_state",
+                namespace="protoagent-architect",
+            )
+
+            with patch(
+                "protoagent_core.history.conversation_storage",
+                side_effect=lambda name: storage if name == "architect" else None,
+            ):
+                first = persist_architect_turn(
+                    "session-test",
+                    workspace=directory,
+                    user_prompt="hi",
+                    assistant_answer="hello back",
+                )
+                second = persist_architect_turn(
+                    "session-test",
+                    workspace=directory,
+                    user_prompt="hi",
+                    assistant_answer="hello back",
+                )
+
+            messages = ConversationState(storage).to_dict()["session-test"]
+            self.assertTrue(first["changed"])
+            self.assertFalse(second["changed"])
+            self.assertEqual(messages[-2]["role"], "user")
+            self.assertEqual(messages[-2]["content"], "hi")
+            self.assertEqual(messages[-1]["role"], "assistant")
+            self.assertEqual(messages[-1]["content"], "hello back")
 
 
 def _test_agent(name: str, storage: SQLiteStorage, llm: MockLLM | None = None) -> Agent:

@@ -18,6 +18,7 @@ pip install "protolink[http,llms]>=0.6.3"
 - `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget`, records `RunEvent`s with `RunRecorder`, can write local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
+- `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider config and API-key storage at `~/.protoagent/config.json`.
 - `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
@@ -39,9 +40,11 @@ profile, so ProtoLink's `context.prepared`, `llm_context`, and
 continuity lives in ProtoLink's per-agent SQLite state. Before a session
 resumes, the core uses `Agent.compact_state(strategy="tokens")` when that
 profile's history budget is exceeded; `/context history`, `/context compact`,
-and `/context reset` use ProtoLink state operation reports. The Rust trace and
-timeline views consume normalized `RunEvent`s first, and each run returns a
-redacted ProtoLink `RunReport` for diagnostics and replay.
+and `/context reset` use ProtoLink state operation reports. `/context on` and
+`/context off` control whether Rust passes the stable project session ID or a
+task-local session to ProtoLink. The Rust trace and timeline views consume
+normalized `RunEvent`s first, including causal IDs for nested routes, and each
+run returns a redacted ProtoLink `RunReport` for diagnostics and replay.
 
 Before each model run, Context Loom refreshes a deterministic local index and
 injects a bounded Context Pack into the Architect prompt. Explorer also exposes
@@ -77,3 +80,8 @@ Agent policies are deny-by-default: Architect explicitly allows delegation,
 Explorer allows read-only workspace capabilities, Coder requires approval for
 workspace writes, and state describe/reset/compact remains an application
 control-plane path through ProtoLink rather than a model-visible tool.
+
+Interactive help is handled by the isolated Guide agent. `/help` remains a
+static command panel, while `/help <question>` asks Guide using the active
+model. If no model is selected, the CLI shows static help and points the user
+to `/model` before offering interactive help.

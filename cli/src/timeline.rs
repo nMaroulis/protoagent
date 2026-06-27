@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TimelineItem {
@@ -34,7 +35,13 @@ pub(crate) fn build_timeline_from_run_events(
     run_events: &[Value],
     fallback_events: &[String],
 ) -> Vec<TimelineItem> {
-    let items = compact_repeated(run_events.iter().filter_map(parse_run_event).collect());
+    let causal = CausalIndex::from_events(run_events);
+    let items = compact_repeated(
+        run_events
+            .iter()
+            .filter_map(|event| parse_run_event(event, &causal))
+            .collect(),
+    );
     if items.is_empty() {
         build_timeline(fallback_events)
     } else {
@@ -158,6 +165,7 @@ pub(crate) fn format_run_trace(run_events: &[Value], fallback_events: &[String])
     if run_events.is_empty() {
         return fallback_events.join("\n");
     }
+    let causal = CausalIndex::from_events(run_events);
     let mut rows = Vec::new();
     let mut suppressed = 0usize;
     for event in run_events {
@@ -171,7 +179,7 @@ pub(crate) fn format_run_trace(run_events: &[Value], fallback_events: &[String])
             .map(|value| format!("{value:02}"))
             .unwrap_or_else(|| "--".to_string());
         let event_type = value_string(event, &["type"]);
-        let route = trace_route(event);
+        let route = trace_route(event, &causal);
         let summary = trace_summary(event)
             .if_empty_then(|| run_event_summary(event))
             .if_empty_then(|| event_type.clone())
@@ -195,11 +203,68 @@ pub(crate) fn format_run_trace(run_events: &[Value], fallback_events: &[String])
     rows.join("\n")
 }
 
-fn parse_run_event(event: &Value) -> Option<TimelineItem> {
+#[derive(Debug, Clone)]
+struct CausalNode {
+    actor: String,
+    target: String,
+    parent_id: String,
+}
+
+#[derive(Debug, Default)]
+struct CausalIndex {
+    nodes: HashMap<String, CausalNode>,
+}
+
+impl CausalIndex {
+    fn from_events(events: &[Value]) -> Self {
+        let mut index = Self::default();
+        for event in events {
+            let node = CausalNode {
+                actor: run_event_actor(event),
+                target: event_target(event),
+                parent_id: event_parent_id(event),
+            };
+            for id in event_causal_ids(event) {
+                index.nodes.entry(id).or_insert_with(|| node.clone());
+            }
+        }
+        index
+    }
+
+    fn route_for_event(&self, event: &Value) -> Vec<String> {
+        let mut route = Vec::new();
+        if let Some(parent_id) = nonempty(event_parent_id(event)) {
+            self.append_route_for_id(&parent_id, &mut route, 0);
+        }
+        push_route_part(&mut route, run_event_actor(event));
+        let target = event_target(event);
+        if route_target_is_visible(event) {
+            push_route_part(&mut route, target);
+        }
+        route
+    }
+
+    fn append_route_for_id(&self, id: &str, route: &mut Vec<String>, depth: usize) {
+        if depth > 8 {
+            return;
+        }
+        let Some(node) = self.nodes.get(id) else {
+            return;
+        };
+        if let Some(parent_id) = nonempty(node.parent_id.clone()) {
+            self.append_route_for_id(&parent_id, route, depth + 1);
+        }
+        push_route_part(route, node.actor.clone());
+        push_route_part(route, node.target.clone());
+    }
+}
+
+fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem> {
     let event_type = value_string(event, &["type"]);
     let payload = event.get("payload").unwrap_or(&Value::Null);
     let llm_type = value_string(payload, &["llm_event_type"]);
     let actor = run_event_actor(event);
+    let target = event_target(event);
     let summary = run_event_summary(event);
 
     match event_type.as_str() {
@@ -247,28 +312,27 @@ fn parse_run_event(event: &Value) -> Option<TimelineItem> {
                 return Some(item(
                     "SEND",
                     &actor,
-                    &metadata_string(payload, "agent"),
+                    &target,
                     "delegated task",
-                    metadata_string(payload, "action"),
+                    action_mode(payload),
                 ));
             }
             Some(item(
                 "TOOL",
                 &actor,
-                &metadata_string(payload, "tool").if_empty_else(|| action_name(payload)),
+                &target,
                 "started runtime action",
                 summary,
             ))
         }
         "action.completed" => {
             if llm_type == "agent_call_result" {
-                let target = metadata_string(payload, "agent");
                 return Some(item("RETURN", &target, &actor, "returned delegated result", ""));
             }
             Some(item(
                 "TOOL",
                 &actor,
-                &metadata_string(payload, "tool").if_empty_else(|| action_name(payload)),
+                &target,
                 "completed runtime action",
                 summary,
             ))
@@ -306,11 +370,10 @@ fn is_trace_noise(event: &Value) -> bool {
         )
 }
 
-fn trace_route(event: &Value) -> String {
+fn trace_route(event: &Value, causal: &CausalIndex) -> String {
     let payload = event.get("payload").unwrap_or(&Value::Null);
-    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
     let actor = run_event_actor(event);
-    let target = display_agent(&value_string(metadata, &["agent"]));
+    let target = event_target(event);
     match (
         value_string(event, &["type"]).as_str(),
         value_string(payload, &["llm_event_type"]).as_str(),
@@ -321,7 +384,22 @@ fn trace_route(event: &Value) -> String {
         ("action.completed", "agent_call_result") if !target.is_empty() => {
             format!("{target} -> {actor}")
         }
-        _ => actor,
+        ("action.started", "tool_start") => {
+            let route = causal.route_for_event(event);
+            if route.len() > 1 {
+                route.join(" -> ")
+            } else {
+                actor
+            }
+        }
+        _ => {
+            let route = causal.route_for_event(event);
+            if route.len() > 1 {
+                route.join(" -> ")
+            } else {
+                actor
+            }
+        }
     }
 }
 
@@ -333,7 +411,7 @@ fn trace_summary(event: &Value) -> String {
         value_string(payload, &["llm_event_type"]).as_str(),
     ) {
         ("action.started", "agent_call_start") => {
-            let target = display_agent(&value_string(metadata, &["agent"]));
+            let target = event_target(event);
             let mode = value_string(metadata, &["action"]);
             if target.is_empty() {
                 String::new()
@@ -345,7 +423,7 @@ fn trace_summary(event: &Value) -> String {
         }
         ("action.completed", "agent_call_result") => "returned delegated result".to_string(),
         ("action.started", "tool_start") => {
-            let tool = value_string(metadata, &["tool"]);
+            let tool = event_target(event);
             if tool.is_empty() {
                 String::new()
             } else {
@@ -353,7 +431,7 @@ fn trace_summary(event: &Value) -> String {
             }
         }
         ("action.completed", "tool_result") => {
-            let tool = value_string(metadata, &["tool"]);
+            let tool = event_target(event);
             if tool.is_empty() {
                 String::new()
             } else {
@@ -405,6 +483,12 @@ fn action_name(payload: &Value) -> String {
         .if_empty_else(|| value_string(payload, &["metadata", "action", "name"]))
 }
 
+fn action_mode(payload: &Value) -> String {
+    value_string(payload, &["action", "payload", "action"])
+        .if_empty_else(|| value_string(payload, &["action", "payload", "mode"]))
+        .if_empty_else(|| metadata_string(payload, "action"))
+}
+
 fn decision_effect(payload: &Value) -> String {
     value_string(payload, &["decision", "effect"])
         .if_empty_else(|| value_string(payload, &["metadata", "decision", "effect"]))
@@ -417,6 +501,54 @@ fn metadata_string(payload: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+fn event_target(event: &Value) -> String {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    display_agent(
+        &action_name(payload)
+            .if_empty_else(|| value_string(payload, &["action", "kind"]))
+            .if_empty_else(|| metadata_string(payload, "agent"))
+            .if_empty_else(|| metadata_string(payload, "tool")),
+    )
+}
+
+fn event_parent_id(event: &Value) -> String {
+    value_string(event, &["parent_span_id"]).if_empty_else(|| value_string(event, &["parent_action_id"]))
+}
+
+fn event_causal_ids(event: &Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    for key in ["span_id", "action_id", "delegation_id"] {
+        if let Some(id) = nonempty(value_string(event, &[key])) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+fn route_target_is_visible(event: &Value) -> bool {
+    let payload = event.get("payload").unwrap_or(&Value::Null);
+    matches!(
+        (
+            value_string(event, &["type"]).as_str(),
+            value_string(payload, &["llm_event_type"]).as_str(),
+        ),
+        ("action.started", "agent_call_start") | ("action.started", "tool_start")
+    )
+}
+
+fn push_route_part(route: &mut Vec<String>, value: String) {
+    let value = display_agent(&value);
+    if value.is_empty() || route.last() == Some(&value) {
+        return;
+    }
+    route.push(value);
+}
+
+fn nonempty(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn value_string(value: &Value, path: &[&str]) -> String {
@@ -863,5 +995,45 @@ mod tests {
         assert!(trace.contains("action.started"));
         assert!(trace.contains("Architect -> Explorer"));
         assert!(trace.contains("suppressed 2"));
+    }
+
+    #[test]
+    fn run_trace_uses_causal_ids_for_nested_routes() {
+        let trace = format_run_trace(
+            &[
+                json!({
+                    "sequence": 1,
+                    "type": "action.started",
+                    "agent_name": "architect",
+                    "span_id": "delegate-explorer",
+                    "action_id": "delegate-explorer",
+                    "delegation_id": "delegate-explorer",
+                    "summary": "Action started: explorer",
+                    "payload": {
+                        "llm_event_type": "agent_call_start",
+                        "action": {"name": "explorer", "payload": {"action": "infer"}}
+                    }
+                }),
+                json!({
+                    "sequence": 2,
+                    "type": "action.started",
+                    "agent_name": "explorer",
+                    "span_id": "read-file",
+                    "parent_span_id": "delegate-explorer",
+                    "action_id": "read-file",
+                    "parent_action_id": "delegate-explorer",
+                    "summary": "Action started: read_file",
+                    "payload": {
+                        "llm_event_type": "tool_start",
+                        "action": {"name": "read_file"}
+                    }
+                }),
+            ],
+            &[],
+        );
+
+        assert!(trace.contains("Architect -> Explorer"));
+        assert!(trace.contains("Architect -> Explor..."));
+        assert!(trace.contains("calling tool Read_file"));
     }
 }

@@ -7,9 +7,11 @@ import os
 from typing import Any, Iterable
 
 from protolink import Agent, CapabilityPolicy, StateOperationResult
+from protolink.llms.history import ConversationHistory
 from protolink.llms.metrics import estimate_token_count
+from protolink.state.conversation import ConversationState
 
-from .agents.common import QUIET_LOGGER, conversation_storage
+from .agents.common import QUIET_LOGGER, conversation_storage, with_workspace_contract
 
 AGENT_NAMES = ("architect", "explorer", "coder")
 DEFAULT_HISTORY_BUDGET_RATIO = 0.7
@@ -78,6 +80,46 @@ def reset_saved_histories(session_id: str) -> dict[str, Any]:
 def describe_saved_histories(session_id: str, *, recent_messages: int = 6) -> dict[str, Any]:
     """Return a read-only summary of model-facing ProtoLink conversation state."""
     return asyncio.run(_describe_saved_histories(session_id, recent_messages=recent_messages))
+
+
+def persist_architect_turn(
+    session_id: str | None,
+    *,
+    workspace: str | None,
+    user_prompt: str,
+    assistant_answer: str,
+) -> dict[str, Any]:
+    """Ensure the top-level Architect turn exists in ProtoLink conversation state.
+
+    ProtoLink normally saves this through ``Agent.handle_task_streaming()``.
+    This app-level guard only fills the gap when the top-level session was not
+    written, while leaving already persisted Architect histories untouched.
+    """
+    if not session_id or not user_prompt.strip() or not assistant_answer.strip():
+        return {"agent": "architect", "changed": False, "reason": "empty session or turn"}
+    storage = conversation_storage("architect")
+    if storage is None:
+        return {"agent": "architect", "changed": False, "reason": "storage unavailable"}
+
+    state = ConversationState(storage)
+    existing = state.to_dict().get(session_id) or []
+    if existing:
+        return {
+            "agent": "architect",
+            "changed": False,
+            "reason": "already persisted",
+            "message_count": len(existing),
+        }
+
+    history = ConversationHistory(system_prompt=_architect_system_prompt(workspace))
+    history.add_user(user_prompt)
+    history.add_assistant(assistant_answer)
+    state.save_history(session_id, history)
+    return {
+        "agent": "architect",
+        "changed": True,
+        "message_count": len(history),
+    }
 
 
 async def _compact_saved_histories(
@@ -305,6 +347,12 @@ def _state_existed_before(result: StateOperationResult) -> bool:
 def _agent_name(agent: Any) -> str:
     card = getattr(agent, "card", None)
     return str(getattr(card, "name", None) or "agent")
+
+
+def _architect_system_prompt(workspace: str | None) -> str:
+    from .agents.architect import ARCHITECT_SYSTEM_PROMPT
+
+    return with_workspace_contract(ARCHITECT_SYSTEM_PROMPT, workspace, "Architect")
 
 
 def _history_budget_ratio() -> float:

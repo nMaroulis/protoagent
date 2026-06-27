@@ -4,10 +4,11 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    call_process_prompt_with_progress, compact_context_history, context_history_text, context_pack_text,
-    context_status_text, context_window_text, empty_as_unknown, load_doctor,
+    call_process_prompt_with_progress, compact_context_history, context_history_text, context_memory_text,
+    context_pack_text, context_status_text, context_window_text, empty_as_unknown, help_availability_text,
+    help_question_text, load_doctor,
     progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
-    reset_context_history, CoreResponse,
+    reset_context_history, set_context_memory_text, CoreResponse,
 };
 
 mod approval;
@@ -141,7 +142,8 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             Ok(true)
         }
         "/help" | "/menu" => {
-            switch_panel(app, PanelView::Help, command, "Help panel pinned.");
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            handle_help_command(app, terminal, command, arg.trim()).await?;
             Ok(true)
         }
         "/check" => {
@@ -216,6 +218,73 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
     }
 }
 
+async fn handle_help_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+    arg: &str,
+) -> Result<()> {
+    app.panel = PanelView::Help;
+    app.refresh(None);
+    if arg.is_empty() {
+        app.push(Role::Command, command, &help_availability_text());
+        return Ok(());
+    }
+
+    let question = arg.to_string();
+    let answer = ask_guide_with_feedback(app, terminal, question).await?;
+    app.push(Role::Command, command, &answer);
+    Ok(())
+}
+
+async fn ask_guide_with_feedback(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    question: String,
+) -> Result<String> {
+    let mut tick = 0usize;
+    app.activity = guide_activity(tick);
+    let progress_index = app.messages.len();
+    app.push(Role::System, "Guide", &guide_loading_text(tick));
+    terminal.render(app, None)?;
+
+    let mut task = tokio::task::spawn_blocking(move || help_question_text(&question));
+    loop {
+        tokio::select! {
+            result = &mut task => {
+                app.activity = "idle".to_string();
+                if let Some(message) = app.messages.get_mut(progress_index) {
+                    message.label = "Guide".to_string();
+                    message.body = "Guide answered. Response is below.".to_string();
+                }
+                terminal.render(app, None)?;
+                return result?;
+            }
+            _ = sleep(Duration::from_millis(120)) => {
+                tick = tick.wrapping_add(1);
+                app.activity = guide_activity(tick);
+                if let Some(message) = app.messages.get_mut(progress_index) {
+                    message.body = guide_loading_text(tick);
+                }
+                terminal.render(app, None)?;
+            }
+        }
+    }
+}
+
+fn guide_activity(tick: usize) -> String {
+    let spinner = ["|", "/", "-", "\\"];
+    format!("{} asking Guide", spinner[tick % spinner.len()])
+}
+
+fn guide_loading_text(tick: usize) -> String {
+    let spinner = ["|", "/", "-", "\\"];
+    format!(
+        "{} Asking Guide about ProtoAgent help...\nUsing the active model with redacted current settings.",
+        spinner[tick % spinner.len()]
+    )
+}
+
 fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &str) {
     app.panel = panel;
     app.refresh(None);
@@ -258,7 +327,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
         }
     };
     let prompt = query.to_string();
-    let session_id = crate::project_session_id(&workspace);
+    let session_id = crate::context_session_id(&workspace);
     app.turn += 1;
     app.context_usage.reset();
     app.last_query = query.to_string();
@@ -488,6 +557,36 @@ fn handle_context_command(
                 }
                 Err(err) => app.push(Role::Error, command, &err.to_string()),
             }
+            return Ok(());
+        }
+        Some("on") => {
+            match set_context_memory_text(true) {
+                Ok(text) => {
+                    app.context_usage.reset();
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        Some("off") => {
+            match set_context_memory_text(false) {
+                Ok(text) => {
+                    app.context_usage.reset();
+                    app.panel = PanelView::Context;
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
+            return Ok(());
+        }
+        Some("memory") => {
+            app.panel = PanelView::Context;
+            app.refresh(None);
+            app.push(Role::Command, command, &context_memory_text());
             return Ok(());
         }
         _ => {}

@@ -29,7 +29,13 @@ from .context import (
     format_context_pack_for_prompt,
     refresh_context_index,
 )
-from .history import compact_saved_histories, describe_saved_histories, reset_saved_histories
+from .history import (
+    compact_saved_histories,
+    describe_saved_histories,
+    persist_architect_turn,
+    reset_saved_histories,
+)
+from .help_agent import answer_help_question as guide_answer_help_question
 from .llm import ollama_context_window_details, validate_protolink
 from .models import discover_models, remember_valid_provider
 from .runtime import run_selected_model
@@ -61,6 +67,11 @@ def add_api_key(provider: str, api_key: str) -> str:
 def set_model(provider: str, model: str, base_url: str | None = None) -> str:
     """Persist the active provider/model selection and return config JSON."""
     return _json(set_active_model(provider, model, base_url))
+
+
+def answer_help_question(question: str) -> str:
+    """Answer a ProtoAgent usage question through the isolated Guide agent."""
+    return _json(guide_answer_help_question(question))
 
 
 def get_context_settings() -> str:
@@ -398,6 +409,13 @@ def _model_response(
         for item in diff_items
         if isinstance(item, dict) and item.get("path")
     ]
+    if runtime_status != "canceled":
+        persist_architect_turn(
+            session_id,
+            workspace=workspace,
+            user_prompt=prompt,
+            assistant_answer=answer,
+        )
     target_label = ", ".join(sorted(set([*targets, *action_targets, *diff_targets]))) if [*targets, *action_targets, *diff_targets] else ""
     diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
     return {

@@ -11,11 +11,13 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod inline_style;
 mod progress;
 mod sessions;
 mod terminal_ui;
 mod timeline;
 
+use inline_style::{inline_code_segments, InlineKind};
 use progress::{latest_progress_message, ProgressFile, RuntimeApproval};
 
 const APP_TITLE: &str = "PROTOAGENT";
@@ -183,6 +185,8 @@ struct ProjectConfig {
     active_project: Option<String>,
     #[serde(default)]
     recent_projects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_memory_enabled: Option<bool>,
 }
 
 #[tokio::main]
@@ -246,7 +250,18 @@ async fn main() -> Result<()> {
             show_sessions()
         }
         Some("help") | Some("--help") | Some("-h") => {
+            let question = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
             print_cli_help();
+            if question.trim().is_empty() {
+                println!("{}", help_availability_text());
+            } else {
+                let answer = help_question_with_spinner(question.trim()).await?;
+                print_panel(
+                    "GUIDE",
+                    &answer.lines().map(str::to_string).collect::<Vec<_>>(),
+                    PanelTone::Cyan,
+                );
+            }
             Ok(())
         }
         Some(other) => {
@@ -283,9 +298,61 @@ fn print_cli_help() {
     println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
     println!("  proto-cli context compact    Compact ProtoLink history (tokens by default)");
     println!("  proto-cli context reset      Clear ProtoLink history and the session index");
+    println!("  proto-cli context on|off     Toggle persistent project conversation memory");
     println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
     println!("  proto-cli sessions           Show saved project sessions");
+    println!("  proto-cli help [question]    Ask Guide about ProtoAgent usage");
     println!();
+}
+
+pub(crate) fn help_availability_text() -> String {
+    match selected_model_label() {
+        Some(selection) => {
+            format!("Guide is available on {selection}. Ask ProtoAgent usage questions with `/help <question>`.")
+        }
+        None => {
+            "Static help is available now. Choose a model with `/model` or `proto-cli model`, then ask Guide with `/help <question>`.".to_string()
+        }
+    }
+}
+
+pub(crate) fn help_question_text(question: &str) -> Result<String> {
+    if selected_model_label().is_none() {
+        return Ok(
+            "No model is selected yet. Use /model or `proto-cli model`, then ask Guide with /help <question>.".to_string(),
+        );
+    }
+    let raw = call_answer_help_question(question.to_string())
+        .map_err(|err| anyhow!("Python Guide help error: {err:?}"))?;
+    let value: Value = serde_json::from_str(&raw)?;
+    let answer = value
+        .get("answer")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if answer.is_empty() {
+        Ok("Guide returned an empty answer.".to_string())
+    } else {
+        Ok(answer.to_string())
+    }
+}
+
+async fn help_question_with_spinner(question: &str) -> Result<String> {
+    if selected_model_label().is_none() {
+        return help_question_text(question);
+    }
+    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
+        .tick_chars(">|/-\\");
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(spinner_style);
+    pb.set_prefix("[guide]");
+    pb.set_message("asking Guide");
+    pb.enable_steady_tick(Duration::from_millis(100));
+
+    let question = question.to_string();
+    let result = tokio::task::spawn_blocking(move || help_question_text(&question)).await;
+    pb.finish_and_clear();
+    result?
 }
 
 async fn run_orchestration(query: &str) -> Result<CoreResponse> {
@@ -293,7 +360,7 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
 
     let prompt = query.to_string();
     let workspace = require_project_dir_string()?;
-    let session_id = project_session_id(&workspace);
+    let session_id = context_session_id(&workspace);
 
     let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
         .tick_chars(">|/-\\");
@@ -435,7 +502,7 @@ fn render_run_banner(query: &str) {
 fn render_agent_trace(run_events: &[Value], events: &[String]) {
     println!("{}", style("AGENT TRACE").bold().underlined().cyan());
     for line in timeline::format_run_trace(run_events, events).lines() {
-        println!("  {}", line);
+        print_inline_code_line(&format!("  {}", line));
     }
     println!();
 }
@@ -443,7 +510,7 @@ fn render_agent_trace(run_events: &[Value], events: &[String]) {
 fn render_agent_timeline(run_events: &[Value], events: &[String]) {
     println!("{}", style("AGENT TIMELINE").bold().underlined().cyan());
     for line in timeline::format_timeline_from_run_events(run_events, events, 18).lines() {
-        println!("  {}", line);
+        print_inline_code_line(&format!("  {}", line));
     }
     println!();
 }
@@ -580,6 +647,7 @@ fn show_project() -> Result<()> {
     let config = load_project_config();
     let mut rows = vec![
         format!("Active : {}", project_label()),
+        context_memory_text(),
         format!("Config : {}", project_config_path().to_string_lossy()),
     ];
     if !config.recent_projects.is_empty() {
@@ -1014,6 +1082,17 @@ fn show_config() -> Result<()> {
     Ok(())
 }
 
+fn selected_model_label() -> Option<String> {
+    let config = load_visible_config().ok()?;
+    let provider = config.active_provider;
+    let model = config.providers.get(&provider)?.model.trim().to_string();
+    if model.is_empty() {
+        None
+    } else {
+        Some(format!("{provider} / {model}"))
+    }
+}
+
 fn show_check() -> Result<()> {
     let report = load_doctor()?;
     print_panel(
@@ -1118,6 +1197,21 @@ fn handle_context_command(args: &[String]) -> Result<()> {
             print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
             Ok(())
         }
+        Some("on") => {
+            let text = set_context_memory_text(true)?;
+            print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
+            Ok(())
+        }
+        Some("off") => {
+            let text = set_context_memory_text(false)?;
+            print_panel("CONVERSATION MEMORY", &[text], PanelTone::Yellow);
+            Ok(())
+        }
+        Some("memory") => {
+            let text = context_memory_text();
+            print_panel("CONVERSATION MEMORY", &[text], PanelTone::Cyan);
+            Ok(())
+        }
         _ => {
             let query = args.join(" ");
             if query.trim().is_empty() {
@@ -1161,6 +1255,9 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
 }
 
 pub(crate) fn compact_context_history(values: &[&str]) -> Result<String> {
+    if !context_memory_enabled() {
+        return Ok("Conversation memory is off. New tasks use task-local ProtoLink sessions and start fresh. Use /context on to persist project history again.".to_string());
+    }
     let (strategy, limit, ui_turns) = parse_compaction_request(values)?;
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
@@ -1205,6 +1302,9 @@ pub(crate) fn reset_context_history() -> Result<String> {
 }
 
 pub(crate) fn context_history_text() -> Result<String> {
+    if !context_memory_enabled() {
+        return Ok("Conversation memory is off. New tasks use task-local ProtoLink sessions and start fresh. Use /context on to inspect and resume project memory.".to_string());
+    }
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_describe_protolink_history(session_id)
@@ -1284,7 +1384,12 @@ fn parse_compaction_request(values: &[&str]) -> Result<(&'static str, Option<usi
 
 #[cfg(test)]
 mod context_command_tests {
-    use super::parse_compaction_request;
+    use super::{
+        context_memory_enabled, context_session_id, parse_compaction_request,
+        set_context_memory_enabled,
+    };
+    use std::{env, fs};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn defaults_to_protolink_token_compaction() {
@@ -1305,6 +1410,32 @@ mod context_command_tests {
             ("recent", Some(13), 3)
         );
         assert!(parse_compaction_request(&["mystery"]).is_err());
+    }
+
+    #[test]
+    fn context_memory_toggle_controls_project_session_id() {
+        let previous = env::var("PROTOAGENT_CONFIG_DIR").ok();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!("protoagent-context-toggle-{unique}"));
+        env::set_var("PROTOAGENT_CONFIG_DIR", &root);
+
+        assert!(context_memory_enabled());
+        assert!(context_session_id("/tmp/example-project").is_some());
+        set_context_memory_enabled(false).unwrap();
+        assert!(!context_memory_enabled());
+        assert!(context_session_id("/tmp/example-project").is_none());
+        set_context_memory_enabled(true).unwrap();
+        assert!(context_session_id("/tmp/example-project").is_some());
+
+        if let Some(value) = previous {
+            env::set_var("PROTOAGENT_CONFIG_DIR", value);
+        } else {
+            env::remove_var("PROTOAGENT_CONFIG_DIR");
+        }
+        let _ = fs::remove_dir_all(root);
     }
 }
 
@@ -1419,7 +1550,9 @@ fn load_doctor() -> Result<DoctorReport> {
 pub(crate) fn context_status_text(workspace: String) -> Result<String> {
     let raw = call_context_status(workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
     let value: Value = serde_json::from_str(&raw)?;
-    Ok(context_status_rows(&value).join("\n"))
+    let mut rows = vec![context_memory_text()];
+    rows.extend(context_status_rows(&value));
+    Ok(rows.join("\n"))
 }
 
 pub(crate) fn refresh_context_text(workspace: String) -> Result<String> {
@@ -1578,11 +1711,35 @@ fn print_panel(title: &str, rows: &[String], tone: PanelTone) {
     }
     for row in rows {
         for wrapped in wrap_lines(row, inner) {
-            println!("| {:<inner$} |", truncate_plain(&wrapped, inner), inner = inner);
+            print_panel_row(&truncate_plain(&wrapped, inner), inner);
         }
     }
     println!("{}", tone_style(&format!("+{}+", repeat_char('-', width.saturating_sub(2))), tone).bold());
     println!();
+}
+
+fn print_panel_row(row: &str, inner: usize) {
+    print!("| ");
+    print_inline_code_segments(row);
+    let used = row.chars().count();
+    if used < inner {
+        print!("{}", repeat_char(' ', inner - used));
+    }
+    println!(" |");
+}
+
+fn print_inline_code_line(line: &str) {
+    print_inline_code_segments(line);
+    println!();
+}
+
+fn print_inline_code_segments(text_value: &str) {
+    for segment in inline_code_segments(text_value) {
+        match segment.kind {
+            InlineKind::Text => print!("{}", segment.text),
+            InlineKind::Code => print!("{}", style(segment.text).black().on_yellow().bold()),
+        }
+    }
 }
 
 fn render_brand_header() {
@@ -1711,7 +1868,7 @@ fn call_list_models(validate_api_keys: bool) -> PyResult<String> {
 fn call_process_prompt_with_progress(
     prompt: String,
     workspace: String,
-    session_id: String,
+    session_id: Option<String>,
     progress_path: String,
 ) -> PyResult<String> {
     Python::attach(|py| {
@@ -1751,6 +1908,14 @@ fn call_configure_context_window(value: Option<String>) -> PyResult<String> {
             .getattr("configure_context_window")?
             .call1((value,))?
             .extract()
+    })
+}
+
+fn call_answer_help_question(question: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("answer_help_question")?.call1((question,))?.extract()
     })
 }
 
@@ -1908,6 +2073,33 @@ pub(crate) fn project_session_id(workspace: &str) -> String {
     let mut hasher = DefaultHasher::new();
     workspace.hash(&mut hasher);
     format!("protoagent-project-{:016x}", hasher.finish())
+}
+
+pub(crate) fn context_session_id(workspace: &str) -> Option<String> {
+    context_memory_enabled().then(|| project_session_id(workspace))
+}
+
+pub(crate) fn context_memory_enabled() -> bool {
+    load_project_config().context_memory_enabled.unwrap_or(true)
+}
+
+pub(crate) fn set_context_memory_enabled(enabled: bool) -> Result<()> {
+    let mut config = load_project_config();
+    config.context_memory_enabled = Some(enabled);
+    save_project_config(&config)
+}
+
+pub(crate) fn context_memory_text() -> String {
+    if context_memory_enabled() {
+        "Memory  : on - project sessions persist through ProtoLink state. Use /context off for fresh task-local runs.".to_string()
+    } else {
+        "Memory  : off - each task starts with task-local ProtoLink state. Use /context on to resume project memory.".to_string()
+    }
+}
+
+pub(crate) fn set_context_memory_text(enabled: bool) -> Result<String> {
+    set_context_memory_enabled(enabled)?;
+    Ok(context_memory_text())
 }
 
 pub(crate) fn set_active_project(input: &str) -> Result<PathBuf> {
