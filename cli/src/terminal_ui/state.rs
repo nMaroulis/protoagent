@@ -13,6 +13,7 @@ pub(super) struct TerminalApp {
     pub(super) input_history: VecDeque<String>,
     pub(super) last_query: String,
     pub(super) last_response: Option<CoreResponse>,
+    pub(super) last_diff_preview: String,
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
     pub(super) context_usage: ContextUsage,
@@ -29,6 +30,7 @@ impl TerminalApp {
             input_history: VecDeque::new(),
             last_query: String::new(),
             last_response: None,
+            last_diff_preview: String::new(),
             activity: "idle".to_string(),
             scroll_offset: 0,
             context_usage: ContextUsage::default(),
@@ -171,6 +173,7 @@ impl TerminalApp {
             }
         }
         if !response.diff.trim().is_empty() {
+            self.last_diff_preview = response.diff.clone();
             message.details.push(("Proposed diff".to_string(), response.diff.clone()));
         }
         if !response.approval_requests.is_empty() {

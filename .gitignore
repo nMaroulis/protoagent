@@ -11,3 +11,6 @@ __pycache__/
 node_modules/
 docs/.docusaurus/
 docs/build/
+
+# Local Testing
+playground/testing/*

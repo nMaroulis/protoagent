@@ -170,17 +170,17 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         }
         "/diff" => {
             let arg = parts.collect::<Vec<_>>().join(" ");
-            if let Some(response) = &app.last_response {
-                let diff = response.diff.clone();
-                if diff.trim().is_empty() {
-                    app.push(Role::Command, "/diff", "No diff in the last response.");
-                } else if arg.trim() == "raw" {
+            let diff = latest_diff_preview(app);
+            if !diff.trim().is_empty() {
+                if arg.trim() == "raw" {
                     let raw = truncate_detail(&diff, 80);
                     app.push(Role::Command, "/diff raw", &raw);
                 } else {
                     app.push(Role::Command, "/diff", &diff_review_summary(&diff));
                     show_diff_modal(terminal, app, "Diff Review", &diff)?;
                 }
+            } else if app.last_response.is_some() {
+                app.push(Role::Command, "/diff", "No proposed diff is available from the last run.");
             } else {
                 app.push(Role::Command, "/diff", "No response in this session yet.");
             }
@@ -331,6 +331,7 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     app.turn += 1;
     app.context_usage.reset();
     app.last_query = query.to_string();
+    app.last_diff_preview.clear();
     app.push(Role::User, "You", query);
     let progress_index = app.messages.len();
     app.push(Role::System, "Working", &format_live_progress(&[]));
@@ -361,6 +362,9 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
             _ = sleep(Duration::from_millis(120)) => {
                 ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
                 if let Some(approval) = progress_file.take_approval_request() {
+                    if !approval.diff.trim().is_empty() {
+                        app.last_diff_preview = approval.diff.clone();
+                    }
                     terminal.render(app, None)?;
                     let approved = approval_prompt(terminal, app, &approval)?;
                     progress_file.decide(&approval, approved)?;
@@ -431,6 +435,15 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     }
 
     Ok(())
+}
+
+fn latest_diff_preview(app: &TerminalApp) -> String {
+    app.last_response
+        .as_ref()
+        .map(|response| response.diff.trim())
+        .filter(|diff| !diff.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| app.last_diff_preview.clone())
 }
 
 fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: ProgressBatch) {

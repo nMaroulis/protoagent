@@ -61,8 +61,8 @@ preserved during Python startup so an early Esc press is not lost.
 | --- | --- | --- |
 | TUI | `/trace` | Latest normalized trace in the transcript. |
 | TUI | `/timeline` | Structured agent path. |
-| TUI | `/diff` | Last proposed diff in a review modal. |
-| Shell | `proto-cli run "task"` | Prints `AGENT TRACE`, `AGENT TIMELINE`, answer, and diff. |
+| TUI | `/diff` | Latest proposed diff or approval preview in a styled review modal with old/new line gutters. |
+| Shell | `proto-cli run "task"` | Prints `AGENT TRACE`, `AGENT TIMELINE`, answer, and a styled diff. |
 | Telemetry | `PROTOAGENT_TRACE=1` | Writes durable ProtoLink JSONL telemetry. |
 
 Durable trace path:

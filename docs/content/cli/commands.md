@@ -77,7 +77,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/session rename NAME` | Rename the current saved UI session. |
 | `/timeline`, `/flow` | Show the structured path of the latest agent run. |
 | `/trace` | Show the latest normalized ProtoLink trace. |
-| `/diff` | Open the last proposed diff in the review modal. |
+| `/diff` | Reopen the latest proposed diff or approval preview in the styled review modal. |
 | `/diff raw` | Print a truncated raw diff into the transcript. |
 | `/config` | Pin provider config panel. |
 | `/project`, `/open` | Choose the active project. |

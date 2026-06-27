@@ -188,6 +188,6 @@ Areas we are actively looking to improve:
 
 * Enhancing the `clap` terminal argument parsing.
 * Surfacing ProtoLink SSE task events as live Rust UI updates instead of post-run trace summaries.
-* Adding beautiful, bat-like terminal diffing for the `[Y/n]` file write approvals.
+* Refining the styled diff reviewer used by `[Y/n]` file write approvals.
 
 To contribute to the underlying agent logic or prompts, head over to the [`core/`](https://www.google.com/search?q=../core/README.md) directory.

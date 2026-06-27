@@ -11,6 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+mod diff;
 mod inline_style;
 mod progress;
 mod sessions;
@@ -517,17 +518,48 @@ fn render_agent_timeline(run_events: &[Value], events: &[String]) {
     println!();
 }
 
-fn render_diff(diff: &str) {
+fn render_diff(diff_text: &str) {
+    let review = diff::parse_diff(diff_text);
     println!("{}", style("PROPOSED DIFF").bold().underlined().cyan());
-    for line in diff.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            println!("{}", style(line).green());
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            println!("{}", style(line).red());
-        } else if line.starts_with("@@") {
-            println!("{}", style(line).cyan().bold());
-        } else {
-            println!("{}", style(line).dim());
+    print!("  {}", style(format!("{} file(s)", review.files.len())).bold());
+    print!("  {}", style(format!("+{}", review.additions)).green().bold());
+    print!(" ");
+    print!("{}", style(format!("-{}", review.removals)).red().bold());
+    println!("  {}", style(format!("{} hunk(s)", review.hunks)).yellow().bold());
+
+    if review.files.is_empty() {
+        println!("{}", style("  No structured diff lines found.").dim());
+        println!();
+        return;
+    }
+
+    let number_width = review.line_number_width();
+    let line_width = terminal_width().saturating_sub(2);
+    let column_header = format!(
+        "{:>width$} {:>width$} | change",
+        "old",
+        "new",
+        width = number_width
+    );
+    for file in &review.files {
+        println!();
+        println!(
+            "{}",
+            style(format!("FILE {}", diff::format_file_heading(file)))
+                .cyan()
+                .bold()
+        );
+        println!("{}", style(&column_header).dim());
+        for line in &file.lines {
+            let rendered =
+                truncate_plain(&diff::format_guttered_line(line, number_width), line_width);
+            match line.kind {
+                diff::DiffLineKind::Add => println!("{}", style(rendered).green()),
+                diff::DiffLineKind::Remove => println!("{}", style(rendered).red()),
+                diff::DiffLineKind::Hunk => println!("{}", style(rendered).yellow().bold()),
+                diff::DiffLineKind::Meta => println!("{}", style(rendered).dim()),
+                diff::DiffLineKind::Context => println!("{rendered}"),
+            }
         }
     }
     println!();

@@ -3,67 +3,25 @@ use crossterm::event::{read, Event, KeyCode, KeyModifiers};
 use crossterm::style::Color;
 use std::io::{stdout, Write};
 
+use crate::diff::{
+    compact_diff_stats, format_file_heading, format_guttered_line, parse_diff, DiffLineKind,
+    DiffReview,
+};
 use crate::progress::RuntimeApproval;
 
 use super::modal::{draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
 use super::state::TerminalApp;
 use super::theme::{
-    black, clip_plain, cyan, green, modal_bg, modal_border, modal_list_bg, muted, red, size, surface_bg, text,
-    write_at, yellow,
+    black, clip_plain, cyan, green, modal_bg, modal_border, modal_list_bg, muted, red, size,
+    surface_bg, text, write_at, yellow,
 };
 use super::TerminalSurface;
-
-#[derive(Default)]
-struct DiffReview {
-    files: Vec<DiffFile>,
-    additions: usize,
-    removals: usize,
-    hunks: usize,
-}
-
-struct DiffFile {
-    path: String,
-    additions: usize,
-    removals: usize,
-    hunks: usize,
-    lines: Vec<DiffLine>,
-}
-
-struct DiffLine {
-    kind: DiffLineKind,
-    text: String,
-}
-
-#[derive(Clone, Copy)]
-enum DiffLineKind {
-    Meta,
-    Hunk,
-    Add,
-    Remove,
-    Context,
-}
 
 struct DiffRenderLine {
     text: String,
     fg: Color,
     bg: Color,
     bold: bool,
-}
-
-impl DiffFile {
-    fn new(path: String) -> Self {
-        Self {
-            path,
-            additions: 0,
-            removals: 0,
-            hunks: 0,
-            lines: Vec::new(),
-        }
-    }
-
-    fn has_content(&self) -> bool {
-        !self.lines.is_empty() || self.additions > 0 || self.removals > 0 || self.hunks > 0
-    }
 }
 
 pub(super) fn diff_review_summary(diff: &str) -> String {
@@ -80,10 +38,7 @@ pub(super) fn diff_review_summary(diff: &str) -> String {
         review.hunks
     )];
     for file in review.files.iter().take(8) {
-        rows.push(format!(
-            "{}  +{} -{}  {} hunk(s)",
-            file.path, file.additions, file.removals, file.hunks
-        ));
+        rows.push(format_file_heading(file));
     }
     if review.files.len() > 8 {
         rows.push(format!("...{} more file(s)", review.files.len() - 8));
@@ -217,7 +172,10 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 8,
         modal_width,
-        &format!(" Intent    : {}", clip_plain(&approval.description, modal_width.saturating_sub(14) as usize)),
+        &format!(
+            " Intent    : {}",
+            clip_plain(&approval.description, modal_width.saturating_sub(14) as usize)
+        ),
         muted(),
         modal_bg(),
         false,
@@ -248,119 +206,6 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())
-}
-
-fn parse_diff(diff: &str) -> DiffReview {
-    let mut review = DiffReview::default();
-    let mut current: Option<DiffFile> = None;
-    let mut pending_old_path = String::new();
-
-    for raw_line in diff.lines() {
-        if raw_line.starts_with("diff --git ") {
-            finish_file(&mut review, &mut current);
-            let path = parse_git_diff_path(raw_line).unwrap_or_else(|| "(patch metadata)".to_string());
-            let mut file = DiffFile::new(path);
-            file.lines.push(DiffLine {
-                kind: DiffLineKind::Meta,
-                text: raw_line.to_string(),
-            });
-            current = Some(file);
-            continue;
-        }
-
-        if let Some(rest) = raw_line.strip_prefix("--- ") {
-            finish_file(&mut review, &mut current);
-            pending_old_path = clean_diff_path(rest);
-            let mut file = DiffFile::new(pending_old_path.clone());
-            file.lines.push(DiffLine {
-                kind: DiffLineKind::Meta,
-                text: raw_line.to_string(),
-            });
-            current = Some(file);
-            continue;
-        }
-
-        if let Some(rest) = raw_line.strip_prefix("+++ ") {
-            let file = current.get_or_insert_with(|| DiffFile::new("(patch)".to_string()));
-            let new_path = clean_diff_path(rest);
-            if new_path != "/dev/null" {
-                file.path = new_path;
-            } else if !pending_old_path.is_empty() {
-                file.path = pending_old_path.clone();
-            }
-            file.lines.push(DiffLine {
-                kind: DiffLineKind::Meta,
-                text: raw_line.to_string(),
-            });
-            continue;
-        }
-
-        let file = current.get_or_insert_with(|| DiffFile::new("(patch)".to_string()));
-        let kind = if raw_line.starts_with("@@") {
-            file.hunks += 1;
-            DiffLineKind::Hunk
-        } else if raw_line.starts_with('+') {
-            file.additions += 1;
-            DiffLineKind::Add
-        } else if raw_line.starts_with('-') {
-            file.removals += 1;
-            DiffLineKind::Remove
-        } else if raw_line.starts_with('\\') {
-            DiffLineKind::Meta
-        } else {
-            DiffLineKind::Context
-        };
-        file.lines.push(DiffLine {
-            kind,
-            text: raw_line.to_string(),
-        });
-    }
-
-    finish_file(&mut review, &mut current);
-    review
-}
-
-fn finish_file(review: &mut DiffReview, current: &mut Option<DiffFile>) {
-    let Some(file) = current.take() else {
-        return;
-    };
-    if !file.has_content() {
-        return;
-    }
-    review.additions += file.additions;
-    review.removals += file.removals;
-    review.hunks += file.hunks;
-    review.files.push(file);
-}
-
-fn parse_git_diff_path(line: &str) -> Option<String> {
-    line.split_whitespace()
-        .nth(3)
-        .map(clean_diff_path)
-        .filter(|path| !path.is_empty())
-}
-
-fn clean_diff_path(path: &str) -> String {
-    let first = path.split_whitespace().next().unwrap_or(path).trim();
-    let cleaned = first.trim_matches('"');
-    cleaned
-        .strip_prefix("a/")
-        .or_else(|| cleaned.strip_prefix("b/"))
-        .unwrap_or(cleaned)
-        .to_string()
-}
-
-fn compact_diff_stats(review: &DiffReview) -> String {
-    if review.files.is_empty() {
-        return "unstructured patch".to_string();
-    }
-    format!(
-        "{} file(s), +{} -{}, {} hunk(s)",
-        review.files.len(),
-        review.additions,
-        review.removals,
-        review.hunks
-    )
 }
 
 fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<usize> {
@@ -401,7 +246,23 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
         modal_bg(),
         false,
     )?;
-    write_at(&mut out, x + 1, y + 4, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
+    let number_width = review.line_number_width();
+    let column_header = format!(
+        "kind {:>width$} {:>width$} | change",
+        "old",
+        "new",
+        width = number_width
+    );
+    write_at(
+        &mut out,
+        x + 1,
+        y + 4,
+        modal_width.saturating_sub(2),
+        &column_header,
+        cyan(),
+        modal_list_bg(),
+        true,
+    )?;
 
     for row_index in 0..body_rows {
         let row_y = body_top + row_index as u16;
@@ -434,12 +295,10 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
 
 fn render_diff_lines(review: &DiffReview) -> Vec<DiffRenderLine> {
     let mut rows = Vec::new();
+    let number_width = review.line_number_width();
     for file in &review.files {
         rows.push(DiffRenderLine {
-            text: format!(
-                "FILE {}    +{} -{}    {} hunk(s)",
-                file.path, file.additions, file.removals, file.hunks
-            ),
+            text: format!("FILE {}", format_file_heading(file)),
             fg: black(),
             bg: cyan(),
             bold: true,
@@ -447,13 +306,17 @@ fn render_diff_lines(review: &DiffReview) -> Vec<DiffRenderLine> {
         for line in &file.lines {
             let (fg, bg, bold) = match line.kind {
                 DiffLineKind::Meta => (muted(), modal_list_bg(), false),
-                DiffLineKind::Hunk => (yellow(), hunk_bg(), true),
-                DiffLineKind::Add => (green(), add_bg(), false),
-                DiffLineKind::Remove => (red(), remove_bg(), false),
+                DiffLineKind::Hunk => (black(), yellow(), true),
+                DiffLineKind::Add => (black(), green(), true),
+                DiffLineKind::Remove => (black(), red(), true),
                 DiffLineKind::Context => (text(), modal_list_bg(), false),
             };
             rows.push(DiffRenderLine {
-                text: format!("  {}", line.text),
+                text: format!(
+                    "{:<4} {}",
+                    diff_kind_label(line.kind),
+                    format_guttered_line(line, number_width)
+                ),
                 fg,
                 bg,
                 bold,
@@ -478,6 +341,16 @@ fn render_diff_lines(review: &DiffReview) -> Vec<DiffRenderLine> {
     rows
 }
 
+fn diff_kind_label(kind: DiffLineKind) -> &'static str {
+    match kind {
+        DiffLineKind::Add => "ADD",
+        DiffLineKind::Remove => "DEL",
+        DiffLineKind::Hunk => "HUNK",
+        DiffLineKind::Meta => "META",
+        DiffLineKind::Context => "",
+    }
+}
+
 fn draw_button(
     out: &mut std::io::Stdout,
     x: u16,
@@ -488,16 +361,4 @@ fn draw_button(
     bg: Color,
 ) -> Result<()> {
     write_at(out, x, y, width, label, fg, bg, true)
-}
-
-fn add_bg() -> Color {
-    Color::Rgb { r: 14, g: 48, b: 36 }
-}
-
-fn remove_bg() -> Color {
-    Color::Rgb { r: 55, g: 24, b: 32 }
-}
-
-fn hunk_bg() -> Color {
-    Color::Rgb { r: 42, g: 39, b: 24 }
 }
