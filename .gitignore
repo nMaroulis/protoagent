@@ -5,3 +5,8 @@
 .venv/
 __pycache__/
 *.pyc
+
+# Node / Docusaurus
+node_modules/
+docs/.docusaurus/
+docs/build/
