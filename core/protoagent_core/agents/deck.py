@@ -70,16 +70,19 @@ def agent_manifest() -> dict[str, Any]:
             {
                 "name": "architect",
                 "role": "orchestrator",
+                "memory": "protoagent-architect",
                 "tools": [],
             },
             {
                 "name": "explorer",
                 "role": "context",
+                "memory": "protoagent-explorer",
                 "tools": ["build_context_pack", "read_file", "list_directory", "search_regex", "get_git_status"],
             },
             {
                 "name": "coder",
                 "role": "synthesis",
+                "memory": "protoagent-coder",
                 "tools": ["generate_unified_diff", "create_new_file"],
             },
         ]

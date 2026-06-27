@@ -177,6 +177,8 @@ struct ProtolinkStatus {
 struct AgentManifest {
     name: String,
     role: String,
+    #[serde(default)]
+    memory: String,
     tools: Vec<String>,
 }
 
@@ -1139,7 +1141,7 @@ fn show_check() -> Result<()> {
     let rows: Vec<String> = report
         .agents
         .iter()
-        .map(|agent| format!("{} ({}) -> {}", agent.name, agent.role, agent.tools.join(", ")))
+        .map(format_agent_manifest)
         .collect();
     print_panel("AGENTS", &rows, PanelTone::Cyan);
     Ok(())
@@ -1155,11 +1157,28 @@ fn show_agents() -> Result<()> {
         let rows: Vec<String> = report
             .agents
             .iter()
-            .map(|agent| format!("{} ({}) -> {}", agent.name, agent.role, agent.tools.join(", ")))
+            .map(format_agent_manifest)
             .collect();
         print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
     }
     Ok(())
+}
+
+fn format_agent_manifest(agent: &AgentManifest) -> String {
+    let memory = if agent.memory.is_empty() {
+        format!("protoagent-{}", agent.name)
+    } else {
+        agent.memory.clone()
+    };
+    let tools = if agent.tools.is_empty() {
+        "no direct tools".to_string()
+    } else {
+        agent.tools.join(", ")
+    };
+    format!(
+        "{} ({}) | memory: {} | tools: {}",
+        agent.name, agent.role, memory, tools
+    )
 }
 
 fn handle_context_command(args: &[String]) -> Result<()> {

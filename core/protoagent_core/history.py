@@ -7,7 +7,6 @@ import os
 from typing import Any, Iterable
 
 from protolink import Agent, CapabilityPolicy, StateOperationResult
-from protolink.llms.history import ConversationHistory
 from protolink.llms.metrics import estimate_token_count
 from protolink.state.conversation import ConversationState
 
@@ -92,8 +91,8 @@ def persist_architect_turn(
     """Ensure the top-level Architect turn exists in ProtoLink conversation state.
 
     ProtoLink normally saves this through ``Agent.handle_task_streaming()``.
-    This app-level guard only fills the gap when the top-level session was not
-    written, while leaving already persisted Architect histories untouched.
+    This app-level guard fills gaps in the top-level session while leaving an
+    already persisted current turn untouched.
     """
     if not session_id or not user_prompt.strip() or not assistant_answer.strip():
         return {"agent": "architect", "changed": False, "reason": "empty session or turn"}
@@ -102,8 +101,9 @@ def persist_architect_turn(
         return {"agent": "architect", "changed": False, "reason": "storage unavailable"}
 
     state = ConversationState(storage)
-    existing = state.to_dict().get(session_id) or []
-    if existing:
+    history = state.get_history(session_id, default_system_prompt=_architect_system_prompt(workspace))
+    existing = history.to_list()
+    if _has_current_top_level_turn(existing, user_prompt, assistant_answer):
         return {
             "agent": "architect",
             "changed": False,
@@ -111,13 +111,14 @@ def persist_architect_turn(
             "message_count": len(existing),
         }
 
-    history = ConversationHistory(system_prompt=_architect_system_prompt(workspace))
+    previous_count = len(existing)
     history.add_user(user_prompt)
     history.add_assistant(assistant_answer)
     state.save_history(session_id, history)
     return {
         "agent": "architect",
         "changed": True,
+        "previous_message_count": previous_count,
         "message_count": len(history),
     }
 
@@ -347,6 +348,51 @@ def _state_existed_before(result: StateOperationResult) -> bool:
 def _agent_name(agent: Any) -> str:
     card = getattr(agent, "card", None)
     return str(getattr(card, "name", None) or "agent")
+
+
+def _has_current_top_level_turn(
+    messages: list[dict[str, Any]],
+    user_prompt: str,
+    assistant_answer: str,
+) -> bool:
+    """Return true when ProtoLink already saved the current top-level turn."""
+    if len(messages) < 2:
+        return False
+    user = messages[-2]
+    assistant = messages[-1]
+    if user.get("role") != "user" or assistant.get("role") != "assistant":
+        return False
+    if _normalize_message_text(assistant.get("content")) != _normalize_message_text(
+        assistant_answer
+    ):
+        return False
+    return _matches_user_prompt(user.get("content"), user_prompt)
+
+
+def _matches_user_prompt(content: Any, user_prompt: str) -> bool:
+    actual = _normalize_message_text(content)
+    expected = _normalize_message_text(user_prompt)
+    if actual == expected:
+        return True
+    return actual.endswith(f"Current user request: {expected}")
+
+
+def _normalize_message_text(value: Any) -> str:
+    return " ".join(_content_text(value).split())
+
+
+def _content_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                parts.append(str(item))
+        return " ".join(part for part in parts if part)
+    return str(value or "")
 
 
 def _architect_system_prompt(workspace: str | None) -> str:

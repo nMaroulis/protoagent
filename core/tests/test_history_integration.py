@@ -116,7 +116,7 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertEqual(architect["state_result"]["operation"], "describe")
             self.assertFalse(explorer["found"])
 
-    def test_persist_architect_turn_bootstraps_missing_top_level_history(self) -> None:
+    def test_persist_architect_turn_appends_missing_top_level_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             storage = SQLiteStorage(
                 db_path=str(Path(directory) / "history.sqlite"),
@@ -140,14 +140,48 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
                     user_prompt="hi",
                     assistant_answer="hello back",
                 )
+                third = persist_architect_turn(
+                    "session-test",
+                    workspace=directory,
+                    user_prompt="what did I ask after hi?",
+                    assistant_answer="You asked what came after hi.",
+                )
 
             messages = ConversationState(storage).to_dict()["session-test"]
             self.assertTrue(first["changed"])
             self.assertFalse(second["changed"])
+            self.assertTrue(third["changed"])
             self.assertEqual(messages[-2]["role"], "user")
-            self.assertEqual(messages[-2]["content"], "hi")
+            self.assertEqual(messages[-2]["content"], "what did I ask after hi?")
             self.assertEqual(messages[-1]["role"], "assistant")
-            self.assertEqual(messages[-1]["content"], "hello back")
+            self.assertEqual(messages[-1]["content"], "You asked what came after hi.")
+
+    def test_persist_architect_turn_does_not_duplicate_runtime_prompt_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            storage = SQLiteStorage(
+                db_path=str(Path(directory) / "history.sqlite"),
+                table_name="agent_state",
+                namespace="protoagent-architect",
+            )
+            history = ConversationHistory(system_prompt="system prompt")
+            history.add_user("Context Loom evidence.\n\nCurrent user request:\nwhat did I ask?")
+            history.add_assistant("You asked me to remember the follow-up.")
+            ConversationState(storage).save_history("session-test", history)
+
+            with patch(
+                "protoagent_core.history.conversation_storage",
+                side_effect=lambda name: storage if name == "architect" else None,
+            ):
+                report = persist_architect_turn(
+                    "session-test",
+                    workspace=directory,
+                    user_prompt="what did I ask?",
+                    assistant_answer="You asked me to remember the follow-up.",
+                )
+
+            messages = ConversationState(storage).to_dict()["session-test"]
+            self.assertFalse(report["changed"])
+            self.assertEqual(len(messages), 3)
 
 
 def _test_agent(name: str, storage: SQLiteStorage, llm: MockLLM | None = None) -> Agent:

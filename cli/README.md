@@ -116,7 +116,7 @@ Inside the TUI you can use slash commands:
 * `/models` - Shows model/provider status.
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
-* `/agents` - Shows the Architect / Explorer / Coder topology.
+* `/agents` - Shows the Architect / Explorer / Coder topology and per-agent ProtoLink memory namespaces.
 * `/context` - Shows Context Loom index status for the active project.
 * `/context QUERY` - Builds a source-cited Context Pack without running a model.
 * `/context window 16k` - Sets the Ollama request window and ProtoLink `LLMModelProfile` together.

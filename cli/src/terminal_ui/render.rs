@@ -331,10 +331,25 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             }
         }
         PanelView::Agents => {
-            rows.push(row("architect", "intake, routing, delegation, final answer", magenta(), true));
+            rows.push(row(
+                "architect",
+                "intake, routing, delegation, final answer; memory protoagent-architect",
+                magenta(),
+                true,
+            ));
             rows.push(row("loom", "Context Loom feeds source-cited evidence before routing", green(), true));
-            rows.push(row("explorer", "context packs, read-only files, directories, regex search, git status", cyan(), false));
-            rows.push(row("coder", "RunAction previews and policy-gated workspace writes", yellow(), false));
+            rows.push(row(
+                "explorer",
+                "read-only repository evidence; memory protoagent-explorer",
+                cyan(),
+                false,
+            ));
+            rows.push(row(
+                "coder",
+                "RunAction previews and policy-gated writes; memory protoagent-coder",
+                yellow(),
+                false,
+            ));
             rows.push(row("approval", "Protolink pauses execution until the human decides", green(), false));
             rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
         }
