@@ -248,7 +248,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     )?;
     let number_width = review.line_number_width();
     let column_header = format!(
-        "kind {:>width$} {:>width$} | change",
+        "tag  {:>width$} {:>width$} | change",
         "old",
         "new",
         width = number_width
@@ -298,17 +298,17 @@ fn render_diff_lines(review: &DiffReview) -> Vec<DiffRenderLine> {
     let number_width = review.line_number_width();
     for file in &review.files {
         rows.push(DiffRenderLine {
-            text: format!("FILE {}", format_file_heading(file)),
-            fg: black(),
-            bg: cyan(),
+            text: format!("FILE  {}", format_file_heading(file)),
+            fg: diff_file_fg(),
+            bg: diff_file_bg(),
             bold: true,
         });
         for line in &file.lines {
             let (fg, bg, bold) = match line.kind {
-                DiffLineKind::Meta => (muted(), modal_list_bg(), false),
-                DiffLineKind::Hunk => (black(), yellow(), true),
-                DiffLineKind::Add => (black(), green(), true),
-                DiffLineKind::Remove => (black(), red(), true),
+                DiffLineKind::Meta => (diff_meta_fg(), diff_meta_bg(), false),
+                DiffLineKind::Hunk => (diff_hunk_fg(), diff_hunk_bg(), true),
+                DiffLineKind::Add => (diff_add_fg(), diff_add_bg(), true),
+                DiffLineKind::Remove => (diff_remove_fg(), diff_remove_bg(), true),
                 DiffLineKind::Context => (text(), modal_list_bg(), false),
             };
             rows.push(DiffRenderLine {
@@ -343,8 +343,8 @@ fn render_diff_lines(review: &DiffReview) -> Vec<DiffRenderLine> {
 
 fn diff_kind_label(kind: DiffLineKind) -> &'static str {
     match kind {
-        DiffLineKind::Add => "ADD",
-        DiffLineKind::Remove => "DEL",
+        DiffLineKind::Add => "ADD+",
+        DiffLineKind::Remove => "DEL-",
         DiffLineKind::Hunk => "HUNK",
         DiffLineKind::Meta => "META",
         DiffLineKind::Context => "",
@@ -361,4 +361,44 @@ fn draw_button(
     bg: Color,
 ) -> Result<()> {
     write_at(out, x, y, width, label, fg, bg, true)
+}
+
+fn diff_file_fg() -> Color {
+    Color::Rgb { r: 164, g: 239, b: 246 }
+}
+
+fn diff_file_bg() -> Color {
+    Color::Rgb { r: 10, g: 34, b: 48 }
+}
+
+fn diff_add_fg() -> Color {
+    Color::Rgb { r: 185, g: 244, b: 205 }
+}
+
+fn diff_add_bg() -> Color {
+    Color::Rgb { r: 12, g: 43, b: 32 }
+}
+
+fn diff_remove_fg() -> Color {
+    Color::Rgb { r: 255, g: 185, b: 195 }
+}
+
+fn diff_remove_bg() -> Color {
+    Color::Rgb { r: 52, g: 22, b: 33 }
+}
+
+fn diff_hunk_fg() -> Color {
+    Color::Rgb { r: 255, g: 228, b: 156 }
+}
+
+fn diff_hunk_bg() -> Color {
+    Color::Rgb { r: 45, g: 38, b: 22 }
+}
+
+fn diff_meta_fg() -> Color {
+    Color::Rgb { r: 135, g: 148, b: 166 }
+}
+
+fn diff_meta_bg() -> Color {
+    Color::Rgb { r: 13, g: 18, b: 29 }
 }
