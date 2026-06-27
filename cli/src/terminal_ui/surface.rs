@@ -86,8 +86,10 @@ impl TerminalSurface {
 
     pub(super) fn read_input(&mut self, app: &mut TerminalApp) -> Result<Option<String>> {
         let mut editor = InputEditor::new(&app.input_history);
+        // Mouse movement can be high-volume in some terminals, so repaint only after visible state changes.
+        self.render(app, Some(&editor))?;
         loop {
-            self.render(app, Some(&editor))?;
+            let mut needs_render = false;
             match read()? {
                 Event::Key(key) => match key.code {
                     KeyCode::Enter => return Ok(Some(editor.line())),
@@ -98,43 +100,105 @@ impl TerminalSurface {
                         if self.confirm_exit(app)? {
                             return Ok(None);
                         }
+                        needs_render = true;
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
                     KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
                         return Ok(None);
                     }
-                    KeyCode::PageUp => app.scroll_up(chat_page_size()),
-                    KeyCode::PageDown => app.scroll_down(chat_page_size()),
-                    KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => app.scroll_up(100_000),
-                    KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => app.jump_to_bottom(),
+                    KeyCode::PageUp => {
+                        let before = app.scroll_offset;
+                        app.scroll_up(chat_page_size());
+                        needs_render = app.scroll_offset != before;
+                    }
+                    KeyCode::PageDown => {
+                        let before = app.scroll_offset;
+                        app.scroll_down(chat_page_size());
+                        needs_render = app.scroll_offset != before;
+                    }
+                    KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let before = app.scroll_offset;
+                        app.scroll_up(100_000);
+                        needs_render = app.scroll_offset != before;
+                    }
+                    KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let before = app.scroll_offset;
+                        app.jump_to_bottom();
+                        needs_render = app.scroll_offset != before;
+                    }
                     KeyCode::Char('@') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if crate::active_project_dir().is_none() {
                             app.panel = PanelView::Project;
                             app.refresh(None);
                             app.push(Role::Error, "@", "Choose a project with /project before tagging files.");
+                            needs_render = true;
                         } else if let Some(path) = pick_project_file(self, app)? {
                             editor.insert_str(&format_file_tag(&path));
+                            needs_render = true;
+                        } else {
+                            needs_render = true;
                         }
                     }
-                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
-                    KeyCode::Backspace => editor.backspace(),
-                    KeyCode::Delete => editor.delete(),
-                    KeyCode::Left => editor.move_left(),
-                    KeyCode::Right => editor.move_right(),
-                    KeyCode::Home => editor.move_home(),
-                    KeyCode::End => editor.move_end(),
-                    KeyCode::Up => editor.history_prev(),
-                    KeyCode::Down => editor.history_next(),
-                    KeyCode::Tab => editor.insert_str("  "),
+                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        editor.insert(ch);
+                        needs_render = true;
+                    }
+                    KeyCode::Backspace => {
+                        editor.backspace();
+                        needs_render = true;
+                    }
+                    KeyCode::Delete => {
+                        editor.delete();
+                        needs_render = true;
+                    }
+                    KeyCode::Left => {
+                        editor.move_left();
+                        needs_render = true;
+                    }
+                    KeyCode::Right => {
+                        editor.move_right();
+                        needs_render = true;
+                    }
+                    KeyCode::Home => {
+                        editor.move_home();
+                        needs_render = true;
+                    }
+                    KeyCode::End => {
+                        editor.move_end();
+                        needs_render = true;
+                    }
+                    KeyCode::Up => {
+                        editor.history_prev();
+                        needs_render = true;
+                    }
+                    KeyCode::Down => {
+                        editor.history_next();
+                        needs_render = true;
+                    }
+                    KeyCode::Tab => {
+                        editor.insert_str("  ");
+                        needs_render = true;
+                    }
                     _ => {}
                 },
                 Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollUp => app.scroll_up(WHEEL_LINES),
-                    MouseEventKind::ScrollDown => app.scroll_down(WHEEL_LINES),
+                    MouseEventKind::ScrollUp => {
+                        let before = app.scroll_offset;
+                        app.scroll_up(WHEEL_LINES);
+                        needs_render = app.scroll_offset != before;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let before = app.scroll_offset;
+                        app.scroll_down(WHEEL_LINES);
+                        needs_render = app.scroll_offset != before;
+                    }
                     _ => {}
                 },
-                Event::Resize(_, _) => {}
+                Event::Resize(_, _) => needs_render = true,
                 _ => {}
+            }
+            if needs_render {
+                self.render(app, Some(&editor))?;
             }
         }
     }
