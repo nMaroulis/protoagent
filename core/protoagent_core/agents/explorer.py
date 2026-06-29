@@ -15,6 +15,7 @@ from .common import (
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
+    with_prompt_profile,
     with_workspace_contract,
 )
 
@@ -38,6 +39,7 @@ def create_explorer_agent(
     url: str | None = None,
     transport: TransportType | None = "sse",
     telemetry=None,
+    prompt_profile: str = "auto",
 ):
     """Create the read-only repository cartographer."""
     agent = Agent(
@@ -59,7 +61,17 @@ def create_explorer_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=with_workspace_contract(EXPLORER_SYSTEM_PROMPT, workspace, "Explorer"),
+        system_prompt=with_workspace_contract(
+            with_prompt_profile(
+                EXPLORER_SYSTEM_PROMPT,
+                "explorer",
+                provider,
+                model,
+                prompt_profile,
+            ),
+            workspace,
+            "Explorer",
+        ),
         storage=conversation_storage("explorer"),
         state=["conversation"],
         telemetry=telemetry,

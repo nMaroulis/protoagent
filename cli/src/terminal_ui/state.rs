@@ -280,6 +280,7 @@ pub(super) struct StatusSnapshot {
     pub(super) config_path: String,
     pub(super) model_summary: String,
     pub(super) provider_summary: String,
+    pub(super) prompt_profile: String,
     pub(super) runtime: String,
 }
 
@@ -295,11 +296,17 @@ impl StatusSnapshot {
             config_path: "unknown".to_string(),
             model_summary: "model inventory unavailable".to_string(),
             provider_summary: "providers unavailable".to_string(),
+            prompt_profile: "auto".to_string(),
             runtime: "runtime not checked".to_string(),
         };
         if let Ok(config) = load_visible_config() {
             snapshot.provider = config.active_provider.clone();
             snapshot.config_path = config.config_path.clone();
+            snapshot.prompt_profile = if config.agent_prompt_profile.is_empty() {
+                "auto".to_string()
+            } else {
+                config.agent_prompt_profile.clone()
+            };
             snapshot.model = config
                 .providers
                 .get(&config.active_provider)
@@ -318,6 +325,14 @@ impl StatusSnapshot {
         }
         if let Some(report) = doctor {
             snapshot.runtime = doctor_summary(report);
+            snapshot.prompt_profile = if report.prompt_profile.label.is_empty() {
+                snapshot.prompt_profile.clone()
+            } else {
+                format!(
+                    "{} ({})",
+                    report.prompt_profile.label, report.prompt_profile.resolved
+                )
+            };
         }
         snapshot
     }

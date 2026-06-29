@@ -27,6 +27,45 @@ Every LLM-capable agent receives a separate ProtoLink LLM instance configured
 with the selected provider and model. Separate instances keep prompts and
 histories isolated.
 
+## Prompt Profiles
+
+`prompt_profiles.py` defines the model-capability overlays used by Architect,
+Explorer, and Coder. The base role prompts keep invariant behavior such as
+delegation, read-only exploration, and approval-gated writes. A prompt profile
+then tunes reasoning depth, delegation cadence, evidence discipline, and final
+answer style.
+
+Configured modes:
+
+| Mode | Intended use |
+| --- | --- |
+| `auto` | Infer the profile from active provider/model. This is the default. |
+| `small` | 7B/8B and heavily quantized local models; short, explicit, one-step-at-a-time instructions. |
+| `medium` | Capable local or mid-tier models; balanced planning and evidence gathering. |
+| `large` | Strong local/cloud models; more autonomous decomposition and verification. |
+| `api` | Frontier hosted/API models; highest-autonomy coordination with rigorous evidence and validation expectations. |
+
+Shell:
+
+```bash
+proto-cli agents profile
+proto-cli agents profile api
+proto-cli agents small
+```
+
+TUI:
+
+```text
+/agents profile
+/agents profile large
+/agents api
+```
+
+The resolved profile is included in `doctor()`, `/check`, `/agents`, runtime
+progress, and `RunContext.metadata["prompt_profile"]`. ProtoLink still owns
+agent calls, tool calls, policy approvals, events, memory, and reports; prompt
+profiles only change the instructions given to each LLM-capable role.
+
 ## Shared Agent Helpers
 
 `agents/common.py` provides:
@@ -37,6 +76,7 @@ histories isolated.
 | `conversation_storage(agent_name)` | SQLite storage in `~/.protoagent/conversations.sqlite`, namespace `protoagent-<agent>`. |
 | `resolve_agent_url()` | Explicit URL, environment URL, or default local URL. |
 | `set_transport_timeout()` | Apply long timeouts across ProtoLink transports. |
+| `with_prompt_profile()` | Attach the resolved model-capability prompt overlay. |
 | `with_workspace_contract()` | Attach active project path and file-write rules to each system prompt. |
 
 ## Architect

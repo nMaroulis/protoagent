@@ -15,6 +15,7 @@ from .common import (
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
+    with_prompt_profile,
     with_workspace_contract,
 )
 
@@ -42,6 +43,7 @@ def create_coder_agent(
     transport: TransportType | None = "sse",
     approval_handler=None,
     telemetry=None,
+    prompt_profile: str = "auto",
 ):
     """Create the policy-gated file modification agent."""
     agent = Agent(
@@ -62,7 +64,17 @@ def create_coder_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=with_workspace_contract(CODER_SYSTEM_PROMPT, workspace, "Coder"),
+        system_prompt=with_workspace_contract(
+            with_prompt_profile(
+                CODER_SYSTEM_PROMPT,
+                "coder",
+                provider,
+                model,
+                prompt_profile,
+            ),
+            workspace,
+            "Coder",
+        ),
         storage=conversation_storage("coder"),
         state=["conversation"],
         telemetry=telemetry,

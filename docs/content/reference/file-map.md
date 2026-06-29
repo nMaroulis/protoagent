@@ -32,6 +32,8 @@ pages that should usually move with them.
 | `core/protoagent_core/llm.py` | `Core / Config And Models`, `Reference / Environment` |
 | `core/protoagent_core/models.py` | `Core / Config And Models`, `CLI / Models And Config` |
 | `core/protoagent_core/config.py` | `Core / Config And Models`, `Getting Started / Provider Setup` |
+| `core/protoagent_core/prompt_profiles.py` | `Core / Agent Deck`, `CLI / Commands`, `CLI / Models And Config` |
+| `core/protoagent_core/quality_eval.py` | `Core / Quality Evals`, `CLI / Commands`, `Reference / Verification` |
 | `core/protoagent_core/tools.py` | `Core / Safety And Tools` |
 | `core/protoagent_core/help_agent.py` | `Core / Agent Deck`, `CLI / Commands` |
 | `core/protoagent_core/agents/*.py` | `Core / Agent Deck`, `Core / Safety And Tools` |

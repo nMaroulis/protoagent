@@ -35,6 +35,7 @@ The config contains:
 | --- | --- |
 | `version` | Config version. |
 | `active_provider` | Canonical provider id. Defaults to `ollama`. |
+| `agent_prompt_profile` | Prompt profile for the agent deck: `auto`, `small`, `medium`, `large`, or `api`. |
 | `providers` | Per-provider labels, base URLs, model ids, API keys, optional context windows. |
 
 `load_config()` deep-merges saved config over defaults so new providers appear
@@ -54,6 +55,28 @@ without manual migration.
 | Cloud APIs | Static curated model choices plus optional lightweight key validation. |
 
 The CLI renders provider cards and compact provider strips from this inventory.
+
+## Agent Prompt Profile
+
+The deck prompt profile controls how Architect, Explorer, and Coder reason and
+coordinate for the selected model tier. It does not replace ProtoLink's agent
+calls, tool calls, memory, policies, or approvals.
+
+```text
+/agents profile
+/agents profile api
+```
+
+Shell:
+
+```bash
+proto-cli agents profile
+proto-cli agents profile large
+```
+
+`auto` is the default. API providers resolve to `api`; local model names with
+7B/8B hints resolve to `small`; 14B/20B/27B hints resolve to `medium`; 30B+
+and `large` hints resolve to `large`.
 
 ## Key Sources
 
@@ -116,8 +139,10 @@ Flow:
 | `proto-cli models` | Provider strip plus provider cards. |
 | `proto-cli config` | Redacted active provider config. |
 | `proto-cli dashboard` | Project, provider, model, provider strip, agent graph. |
+| `proto-cli agents profile` | Current configured and resolved prompt profile. |
 | `/models` | Pinned TUI inventory panel. |
 | `/config` | Pinned TUI config panel. |
+| `/agents profile` | Current configured and resolved prompt profile. |
 | `/check` | Runtime plus active provider status. |
 
 ## Context Window Control

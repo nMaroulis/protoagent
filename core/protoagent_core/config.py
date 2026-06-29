@@ -8,6 +8,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .prompt_profiles import normalize_prompt_profile
+
 CONFIG_VERSION = 1
 CONFIG_DIR = Path(
     os.getenv("PROTOAGENT_CONFIG_DIR", os.getenv("PROTOAGENT_HOME", "~/.protoagent"))
@@ -78,6 +80,7 @@ def default_config() -> dict[str, Any]:
     return {
         "version": CONFIG_VERSION,
         "active_provider": "ollama",
+        "agent_prompt_profile": "auto",
         "providers": providers,
     }
 
@@ -157,6 +160,15 @@ def set_context_window(provider: str, window_tokens: int | None) -> dict[str, An
         target.pop("context_window", None)
     else:
         target["context_window"] = int(window_tokens)
+    save_config(config)
+    return visible_config(config)
+
+
+def set_agent_prompt_profile(profile: str | None) -> dict[str, Any]:
+    """Persist the prompt profile used by the Architect/Explorer/Coder deck."""
+    normalized = normalize_prompt_profile(profile)
+    config = load_config()
+    config["agent_prompt_profile"] = normalized
     save_config(config)
     return visible_config(config)
 

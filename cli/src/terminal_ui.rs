@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    call_process_prompt_with_progress, compact_context_history, context_history_text, context_memory_text,
+    agent_profile_text, call_process_prompt_with_progress, compact_context_history, context_history_text, context_memory_text,
     context_pack_text, context_status_text, context_window_text, empty_as_unknown, help_availability_text,
     help_question_text, load_doctor,
     progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
@@ -96,7 +96,8 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             Ok(true)
         }
         "/agents" => {
-            switch_panel(app, PanelView::Agents, command, "Agents panel pinned.");
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            handle_agents_command(app, command, arg.trim())?;
             Ok(true)
         }
         "/context" | "/loom" => {
@@ -289,6 +290,76 @@ fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &s
     app.panel = panel;
     app.refresh(None);
     app.push(Role::Command, command, body);
+}
+
+fn handle_agents_command(app: &mut TerminalApp, command: &str, arg: &str) -> Result<()> {
+    let mut parts = arg.split_whitespace();
+    let first = parts.next();
+    if first.is_none() || matches!(first, Some("status")) {
+        app.panel = PanelView::Agents;
+        app.refresh(None);
+        let body = agents_panel_pinned_text(app);
+        app.push(Role::Command, command, &body);
+        return Ok(());
+    }
+    let value = match first {
+        Some("profile" | "prompt" | "mode" | "reasoning") => parts.next().map(str::to_string),
+        Some(value) if is_prompt_profile_value(value) => Some(value.to_string()),
+        Some(_) => {
+            app.push(
+                Role::Error,
+                command,
+                "Usage: /agents profile [auto|small|medium|large|api]",
+            );
+            return Ok(());
+        }
+        None => None,
+    };
+    if parts.next().is_some() {
+        app.push(
+            Role::Error,
+            command,
+            "Usage: /agents profile [auto|small|medium|large|api]",
+        );
+        return Ok(());
+    }
+    match agent_profile_text(value) {
+        Ok(text) => {
+            app.panel = PanelView::Agents;
+            app.refresh(None);
+            app.push(Role::Command, command, &text);
+        }
+        Err(err) => app.push(Role::Error, command, &err.to_string()),
+    }
+    Ok(())
+}
+
+fn agents_panel_pinned_text(app: &TerminalApp) -> String {
+    format!(
+        "Agents panel pinned. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
+        empty_as_unknown(&app.status.prompt_profile)
+    )
+}
+
+fn is_prompt_profile_value(value: &str) -> bool {
+    matches!(
+        value,
+        "auto"
+            | "automatic"
+            | "default"
+            | "small"
+            | "tiny"
+            | "medium"
+            | "mid"
+            | "balanced"
+            | "large"
+            | "big"
+            | "api"
+            | "api-level"
+            | "api-grade"
+            | "frontier"
+            | "cloud"
+    )
 }
 
 fn switch_model_panel(

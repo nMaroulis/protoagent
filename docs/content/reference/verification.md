@@ -34,6 +34,7 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_runtime_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_history_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_llm_context
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_help_agent
+PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_quality_eval
 ```
 
 ## Rust CLI
@@ -63,6 +64,15 @@ No-model smoke test:
 ```bash
 PROTOAGENT_SCAFFOLD=1 cargo run --manifest-path cli/Cargo.toml -- run "show diagnostics"
 ```
+
+Prompt-profile eval smoke:
+
+```bash
+cargo run --manifest-path cli/Cargo.toml -- eval profiles --limit 3
+```
+
+Use `--live` only when a model is configured. Live evals auto-deny workspace
+write approvals so Coder behavior can be measured without applying changes.
 
 ## Docusaurus Docs
 

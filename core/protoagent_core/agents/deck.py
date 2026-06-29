@@ -7,6 +7,7 @@ from typing import Any
 from protolink.types import TransportType
 
 from ..config import normalize_provider
+from ..prompt_profiles import prompt_profile_status
 from .architect import create_architect_agent
 from .coder import create_coder_agent
 from .explorer import create_explorer_agent
@@ -21,6 +22,7 @@ def create_agent_deck(
     transport: TransportType = "sse",
     approval_handler=None,
     telemetry=None,
+    prompt_profile: str = "auto",
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -38,6 +40,7 @@ def create_agent_deck(
         url=urls.get("explorer"),
         transport=transport,
         telemetry=telemetry,
+        prompt_profile=prompt_profile,
     )
     coder = create_coder_agent(
         registry=registry,
@@ -48,6 +51,7 @@ def create_agent_deck(
         transport=transport,
         approval_handler=approval_handler,
         telemetry=telemetry,
+        prompt_profile=prompt_profile,
     )
     architect = create_architect_agent(
         registry=registry,
@@ -57,6 +61,7 @@ def create_agent_deck(
         url=urls.get("architect"),
         transport=transport,
         telemetry=telemetry,
+        prompt_profile=prompt_profile,
     )
     return {
         "explorer": explorer,
@@ -65,8 +70,13 @@ def create_agent_deck(
     }
 
 
-def agent_manifest() -> dict[str, Any]:
+def agent_manifest(profile: dict[str, Any] | None = None) -> dict[str, Any]:
     """Static manifest used by the CLI doctor and fallback mode."""
+    profile = profile or prompt_profile_status({"active_provider": "ollama", "providers": {}})
+    profile_fields = {
+        "prompt_profile": str(profile.get("resolved", "")),
+        "prompt_profile_label": str(profile.get("label", "")),
+    }
     return {
         "agents": [
             {
@@ -74,6 +84,7 @@ def agent_manifest() -> dict[str, Any]:
                 "role": "orchestrator",
                 "memory": "protoagent-architect",
                 "tools": [],
+                **profile_fields,
             },
             {
                 "name": "explorer",
@@ -86,12 +97,14 @@ def agent_manifest() -> dict[str, Any]:
                     "search_regex",
                     "get_git_status",
                 ],
+                **profile_fields,
             },
             {
                 "name": "coder",
                 "role": "synthesis",
                 "memory": "protoagent-coder",
                 "tools": ["generate_unified_diff", "create_new_file"],
+                **profile_fields,
             },
         ]
     }

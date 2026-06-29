@@ -24,6 +24,16 @@ Important constants:
 | `API_PROVIDERS` | Providers that accept API keys. |
 | `LOCAL_PROVIDERS` | Local providers. |
 
+The top-level `agent_prompt_profile` key controls the prompt overlay used by
+Architect, Explorer, and Coder. Valid values are `auto`, `small`, `medium`,
+`large`, and `api`. `set_agent_prompt_profile()` persists the value and
+`prompt_profile_status()` reports the configured and resolved mode for display.
+
+`auto` resolves from the active provider/model. Hosted API providers resolve to
+`api`; local model names with 7B/8B hints resolve to `small`; mid-size names
+such as 14B/27B resolve to `medium`; 30B+ or `large` model names resolve to
+`large`.
+
 ## Provider Aliases
 
 `normalize_provider()` accepts common aliases:

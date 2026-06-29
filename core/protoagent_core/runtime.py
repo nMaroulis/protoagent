@@ -14,6 +14,7 @@ from .agents import create_agent_deck
 from .config import load_config, normalize_provider, provider_config
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
+from .prompt_profiles import prompt_profile_status
 from .runtime_bridge import RuntimeBridge
 
 _FALLBACK_PORT = 19100
@@ -38,10 +39,13 @@ def run_selected_model(
     model = cfg.get("model", "")
     if not model:
         raise RuntimeError(f"No model selected for provider '{provider}'")
+    profile = prompt_profile_status(config, provider=provider, model=str(model))
 
     bridge = RuntimeBridge(progress_path)
     try:
-        return asyncio.run(_run_agent_deck(prompt, provider, model, workspace, session_id, bridge))
+        return asyncio.run(
+            _run_agent_deck(prompt, provider, model, workspace, session_id, bridge, profile)
+        )
     finally:
         bridge.cleanup()
 
@@ -53,6 +57,7 @@ async def _run_agent_deck(
     workspace: str | None,
     session_id: str | None,
     bridge: RuntimeBridge,
+    prompt_profile: dict[str, Any],
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink import DEFAULT_REDACTION_POLICY, RunBudget, RunContext, RunRecorder, Task
@@ -75,7 +80,11 @@ async def _run_agent_deck(
             "workspace.write": "allow",
         },
         budget=_run_budget(provider, model, RunBudget),
-        metadata={"application": "protoagent", "interface": "rust-cli"},
+        metadata={
+            "application": "protoagent",
+            "interface": "rust-cli",
+            "prompt_profile": prompt_profile,
+        },
     )
     context.trace_id = context.run_id
     context.attach_to_task(task)
@@ -99,6 +108,11 @@ async def _run_agent_deck(
 
     emit(f"Registry prepared at {urls['registry']}.")
     emit(f"All LLM-capable agents configured with {provider} / {model}.")
+    emit(
+        "Agent prompt profile: "
+        f"{prompt_profile['label']} "
+        f"(configured {prompt_profile['configured']}, resolved {prompt_profile['resolved']})."
+    )
     emit(
         f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'})."
     )
@@ -136,6 +150,7 @@ async def _run_agent_deck(
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
             telemetry=telemetry,
+            prompt_profile=str(prompt_profile["resolved"]),
         )
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
@@ -238,6 +253,7 @@ async def _run_agent_deck(
             "approval_requests": bridge.approval_requests,
             "approval_decisions": bridge.approval_decisions,
             "run_context": final_context.to_dict(),
+            "prompt_profile": prompt_profile,
         }
     finally:
         if cancellation_monitor is not None:

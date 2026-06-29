@@ -35,6 +35,10 @@ Installed examples use `proto-cli <command>`.
 | `project choose` | Prompt for a project folder. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
 | `agents` | Show Architect/Explorer/Coder topology and tool isolation. |
+| `agents profile [auto|small|medium|large|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
+| `agents small`, `agents medium`, `agents large`, `agents api` | Shorthand for setting the deck prompt profile. |
+| `eval profiles [--plan|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
+| `eval tasks` | List built-in quality eval tasks. |
 | `context` | Show Context Loom status for the active project. |
 | `context QUERY` | Build a source-cited Context Pack without running a model. |
 | `context window [16k|auto]` | Show, set, or clear the Ollama context window override. |
@@ -61,7 +65,9 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the agent topology panel. |
+| `/agents` | Pin the agent topology panel; the confirmation shows the current prompt profile and how to change it. |
+| `/agents profile [auto|small|medium|large|api]` | Show or set the deck prompt profile. |
+| `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
 | `/context`, `/loom` | Show Context Loom status. |
 | `/context QUERY` | Preview a Context Pack. |
 | `/context window [16k|auto]` | Show or change context window settings. |

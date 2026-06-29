@@ -13,6 +13,7 @@ class GuideHelpAgentTests(unittest.TestCase):
         seen_prompt = {}
 
         def respond(history, _system_prompt):
+            seen_prompt["system"] = str(_system_prompt)
             seen_prompt["user"] = next(
                 str(message.get("content", ""))
                 for message in reversed(history.messages)
@@ -46,8 +47,10 @@ class GuideHelpAgentTests(unittest.TestCase):
         self.assertEqual(result["provider"], "mock")
         self.assertEqual(result["model"], "mock-gpt")
         self.assertIn("/model", result["answer"])
+        self.assertIn("/agents profile [auto|small|medium|large|api]", seen_prompt["system"])
         self.assertIn("Active provider: mock", seen_prompt["user"])
         self.assertIn("Active model: mock-gpt", seen_prompt["user"])
+        self.assertIn("Prompt profile: auto configured, medium resolved", seen_prompt["user"])
         self.assertIn("Persistent context memory: on (default)", seen_prompt["user"])
         self.assertIn("User help question:\nhow do I change models?", seen_prompt["user"])
 

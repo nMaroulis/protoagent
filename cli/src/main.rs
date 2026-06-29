@@ -114,6 +114,8 @@ struct ModelInfo {
 struct VisibleConfig {
     config_path: String,
     active_provider: String,
+    #[serde(default)]
+    agent_prompt_profile: String,
     providers: HashMap<String, VisibleProviderConfig>,
 }
 
@@ -146,6 +148,8 @@ struct DoctorReport {
     active_model: String,
     #[serde(default)]
     active_provider_status: String,
+    #[serde(default)]
+    prompt_profile: PromptProfileStatus,
     agents: Vec<AgentManifest>,
 }
 
@@ -180,7 +184,31 @@ struct AgentManifest {
     role: String,
     #[serde(default)]
     memory: String,
+    #[serde(default)]
+    prompt_profile: String,
+    #[serde(default)]
+    prompt_profile_label: String,
     tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PromptProfileStatus {
+    #[serde(default)]
+    configured: String,
+    #[serde(default)]
+    resolved: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    reasoning: String,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    available: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -238,7 +266,13 @@ async fn main() -> Result<()> {
         }
         Some("agents") => {
             print_header()?;
-            show_agents()
+            handle_agents_command(&args[1..])
+        }
+        Some("eval") | Some("evals") => {
+            if !args.iter().skip(1).any(|arg| arg == "--json") {
+                print_header()?;
+            }
+            handle_eval_command(&args[1..])
         }
         Some("context") | Some("loom") => {
             print_header()?;
@@ -296,6 +330,8 @@ fn print_cli_help() {
     println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
+    println!("  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api");
+    println!("  proto-cli eval profiles      Run prompt-profile evals; use --live for model calls");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
     println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
@@ -596,6 +632,14 @@ fn show_dashboard() -> Result<()> {
                 .unwrap_or("");
             rows.push(format!("Provider  : {}", provider));
             rows.push(format!("Model     : {}", if model.is_empty() { "not selected" } else { model }));
+            rows.push(format!(
+                "Prompt   : {}",
+                if config.agent_prompt_profile.is_empty() {
+                    "auto"
+                } else {
+                    config.agent_prompt_profile.as_str()
+                }
+            ));
             rows.push(format!("Config    : {}", config.config_path));
         }
         Err(err) => rows.push(format!("Config    : unavailable ({err})")),
@@ -626,6 +670,7 @@ fn show_dashboard() -> Result<()> {
         "/models scans local and cloud model options".to_string(),
         "/project sets the active project folder".to_string(),
         "Use @ inside a task to tag project files".to_string(),
+        "/agents profile controls small/medium/large/API prompt modes".to_string(),
         "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
@@ -1083,6 +1128,14 @@ fn show_config() -> Result<()> {
         &[
             format!("Path   : {}", config.config_path),
             format!("Active : {}", config.active_provider),
+            format!(
+                "Prompt: {}",
+                if config.agent_prompt_profile.is_empty() {
+                    "auto"
+                } else {
+                    config.agent_prompt_profile.as_str()
+                }
+            ),
         ],
         PanelTone::Magenta,
     );
@@ -1166,6 +1219,7 @@ fn show_check() -> Result<()> {
                 },
                 report.active_provider_status
             ),
+            format!("Prompt    : {}", format_prompt_profile(&report.prompt_profile)),
         ],
         PanelTone::Magenta,
     );
@@ -1179,6 +1233,39 @@ fn show_check() -> Result<()> {
     Ok(())
 }
 
+fn handle_agents_command(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        None | Some("status") => show_agents(),
+        Some("profile") | Some("prompt") | Some("mode") | Some("reasoning") => {
+            if args.len() > 2 {
+                return Err(anyhow!(
+                    "Usage: proto-cli agents profile [auto|small|medium|large|api]"
+                ));
+            }
+            let value = args.get(1).cloned();
+            let text = agent_profile_text(value)?;
+            print_panel(
+                "AGENT PROMPT PROFILE",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+        Some(value) if is_prompt_profile_value(value) => {
+            let text = agent_profile_text(Some((*value).to_string()))?;
+            print_panel(
+                "AGENT PROMPT PROFILE",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
+        Some(other) => Err(anyhow!(
+            "Unknown agents command: {other}. Use `proto-cli agents profile [auto|small|medium|large|api]`."
+        )),
+    }
+}
+
 fn readiness(ready: bool) -> &'static str {
     if ready { "ready" } else { "unavailable" }
 }
@@ -1186,6 +1273,11 @@ fn readiness(ready: bool) -> &'static str {
 fn show_agents() -> Result<()> {
     print_agent_graph();
     if let Ok(report) = load_doctor() {
+        print_panel(
+            "PROMPT PROFILE",
+            &[format_prompt_profile(&report.prompt_profile)],
+            PanelTone::Magenta,
+        );
         let rows: Vec<String> = report
             .agents
             .iter()
@@ -1207,10 +1299,313 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
     } else {
         agent.tools.join(", ")
     };
+    let profile = if agent.prompt_profile_label.is_empty() {
+        agent.prompt_profile.clone()
+    } else {
+        agent.prompt_profile_label.clone()
+    };
     format!(
-        "{} ({}) | memory: {} | tools: {}",
-        agent.name, agent.role, memory, tools
+        "{} ({}) | prompt: {} | memory: {} | tools: {}",
+        agent.name,
+        agent.role,
+        empty_as_unknown(&profile),
+        memory,
+        tools
     )
+}
+
+pub(crate) fn agent_profile_text(value: Option<String>) -> Result<String> {
+    let raw = match value {
+        Some(value) => call_configure_agent_prompt_profile(Some(value))
+            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+        None => call_no_args("get_agent_prompt_profile")
+            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+    };
+    let status: PromptProfileStatus = serde_json::from_str(&raw)?;
+    let selection = if status.model.trim().is_empty() {
+        empty_as_unknown(&status.provider).to_string()
+    } else {
+        format!("{} / {}", empty_as_unknown(&status.provider), status.model)
+    };
+    let available = if status.available.is_empty() {
+        "auto, small, medium, large, api".to_string()
+    } else {
+        status.available.join(", ")
+    };
+    Ok(format!(
+        "Selection  : {selection}\nConfigured : {}\nResolved   : {}\nMode       : {}\nSummary    : {}\nReasoning  : {}\nCommands   : /agents profile <mode> | proto-cli agents profile <mode>\nAvailable  : {available}",
+        empty_as_unknown(&status.configured),
+        empty_as_unknown(&status.resolved),
+        empty_as_unknown(&status.label),
+        empty_as_unknown(&status.summary),
+        empty_as_unknown(&status.reasoning),
+    ))
+}
+
+fn format_prompt_profile(status: &PromptProfileStatus) -> String {
+    if status.label.is_empty() && status.resolved.is_empty() {
+        return "auto".to_string();
+    }
+    format!(
+        "{} (configured {}, resolved {})",
+        empty_as_unknown(&status.label),
+        empty_as_unknown(&status.configured),
+        empty_as_unknown(&status.resolved)
+    )
+}
+
+fn is_prompt_profile_value(value: &str) -> bool {
+    matches!(
+        value,
+        "auto"
+            | "automatic"
+            | "default"
+            | "small"
+            | "tiny"
+            | "medium"
+            | "mid"
+            | "balanced"
+            | "large"
+            | "big"
+            | "api"
+            | "api-level"
+            | "api-grade"
+            | "frontier"
+            | "cloud"
+    )
+}
+
+#[cfg(test)]
+mod agent_command_tests {
+    use super::{is_prompt_profile_value, parse_eval_options};
+
+    #[test]
+    fn recognizes_prompt_profile_values_and_aliases() {
+        assert!(is_prompt_profile_value("auto"));
+        assert!(is_prompt_profile_value("api-grade"));
+        assert!(is_prompt_profile_value("balanced"));
+        assert!(!is_prompt_profile_value("mystery"));
+    }
+
+    #[test]
+    fn parses_quality_eval_options() {
+        let args = vec![
+            "--live".to_string(),
+            "--profile".to_string(),
+            "api".to_string(),
+            "--task".to_string(),
+            "approval-denial-regression".to_string(),
+            "--limit".to_string(),
+            "3".to_string(),
+            "--json".to_string(),
+        ];
+        let options = parse_eval_options(&args).unwrap();
+        assert_eq!(options.mode, "live");
+        assert_eq!(options.profiles, vec!["api"]);
+        assert_eq!(options.tasks, vec!["approval-denial-regression"]);
+        assert_eq!(options.limit, Some(3));
+        assert!(options.json);
+    }
+}
+
+#[derive(Default)]
+struct EvalCommandOptions {
+    mode: String,
+    profiles: Vec<String>,
+    tasks: Vec<String>,
+    limit: Option<usize>,
+    json: bool,
+}
+
+fn handle_eval_command(args: &[String]) -> Result<()> {
+    let (subcommand, rest) = match args.first().map(String::as_str) {
+        None => ("profiles", args),
+        Some("profiles") | Some("profile") => ("profiles", &args[1..]),
+        Some("tasks") | Some("list") => ("tasks", &args[1..]),
+        Some(value) if value.starts_with('-') || is_prompt_profile_value(value) => ("profiles", args),
+        Some(other) => return Err(anyhow!("Unknown eval command: {other}. Use `proto-cli eval profiles`.")),
+    };
+
+    let options = parse_eval_options(rest)?;
+    if subcommand == "tasks" {
+        let raw = call_list_quality_eval_tasks()
+            .map_err(|err| anyhow!("Python quality eval task error: {err:?}"))?;
+        if options.json {
+            println!("{raw}");
+        } else {
+            let value: Value = serde_json::from_str(&raw)?;
+            print_eval_tasks(&value);
+        }
+        return Ok(());
+    }
+
+    let mode = if options.mode.is_empty() {
+        "scaffold".to_string()
+    } else {
+        options.mode
+    };
+    let profiles = join_optional(&options.profiles);
+    let tasks = join_optional(&options.tasks);
+    let raw = call_run_quality_eval(
+        mode,
+        profiles,
+        tasks,
+        options.limit,
+        workspace_dir_string(),
+    )
+    .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
+    if options.json {
+        println!("{raw}");
+        return Ok(());
+    }
+    let value: Value = serde_json::from_str(&raw)?;
+    print_quality_eval_report(&value);
+    Ok(())
+}
+
+fn parse_eval_options(args: &[String]) -> Result<EvalCommandOptions> {
+    let mut options = EvalCommandOptions {
+        mode: "scaffold".to_string(),
+        ..EvalCommandOptions::default()
+    };
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--live" => options.mode = "live".to_string(),
+            "--scaffold" => options.mode = "scaffold".to_string(),
+            "--plan" => options.mode = "plan".to_string(),
+            "--json" => options.json = true,
+            "--profile" | "-p" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow!("--profile requires a value"))?;
+                options.profiles.push(value.clone());
+            }
+            "--task" | "-t" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow!("--task requires a value"))?;
+                options.tasks.push(value.clone());
+            }
+            "--limit" | "-n" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| anyhow!("--limit requires a value"))?;
+                options.limit = Some(
+                    value
+                        .parse::<usize>()
+                        .map_err(|_| anyhow!("--limit must be a positive integer"))?,
+                );
+            }
+            value if is_prompt_profile_value(value) => options.profiles.push(value.to_string()),
+            other => {
+                return Err(anyhow!(
+                    "Unknown eval option: {other}. Use `proto-cli eval profiles --live --profile api --limit 3`."
+                ))
+            }
+        }
+        index += 1;
+    }
+    Ok(options)
+}
+
+fn join_optional(values: &[String]) -> Option<String> {
+    (!values.is_empty()).then(|| values.join(","))
+}
+
+fn print_quality_eval_report(value: &Value) {
+    let summary = value.get("summary").unwrap_or(&Value::Null);
+    let score = summary.get("score").and_then(Value::as_f64);
+    let mut rows = vec![
+        format!("Mode      : {}", value_str(value, "mode")),
+        format!("Workspace : {}", value_str(value, "workspace")),
+        format!("Profiles  : {}", value_u64(summary, "profile_count")),
+        format!("Tasks     : {}", value_u64(summary, "task_count")),
+        format!("Runs      : {}", value_u64(summary, "run_count")),
+        format!(
+            "Score     : {} / {} ({})",
+            value_u64(summary, "points"),
+            value_u64(summary, "possible"),
+            score
+                .map(|value| format!("{:.1}%", value * 100.0))
+                .unwrap_or_else(|| "not scored".to_string())
+        ),
+    ];
+    if let Some(notes) = value.get("notes").and_then(Value::as_array) {
+        for note in notes.iter().filter_map(Value::as_str) {
+            rows.push(format!("Note      : {note}"));
+        }
+    }
+    print_panel("QUALITY EVAL", &rows, PanelTone::Magenta);
+
+    if let Some(profiles) = value.get("profiles").and_then(Value::as_array) {
+        for profile in profiles {
+            let mut profile_rows = vec![format!(
+                "Score: {} / {} ({})",
+                value_u64(profile, "points"),
+                value_u64(profile, "possible"),
+                profile
+                    .get("score")
+                    .and_then(Value::as_f64)
+                    .map(|value| format!("{:.1}%", value * 100.0))
+                    .unwrap_or_else(|| "not scored".to_string())
+            )];
+            if let Some(tasks) = profile.get("tasks").and_then(Value::as_array) {
+                for task in tasks.iter().take(16) {
+                    let score = task
+                        .get("score")
+                        .and_then(|score| score.get("score"))
+                        .and_then(Value::as_f64)
+                        .map(|value| format!("{:.1}%", value * 100.0))
+                        .unwrap_or_else(|| "not scored".to_string());
+                    let error = value_str(task, "error");
+                    let suffix = if error.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" | error: {}", truncate_plain(&error, 64))
+                    };
+                    profile_rows.push(format!(
+                        "{} | {}{}",
+                        value_str(task, "task_id"),
+                        score,
+                        suffix
+                    ));
+                }
+            }
+            print_panel(
+                &format!("PROFILE {}", value_str(profile, "profile").to_uppercase()),
+                &profile_rows,
+                PanelTone::Cyan,
+            );
+        }
+    }
+}
+
+fn print_eval_tasks(value: &Value) {
+    let mut rows = vec![format!(
+        "Tasks: {} | Profiles: {} | Modes: {}",
+        value
+            .get("tasks")
+            .and_then(Value::as_array)
+            .map(|items| items.len())
+            .unwrap_or(0),
+        value_array_strings(value, "profiles", 8).join(", "),
+        value_array_strings(value, "modes", 8).join(", ")
+    )];
+    if let Some(tasks) = value.get("tasks").and_then(Value::as_array) {
+        for task in tasks {
+            rows.push(format!(
+                "{} [{}] {}",
+                value_str(task, "id"),
+                value_str(task, "category"),
+                truncate_plain(&value_str(task, "prompt"), 76)
+            ));
+        }
+    }
+    print_panel("QUALITY EVAL TASKS", &rows, PanelTone::Cyan);
 }
 
 fn handle_context_command(args: &[String]) -> Result<()> {
@@ -1962,11 +2357,47 @@ fn call_configure_context_window(value: Option<String>) -> PyResult<String> {
     })
 }
 
+fn call_configure_agent_prompt_profile(value: Option<String>) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("configure_agent_prompt_profile")?
+            .call1((value,))?
+            .extract()
+    })
+}
+
 fn call_answer_help_question(question: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module.getattr("answer_help_question")?.call1((question,))?.extract()
+    })
+}
+
+fn call_run_quality_eval(
+    mode: String,
+    profiles: Option<String>,
+    task_ids: Option<String>,
+    limit: Option<usize>,
+    workspace: String,
+) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("run_quality_eval")?
+            .call1((mode, profiles, task_ids, limit, workspace))?
+            .extract()
+    })
+}
+
+fn call_list_quality_eval_tasks() -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("list_quality_eval_tasks")?.call0()?.extract()
     })
 }
 

@@ -11,6 +11,7 @@ from .common import (
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
+    with_prompt_profile,
     with_workspace_contract,
 )
 
@@ -46,6 +47,7 @@ def create_architect_agent(
     url: str | None = None,
     transport: TransportType | None = "sse",
     telemetry=None,
+    prompt_profile: str = "auto",
 ):
     """Create the user-facing orchestrator agent."""
     agent = Agent(
@@ -68,7 +70,17 @@ def create_architect_agent(
         transport=transport,
         registry=registry,
         llm=create_selected_llm(provider, model),
-        system_prompt=with_workspace_contract(ARCHITECT_SYSTEM_PROMPT, workspace, "Architect"),
+        system_prompt=with_workspace_contract(
+            with_prompt_profile(
+                ARCHITECT_SYSTEM_PROMPT,
+                "architect",
+                provider,
+                model,
+                prompt_profile,
+            ),
+            workspace,
+            "Architect",
+        ),
         storage=conversation_storage("architect"),
         state=["conversation"],
         telemetry=telemetry,

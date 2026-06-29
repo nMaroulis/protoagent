@@ -1,6 +1,6 @@
 # ProtoAgent Architecture: Local-First A2A Orchestration for Autonomous Coding
 
-**Abstract** As agentic coding transitions from experimental chat interfaces to autonomous, multi-step execution, the industry has heavily centralized around massive cloud inference models. Tools like Antigravity CLI, Claude Code, and Devin rely on monolithic context windows and heavy systemic routing that drain API token quotas rapidly during iterative loops. ProtoAgent proposes a radical alternative: a decentralized, Agent-to-Agent ($A2A$) orchestration architecture powered by the `protolink` engine. By breaking complex coding tasks into delegated sub-routines, ProtoAgent enables highly capable, autonomous coding workflows that run entirely on local, consumer-grade hardware without context-window collapse.
+**Abstract** As agentic coding transitions from experimental chat interfaces to autonomous, multi-step execution, the industry has heavily centralized around massive cloud inference models. Tools like Antigravity CLI, Claude Code, and Devin rely on monolithic context windows and heavy systemic routing that drain API token quotas rapidly during iterative loops. ProtoAgent proposes a radical alternative: a decentralized, Agent-to-Agent ($A2A$) orchestration architecture powered by the `protolink` engine. By breaking complex coding tasks into delegated sub-routines, feeding them through deterministic local context, and adapting prompts to the active model's capability class, ProtoAgent enables highly capable autonomous coding workflows on local hardware while still scaling cleanly to frontier API models.
 
 ---
 
@@ -8,13 +8,13 @@
 
 Modern coding agents typically utilize a "God Prompt" architecture. A single large language model is given access to all tools (file reading, bash execution, code writing) and a massive system prompt detailing how to act as a software engineer.
 
-While effective for frontier models (like Claude 3.5 Sonnet or Gemini), this approach catastrophically fails when applied to local 7B-8B parameter models. Small models suffer from context collapse when overwhelmed by complex XML tags, multi-step instructions, and dozens of available tools. They hallucinate syntax, forget the original user request, or enter infinite tool-calling loops.
+While effective for frontier hosted models, this approach catastrophically fails when applied to local 7B-8B parameter models. Small models suffer from context collapse when overwhelmed by complex XML tags, multi-step instructions, and dozens of available tools. They hallucinate syntax, forget the original user request, or enter infinite tool-calling loops.
 
-ProtoAgent solves this by abandoning the monolithic agent. Instead, it utilizes structured Agent-to-Agent ($A2A$) flows where multiple specialized agents are given highly restricted, single-purpose roles.
+ProtoAgent solves this by abandoning the monolithic agent. Instead, it utilizes structured Agent-to-Agent ($A2A$) flows where multiple specialized agents are given highly restricted, single-purpose roles. The central thesis is simple: model intelligence should change the depth of reasoning, not the safety boundary. A small local model and a frontier API model should see different prompt overlays, but both should move through the same evidence, delegation, policy, and approval architecture.
 
 ---
 
-## Two: The Protolink Engine: A2A Core
+## Two: The ProtoLink Engine: A2A Core
 
 At the heart of the ecosystem is `protolink`, a minimalist Python orchestration layer designed explicitly for local model quirks. `protolink` operates on three core principles:
 
@@ -125,12 +125,135 @@ believes is relevant before it writes a diff. This makes local autonomous coding
 auditable in a way that hidden embedding retrieval and giant context windows are
 not.
 
-## Five: The Standard Execution Flow
+## Five: Capability-Scaled Prompting
+
+The triad creates stable roles, but model capability still matters. A prompt
+that helps a frontier API model reason carefully can overload a small local
+model. A prompt short enough for a 7B model can underuse a strong long-context
+model. ProtoAgent therefore treats prompting as a **capability lattice** rather
+than a single universal instruction block.
+
+The invariant layer is the role contract:
+
+* Architect routes and coordinates.
+* Explorer gathers read-only evidence.
+* Coder prepares policy-gated modifications.
+* ProtoLink owns delegation, tools, memory, events, approvals, and runtime
+  reports.
+
+On top of that invariant layer, ProtoAgent applies one of four prompt profiles:
+
+| Profile | Intended model class | Prompting strategy |
+| --- | --- | --- |
+| `small` | 7B/8B and heavily quantized local models | Short instructions, one delegation at a time, narrow context, minimal public planning. |
+| `medium` | Capable local or mid-tier models | Compact planning, evidence-backed assumptions, focused docs/tests guidance. |
+| `large` | Strong local/cloud models | Multi-step decomposition, explicit acceptance criteria, deeper verification discipline. |
+| `api` | Frontier hosted/API models | Senior-maintainer autonomy, adversarial self-checks, stronger expectations for tests, docs, and risk review. |
+
+The important design choice is that prompt profiles are overlays, not separate
+agent implementations. They tune reasoning budget, delegation cadence, evidence
+requirements, and answer style while preserving the same tool permissions and
+approval gates. This makes the system portable: a developer can move from a
+small local model to an API-grade model without changing the topology or
+trusting the model with broader ambient authority.
+
+Prompt engineering best practices are encoded as architectural constraints:
+
+1. **Role-specific instructions:** each agent receives only the responsibilities
+   and tools it can execute.
+2. **Capability-aware reasoning budget:** smaller models get short procedural
+   steps; stronger models get acceptance criteria and verification loops.
+3. **Evidence before mutation:** edits should flow from Context Loom and
+   Explorer evidence into Coder, not from guesswork.
+4. **No hidden authority expansion:** a stronger model may reason more deeply,
+   but it does not bypass policy, approval, or workspace boundaries.
+5. **Observable outcomes:** final responses summarize decisions, validation,
+   changed paths, and residual risk without exposing hidden chain-of-thought.
+
+In practice, `auto` can infer the profile from the active provider and model,
+while explicit selection lets the user force a profile when they know more than
+the heuristic. The CLI and TUI surface this through the agent configuration
+interface, because prompt quality is part of the agent deck rather than a
+separate model setting.
+
+---
+
+## Six: System Graph
+
+The complete theoretical control loop is:
+
+```mermaid
+flowchart LR
+    U["User / CLI / TUI"] --> L["Context Loom\nsource-cited Context Pack"]
+    PP["Prompt Profile\nsmall / medium / large / api"] -. overlays .-> A
+    PP -. overlays .-> E
+    PP -. overlays .-> C
+    L --> A["Architect\nrouting authority"]
+    A -->|read-only evidence| E["Explorer\nrepository cartography"]
+    E -->|Context Map| A
+    A -->|localized change task| C["Coder\npatch synthesis"]
+    C -->|RunAction + diff artifact| P["ProtoLink Policy\napproval gate"]
+    P -->|approved| W["Workspace mutation"]
+    P -->|denied| N["No mutation"]
+    P --> R["RunEvent / RunReport\nobservable trace"]
+    A --> O["Final answer"]
+    R --> O
+```
+
+This graph is deliberately asymmetric. The user sees one coherent assistant,
+but the runtime preserves distinct responsibilities. Context is selected before
+reasoning, routing happens before synthesis, synthesis produces an explicit
+action, and policy evaluates the action before the workspace changes. Prompt
+profiles influence the quality of reasoning inside the nodes, not the shape of
+the trust boundary around them.
+
+---
+
+## Seven: Quality Evaluation Loop
+
+Prompt engineering cannot be treated as prose alone. A professional agent needs
+a regression surface for behavior, not just unit tests for code. ProtoAgent
+therefore evaluates prompt profiles against fixed repository tasks that measure
+whether the expected topology appears in the run.
+
+The evaluation loop asks questions such as:
+
+* Did a read-only task stay read-only?
+* Did a change task route through Coder instead of letting Architect mutate?
+* Did the run cite or touch the expected source, docs, or test paths?
+* Did a write request reach ProtoLink's approval boundary?
+* Did the proposed edit stay within a reasonable file-count budget?
+
+This creates a feedback system for prompt work. If a `small` profile wanders
+too much, the overlay can be shortened. If an `api` profile underuses tests or
+docs, the overlay can be strengthened. If a model skips Explorer before Coder,
+the scoring reveals a topology regression. The result is prompt engineering
+that is measurable, repeatable, and tied to the same runtime events developers
+already inspect.
+
+The evaluation modes serve different levels of confidence:
+
+| Mode | Purpose |
+| --- | --- |
+| `plan` | Show the profile/task matrix without model calls. |
+| `scaffold` | Exercise prompt/context plumbing with no model call. |
+| `live` | Run real models while keeping workspace writes behind auto-denied approvals. |
+
+The strategic point is that ProtoAgent treats prompts as versioned runtime
+assets. They have design intent, observable behavior, and regression tests. That
+is what allows the system to become better over time without slipping back into
+an opaque God Prompt.
+
+---
+
+## Eight: The Standard Execution Flow
 
 When a user runs a command in the terminal (e.g., `protoagent run "Extract the hardcoded strings in main.rs into a config file"`), the following $A2A$ flow executes:
 
 ```
-[User Input] -> [Context Loom] -> [Architect] -> [Explorer verifies/expands]
+[User Input] -> [Context Loom] -> [Prompt Profile] -> [Architect]
+                                                        |
+                    [Explorer verifies/expands] <-------|
                                                         |
 [User Approval] <- [Approval Request] <- [Coder RunAction] <- Context Pack
 
@@ -138,20 +261,21 @@ When a user runs a command in the terminal (e.g., `protoagent run "Extract the h
 
 1. **Intake:** The CLI receives the user prompt and asks Context Loom for an initial Context Pack.
 2. **Weaving:** Context Loom refreshes the local index, scores files and symbols against the prompt, and records an Evidence Ledger for every included item.
-3. **Planning:** The **Architect** receives the prompt plus the Context Pack and initializes the execution state.
-4. **Contextualization:** The Architect delegates to the **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
-5. **Synthesis:** The Architect passes the localized task and compact evidence to the **Coder**.
-6. **Diff Generation:** The Coder prepares a strict unified-diff preview through a `RunAction` artifact.
-7. **Policy & Approval:** Protolink evaluates the action capability, publishes a typed approval request with the preview artifact, and halts execution until ProtoAgent's frontend returns the human decision.
+3. **Prompt Scaling:** ProtoAgent resolves the active prompt profile and attaches the role-specific overlay to Architect, Explorer, and Coder.
+4. **Planning:** The **Architect** receives the prompt plus the Context Pack and initializes the execution state.
+5. **Contextualization:** The Architect delegates to the **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
+6. **Synthesis:** The Architect passes the localized task and compact evidence to the **Coder**.
+7. **Diff Generation:** The Coder prepares a strict unified-diff preview through a `RunAction` artifact.
+8. **Policy & Approval:** ProtoLink evaluates the action capability, publishes a typed approval request with the preview artifact, and halts execution until ProtoAgent's frontend returns the human decision.
 
 ---
 
-## Six: Tool Abstraction and MCP
+## Nine: Tool Abstraction and MCP
 
 Because of strict tool isolation, ProtoAgent treats external capabilities as plug-and-play modules. External read-only tools can be mapped to the Explorer, while write-capable tools should enter through the same `RunAction` and approval boundary as workspace edits. The Coder never needs broad ambient access; it receives the clear schemas and evidence that earlier stages pass forward.
 
 ---
 
-## Seven: Conclusion
+## Ten: Conclusion
 
-By fracturing the monolithic system prompt into isolated, specialized roles (**Architect**, **Explorer**, **Coder**) and feeding them through **Context Loom**, ProtoAgent achieves enterprise-grade autonomous reasoning on completely free, local environments. It bypasses the cognitive limits of smaller parameter models, ensuring developers can run hundreds of iterative coding loops daily without the friction, cost, or privacy concerns of cloud API limits.
+By fracturing the monolithic system prompt into isolated, specialized roles (**Architect**, **Explorer**, **Coder**), feeding them through **Context Loom**, and scaling instructions through prompt profiles, ProtoAgent creates an agentic coding system that is local-first, inspectable, and model-portable. It bypasses the cognitive limits of smaller parameter models without wasting the capabilities of stronger ones. Most importantly, it makes autonomy auditable: context is cited, roles are isolated, actions are previewed, approvals are explicit, and prompt quality can be evaluated over time.

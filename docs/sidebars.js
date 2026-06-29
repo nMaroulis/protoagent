@@ -35,6 +35,7 @@ const sidebars = {
         'core/architecture',
         'core/agents',
         'core/runtime',
+        'core/quality-evals',
         'core/context-loom',
         'core/state-memory',
         'core/config-models',

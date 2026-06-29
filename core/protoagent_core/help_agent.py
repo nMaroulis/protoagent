@@ -11,6 +11,7 @@ from protolink import Agent, CapabilityPolicy, Task
 
 from .config import CONFIG_DIR, visible_config
 from .llm import create_llm_from_config
+from .prompt_profiles import prompt_profile_status
 
 GUIDE_SYSTEM_PROMPT = """You are Guide, ProtoAgent's isolated interactive help agent.
 
@@ -48,6 +49,17 @@ Manual:
 - `/context on` enables persistent project conversation memory. This is the
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
+- `/agents` opens the Architect / Explorer / Coder panel and shows the current
+  prompt profile.
+- `/agents profile [auto|small|medium|large|api]` shows or changes the prompt
+  profile used by Architect, Explorer, and Coder. Shorthands such as
+  `/agents small` and `/agents api` also work. From the shell, use
+  `proto-cli agents profile [mode]`.
+- Prompt profiles tune reasoning depth and delegation style for the selected
+  model class: `small` for 7B/8B or heavily quantized local models, `medium`
+  for capable local or mid-tier models, `large` for strong local/cloud models,
+  and `api` for frontier hosted models. `auto` infers from the active provider
+  and model.
 - `/trace` shows the latest normalized ProtoLink run trace. `/timeline` shows a
   structured agent path. `/diff` shows proposed file changes from the last run.
 - `/sessions` shows saved project session records. `/last` reopens the last
@@ -101,6 +113,13 @@ def _settings_context(config: dict[str, Any]) -> str:
         f"- Active provider: {provider}",
         f"- Active model: {model}",
     ]
+    profile = prompt_profile_status(config, provider=provider, model=model)
+    profile_label = str(profile.get("label") or profile.get("resolved") or "unknown")
+    lines.append(
+        "- Prompt profile: "
+        f"{profile.get('configured', 'auto')} configured, "
+        f"{profile.get('resolved', 'auto')} resolved ({profile_label})"
+    )
     label = str(active.get("label") or "")
     if label and label != provider:
         lines.append(f"- Provider label: {label}")

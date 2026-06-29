@@ -10,13 +10,13 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .agents import agent_manifest
 from .config import (
     LOCAL_PROVIDERS,
     MAX_CONTEXT_WINDOW,
     MIN_CONTEXT_WINDOW,
     provider_config,
     set_active_model,
+    set_agent_prompt_profile,
     set_api_key,
     set_context_window,
     visible_config,
@@ -31,16 +31,9 @@ from .context import (
 from .context import (
     context_status as loom_status,
 )
-from .help_agent import answer_help_question as guide_answer_help_question
-from .history import (
-    compact_saved_histories,
-    describe_saved_histories,
-    persist_architect_turn,
-    reset_saved_histories,
-)
 from .llm import ollama_context_window_details, validate_protolink
 from .models import discover_models, remember_valid_provider
-from .runtime import run_selected_model
+from .prompt_profiles import prompt_profile_status
 from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
 
 MAX_TAGGED_FILES = 6
@@ -72,6 +65,8 @@ def set_model(provider: str, model: str, base_url: str | None = None) -> str:
 
 def answer_help_question(question: str) -> str:
     """Answer a ProtoAgent usage question through the isolated Guide agent."""
+    from .help_agent import answer_help_question as guide_answer_help_question
+
     return _json(guide_answer_help_question(question))
 
 
@@ -111,6 +106,46 @@ def configure_context_window(value: str | int | None = None) -> str:
     return get_context_settings()
 
 
+def get_agent_prompt_profile() -> str:
+    """Return the active agent prompt profile and resolved model tier."""
+    config = visible_config()
+    return _json(prompt_profile_status(config))
+
+
+def configure_agent_prompt_profile(value: str | None = None) -> str:
+    """Set the active agent prompt profile, or reset it to auto."""
+    config = set_agent_prompt_profile(value)
+    return _json(prompt_profile_status(config))
+
+
+def run_quality_eval(
+    mode: str = "scaffold",
+    profiles: str | None = None,
+    task_ids: str | None = None,
+    limit: int | None = None,
+    workspace: str | None = None,
+) -> str:
+    """Run the built-in prompt-profile quality evaluation harness."""
+    from .quality_eval import run_quality_eval as run_eval
+
+    return _json(
+        run_eval(
+            workspace=workspace,
+            profiles=profiles,
+            task_ids=task_ids,
+            mode=mode,
+            limit=limit,
+        )
+    )
+
+
+def list_quality_eval_tasks() -> str:
+    """Return the built-in prompt-profile quality evaluation tasks."""
+    from .quality_eval import list_eval_tasks
+
+    return _json(list_eval_tasks())
+
+
 def compact_protolink_history(
     session_id: str,
     strategy: str = "tokens",
@@ -124,6 +159,8 @@ def compact_protolink_history(
     config = visible_config()
     provider = str(config.get("active_provider", "ollama"))
     model = str(config.get("providers", {}).get(provider, {}).get("model", "")) or None
+    from .history import compact_saved_histories
+
     result = compact_saved_histories(
         session_id,
         provider,
@@ -157,6 +194,8 @@ def compact_protolink_history(
 
 def reset_protolink_history(session_id: str) -> str:
     """Clear the current ProtoLink session across Architect, Explorer, and Coder."""
+    from .history import reset_saved_histories
+
     result = reset_saved_histories(session_id)
     cleared = [str(name).title() for name in result["cleared_agents"]]
     result["summary"] = (
@@ -169,6 +208,8 @@ def reset_protolink_history(session_id: str) -> str:
 
 def describe_protolink_history(session_id: str) -> str:
     """Return a read-only summary of the current ProtoLink conversation memory."""
+    from .history import describe_saved_histories
+
     result = describe_saved_histories(session_id)
     result["summary"] = (
         "Saved ProtoLink conversation history for this project."
@@ -204,11 +245,14 @@ def _parse_context_window(value: str | int | None) -> int | None:
 
 def doctor(workspace: str | None = None) -> str:
     """Return runtime diagnostics consumed by the CLI doctor panel."""
+    from .agents import agent_manifest
+
     config = visible_config()
     protolink = validate_protolink()
     inventory = discover_models()
     active_provider = config.get("active_provider", "ollama")
     active = config.get("providers", {}).get(active_provider, {})
+    profile = prompt_profile_status(config, provider=str(active_provider), model=active.get("model", ""))
     provider_inventory = next(
         (provider for provider in inventory["providers"] if provider["id"] == active_provider),
         None,
@@ -225,7 +269,8 @@ def doctor(workspace: str | None = None) -> str:
             "active_provider_status": provider_inventory.get("status")
             if provider_inventory
             else "unknown",
-            "agents": agent_manifest()["agents"],
+            "prompt_profile": profile,
+            "agents": agent_manifest(profile)["agents"],
         }
     )
 
@@ -334,6 +379,7 @@ def _fallback_response(
     provider = config.get("active_provider", "ollama")
     provider_data = config.get("providers", {}).get(provider, {})
     model = provider_data.get("model", "")
+    profile = prompt_profile_status(config, provider=str(provider), model=str(model))
     context = build_context_map(workspace)
     targets = _extract_file_targets(prompt, context.get("files", []))
     target_label = ", ".join(targets) if targets else "(not selected yet)"
@@ -362,6 +408,7 @@ def _fallback_response(
         f"Workspace: {workspace}\n"
         f"Active provider: {provider}\n"
         f"Active model: {model or 'not selected'}\n"
+        f"Prompt profile: {profile['label']} (configured {profile['configured']}, resolved {profile['resolved']})\n"
         f"Likely target: {target_label}\n\n"
         f"Tagged context: {_tag_summary(tagged_context)}\n\n"
         f"Context Loom: {_context_summary(loom_context)}\n\n"
@@ -402,6 +449,9 @@ def _model_response(
     loom_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the live model path and adapt the result to the CLI response schema."""
+    from .history import persist_architect_turn
+    from .runtime import run_selected_model
+
     tagged_context = tagged_context or {"items": [], "errors": []}
     runtime_prompt = _runtime_prompt(prompt, tagged_context, loom_context)
     result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
@@ -414,6 +464,10 @@ def _model_response(
         targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
     answer = result["answer"]
+    profile = result.get("prompt_profile", {})
+    profile_label = str(profile.get("label") or profile.get("resolved") or "unknown")
+    profile_configured = str(profile.get("configured") or "auto")
+    profile_resolved = str(profile.get("resolved") or "unknown")
     action_targets = [str(path) for path in result.get("targets", []) if path]
     diff_targets = [
         str(item.get("path", ""))
@@ -442,6 +496,7 @@ def _model_response(
             f"Workspace: {workspace}\n"
             f"Active provider: {result['provider']}\n"
             f"Active model: {result['model']}\n"
+            f"Prompt profile: {profile_label} (configured {profile_configured}, resolved {profile_resolved})\n"
             f"Conversation session: {session_id or 'task-local'}\n"
             f"Likely target: {target_label or '(not selected yet)'}\n"
             f"Context Loom: {_context_summary(loom_context)}\n"

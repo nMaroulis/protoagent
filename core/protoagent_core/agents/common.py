@@ -8,8 +8,9 @@ from typing import Any
 
 from protolink.logging import BaseLogger
 
-from ..config import normalize_provider
+from ..config import normalize_provider, provider_config
 from ..llm import create_llm_from_config
+from ..prompt_profiles import compose_system_prompt
 
 DEFAULT_AGENT_URLS = {
     "architect": "http://127.0.0.1:9110",
@@ -94,4 +95,24 @@ def with_workspace_contract(system_prompt: str, workspace: str | None, role: str
         "- If a user asks to create or modify a file, produce an approval-gated file action rather than only explaining code.\n"
         "- If no path is specified, choose a conservative project-relative path only when the request is obvious; otherwise ask one concise clarification.\n"
         f"- You are the {role}; identify your role when handing work to another agent or producing the final response.\n"
+    )
+
+
+def with_prompt_profile(
+    system_prompt: str,
+    role: str,
+    provider: str,
+    model: str | None,
+    prompt_profile: str,
+) -> str:
+    """Attach the active model-capability prompt profile to a base prompt."""
+    provider = normalize_provider(provider)
+    cfg = provider_config(provider)
+    return compose_system_prompt(
+        system_prompt,
+        role,
+        provider=provider,
+        model=model or cfg.get("model"),
+        profile=prompt_profile,
+        base_url=str(cfg.get("base_url") or ""),
     )

@@ -21,6 +21,8 @@ pip install "protolink[http,llms]>=0.6.3"
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider config and API-key storage at `~/.protoagent/config.json`.
+- `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.
+- `protoagent_core/quality_eval.py` - Fixed prompt-profile benchmark tasks and scoring helpers.
 - `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
 - `protoagent_core/agents/` - ProtoLink Architect, Explorer, and Coder factories, split by agent.
 - `protoagent_core/tools.py` - Workspace-safe exploration, diff preview, and authorized write helpers.
@@ -50,6 +52,17 @@ Before each model run, Context Loom refreshes a deterministic local index and
 injects a bounded Context Pack into the Architect prompt. Explorer also exposes
 `build_context_pack` as a ProtoLink tool so the agent mesh can ask for a
 focused evidence pack during a run.
+
+Agent prompts are tuned through a configurable prompt profile:
+`auto`, `small`, `medium`, `large`, or `api`. `auto` resolves from the active
+provider/model. The profile changes only the role instructions for Architect,
+Explorer, and Coder; ProtoLink still owns delegation, tools, memory, policies,
+runtime events, and reports.
+
+Prompt profile quality can be checked with the built-in eval harness:
+`proto-cli eval profiles` runs a scaffold smoke without contacting a model,
+while `proto-cli eval profiles --live` runs the selected model with write
+approvals auto-denied.
 
 Useful runtime switches:
 

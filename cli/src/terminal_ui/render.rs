@@ -299,6 +299,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         PanelView::Dashboard => {
             rows.push(row("project", &app.status.workspace, magenta(), app.status.project_ready));
             rows.push(row("models", &app.status.model_summary, cyan(), false));
+            rows.push(row("prompt", &app.status.prompt_profile, green(), false));
             rows.push(row("agents", "Architect routes | Explorer reads | Coder drafts | human approves", yellow(), false));
             rows.push(row(
                 "last",
@@ -351,6 +352,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                 false,
             ));
             rows.push(row("approval", "Protolink pauses execution until the human decides", green(), false));
+            rows.push(row("prompt", format!("{}; /agents profile changes it", app.status.prompt_profile), magenta(), false));
             rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
         }
         PanelView::Context => {
@@ -395,6 +397,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         PanelView::Config => {
             rows.push(row("provider", &app.status.provider, cyan(), true));
             rows.push(row("model", &app.status.model, magenta(), false));
+            rows.push(row("prompt", &app.status.prompt_profile, green(), false));
             rows.push(row("config", &app.status.config_path, yellow(), false));
             rows.push(row("keys", "/key sets API keys here; proto-cli key openai works from shell", green(), false));
             rows.push(row("report", "full report: proto-cli config", green(), false));
@@ -404,6 +407,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("guide", "/help <question> asks isolated Guide with current settings", magenta(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
+            rows.push(row("prompt", "/agents profile auto|small|medium|large|api", cyan(), false));
             rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
             rows.push(row("context", "/context on | off | history | window 16k | compact | reset", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));

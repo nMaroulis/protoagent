@@ -117,6 +117,7 @@ Inside the TUI you can use slash commands:
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
 * `/agents` - Shows the Architect / Explorer / Coder topology and per-agent ProtoLink memory namespaces.
+* `/agents profile [auto|small|medium|large|api]` - Shows or sets the prompt profile used by the agent deck.
 * `/context` - Shows Context Loom index status for the active project.
 * `/context QUERY` - Builds a source-cited Context Pack without running a model.
 * `/context window 16k` - Sets the Ollama request window and ProtoLink `LLMModelProfile` together.
@@ -144,6 +145,8 @@ cargo run --manifest-path cli/Cargo.toml -- key openai
 cargo run --manifest-path cli/Cargo.toml -- config
 cargo run --manifest-path cli/Cargo.toml -- check
 cargo run --manifest-path cli/Cargo.toml -- agents
+cargo run --manifest-path cli/Cargo.toml -- agents profile api
+cargo run --manifest-path cli/Cargo.toml -- eval profiles --limit 3
 cargo run --manifest-path cli/Cargo.toml -- context
 cargo run --manifest-path cli/Cargo.toml -- context "runtime streaming task handling"
 cargo run --manifest-path cli/Cargo.toml -- index refresh
