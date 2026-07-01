@@ -252,7 +252,9 @@ def doctor(workspace: str | None = None) -> str:
     inventory = discover_models()
     active_provider = config.get("active_provider", "ollama")
     active = config.get("providers", {}).get(active_provider, {})
-    profile = prompt_profile_status(config, provider=str(active_provider), model=active.get("model", ""))
+    profile = prompt_profile_status(
+        config, provider=str(active_provider), model=active.get("model", "")
+    )
     provider_inventory = next(
         (provider for provider in inventory["providers"] if provider["id"] == active_provider),
         None,

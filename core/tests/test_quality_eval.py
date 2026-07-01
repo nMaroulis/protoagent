@@ -63,7 +63,7 @@ class QualityEvalTests(unittest.TestCase):
                         "llm_event_type": "agent_call_start",
                         "metadata": {"agent": "coder"},
                     },
-                }
+                },
             ],
             "approval_requests": [
                 {

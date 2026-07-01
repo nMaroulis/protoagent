@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from .config import load_config, set_agent_prompt_profile, visible_config
 from .prompt_profiles import RESOLVED_PROMPT_PROFILES, normalize_prompt_profile
@@ -231,7 +231,9 @@ def run_quality_eval(
     started = time.time()
     config_before = load_config()
     try:
-        original_profile = normalize_prompt_profile(str(config_before.get("agent_prompt_profile", "auto")))
+        original_profile = normalize_prompt_profile(
+            str(config_before.get("agent_prompt_profile", "auto"))
+        )
     except ValueError:
         original_profile = "auto"
     profile_results: list[dict[str, Any]] = []
@@ -270,7 +272,9 @@ def list_eval_tasks() -> dict[str, Any]:
     }
 
 
-def score_response(response: dict[str, Any], task: EvalTask, *, mode: str = "live") -> dict[str, Any]:
+def score_response(
+    response: dict[str, Any], task: EvalTask, *, mode: str = "live"
+) -> dict[str, Any]:
     """Score one model response against one benchmark task contract."""
     observations = _observations(response, task)
     checks = [
@@ -286,7 +290,9 @@ def score_response(response: dict[str, Any], task: EvalTask, *, mode: str = "liv
         ),
         _check(
             "explorer_usage",
-            observations["used_explorer"] if task.requires_explorer else not observations["used_explorer"],
+            observations["used_explorer"]
+            if task.requires_explorer
+            else not observations["used_explorer"],
             (
                 "Explorer was used for repository evidence."
                 if task.requires_explorer
@@ -414,7 +420,7 @@ def _response_digest(response: dict[str, Any]) -> dict[str, Any]:
 def _observations(response: dict[str, Any], task: EvalTask) -> dict[str, Any]:
     text = _response_text(response)
     paths = _touched_paths(response)
-    run_events = response.get("run_events") if isinstance(response.get("run_events"), list) else []
+    run_events = _list_or_empty(response.get("run_events"))
     return {
         "used_explorer": _used_agent(run_events, "explorer"),
         "used_coder": _used_agent(run_events, "coder")
@@ -436,10 +442,13 @@ def _used_agent(run_events: list[Any], agent_name: str) -> bool:
     for event in run_events:
         if not isinstance(event, dict):
             continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        payload = _dict_or_empty(event.get("payload"))
+        metadata = _dict_or_empty(payload.get("metadata"))
         llm_type = str(payload.get("llm_event_type") or "").lower()
-        if llm_type == "agent_call_start" and str(metadata.get("agent") or "").lower() == agent_name:
+        if (
+            llm_type == "agent_call_start"
+            and str(metadata.get("agent") or "").lower() == agent_name
+        ):
             return True
         if str(event.get("agent_name") or "").lower() == agent_name and llm_type in {
             "tool_start",
@@ -457,17 +466,25 @@ def _touched_paths(response: dict[str, Any]) -> set[str]:
         cleaned = part.strip()
         if cleaned:
             paths.add(cleaned)
-    for request in response.get("approval_requests") or []:
+    for request in _list_or_empty(response.get("approval_requests")):
         if not isinstance(request, dict):
             continue
-        action = request.get("action") if isinstance(request.get("action"), dict) else {}
-        metadata = action.get("metadata") if isinstance(action.get("metadata"), dict) else {}
-        payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
-        arguments = payload.get("arguments") if isinstance(payload.get("arguments"), dict) else {}
+        action = _dict_or_empty(request.get("action"))
+        metadata = _dict_or_empty(action.get("metadata"))
+        payload = _dict_or_empty(action.get("payload"))
+        arguments = _dict_or_empty(payload.get("arguments"))
         path = str(metadata.get("path") or arguments.get("path") or "").strip()
         if path:
             paths.add(path)
     return paths
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    return cast("list[Any]", value) if isinstance(value, list) else []
+
+
+def _dict_or_empty(value: Any) -> dict[str, Any]:
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else {}
 
 
 def _response_text(response: dict[str, Any]) -> str:

@@ -21,3 +21,6 @@ line-ending = "lf"
 [tool.ty.src]
 include = ["core/protoagent_core", "cli/python"]
 exclude = ["core/tests", "docs", "playground"]
+
+[tool.ty.environment]
+extra-paths = ["core"]
