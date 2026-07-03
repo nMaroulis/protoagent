@@ -60,6 +60,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'reference/file-map',
+        'reference/versioning',
         'reference/environment',
         'reference/troubleshooting',
         'reference/verification',

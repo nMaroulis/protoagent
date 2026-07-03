@@ -8,6 +8,8 @@
 
 The core philosophy of ProtoAgent is simple: **Decouple the Brain from the Frontends.** Cloud subscriptions and bundled API plans are great for one-off chats, but when you start running complex, multi-agent autonomous loops, your quotas for Claude and Gemini go out pretty fast. Agentic coding requires hundreds of iterative steps, which means it fundamentally belongs on local compute. ProtoAgent is designed to give you that premium, autonomous coding assistant experience—entirely for free, running on your own hardware.
 
+Current component versions: `proto-cli` `0.1.0`, `protoagent-core` `0.1.0`, and planned `proto-acp` `0.0.0-dev.0`. See [VERSIONING.md](VERSIONING.md) for the source-of-truth files and bump policy.
+
 ---
 
 ## 🧩 The Ecosystem Architecture
@@ -72,6 +74,7 @@ cd protoagent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install "protolink[http,llms]>=0.6.3"
+pip install -e core
 
 ```
 
@@ -83,6 +86,12 @@ To spin up the high-performance Rust interface (make sure your `.venv` is active
 cd cli
 cargo run
 
+```
+
+Check component versions from the repo root:
+
+```bash
+cargo run --manifest-path cli/Cargo.toml -- version
 ```
 
 ### 3. Hook into Your Editor (Zed / JetBrains)

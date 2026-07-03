@@ -7,11 +7,16 @@ The `acp/` folder currently contains planning documentation only. There is no
 checked-in server implementation in this repo yet, so this section intentionally
 documents the intended role and marks protocol details as TBD.
 
+The ACP component has a development version marker, `0.0.0-dev.0`, stored in
+`acp/VERSION`. This is not a release claim; it exists so the monorepo can track
+the editor surface consistently before implementation starts.
+
 ## Current Status
 
 | Item | Status |
 | --- | --- |
 | `acp/README.md` | Present. Describes the intended editor bridge. |
+| `acp/VERSION` | `0.0.0-dev.0` planned-component marker. |
 | ACP stdio server code | TBD. |
 | ProtoLink core integration | TBD. |
 | Editor config examples | Draft only. |

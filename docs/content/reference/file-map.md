@@ -11,6 +11,7 @@ pages that should usually move with them.
 | Source | Update docs |
 | --- | --- |
 | `cli/src/main.rs` | `CLI / Commands`, `CLI / Models And Config`, `CLI / Context Loom In The CLI`, `Reference / Environment` |
+| `cli/Cargo.toml` | `Reference / Versioning`, `CLI / Command Reference` |
 | `cli/src/terminal_ui.rs` | `CLI / Commands`, `CLI / Fullscreen TUI`, `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/terminal_ui/render.rs` | `CLI / Fullscreen TUI` |
 | `cli/src/terminal_ui/project.rs` | `CLI / Projects And Sessions`, `CLI / Fullscreen TUI` |
@@ -26,6 +27,8 @@ pages that should usually move with them.
 | Source | Update docs |
 | --- | --- |
 | `core/protoagent_core/agent_engine.py` | `Core / Core Architecture`, `CLI / Commands`, `Reference / Environment` |
+| `core/protoagent_core/_version.py` | `Reference / Versioning`, `Core / Core Overview` |
+| `core/pyproject.toml` | `Reference / Versioning`, `Getting Started / Installation` |
 | `core/protoagent_core/runtime.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/runtime_bridge.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/history.py` | `Core / State And Memory`, `CLI / Projects And Sessions` |
@@ -45,6 +48,7 @@ pages that should usually move with them.
 | Source | Update docs |
 | --- | --- |
 | `pyproject.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
+| `VERSIONING.md` | `Reference / Versioning` |
 | `rustfmt.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
 | `CONTRIBUTING.md` | `Contributing / Development Workflow` |
 | `.github/workflows/python-quality.yml` | `Contributing / Development Workflow`, `Reference / Verification` |
@@ -54,7 +58,7 @@ pages that should usually move with them.
 
 | Source | Update docs |
 | --- | --- |
-| `acp/README.md` or new ACP files | `ACP / Overview`, `ACP / Plan` |
+| `acp/README.md`, `acp/VERSION`, or new ACP files | `ACP / Overview`, `ACP / Plan`, `Reference / Versioning` |
 | `playground/recipe-reco/*` | `Playground / Overview` |
 | `playground/taskflow/*` | `Playground / Overview` |
 | `whitepaper.md` | `Intro`, `Core / Agent Deck`, `Core / Context Loom Internals` |

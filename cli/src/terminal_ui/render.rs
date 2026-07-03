@@ -415,13 +415,24 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("keys", "/key sets API keys here; proto-cli key openai works from shell", green(), false));
             rows.push(row("report", "full report: proto-cli config", green(), false));
         }
+        PanelView::Versions => {
+            if app.version_rows.is_empty() {
+                rows.push(row("refresh", "/version loads component versions", cyan(), true));
+            } else {
+                for line in app.version_rows.iter().take(6) {
+                    rows.push(row("component", line, cyan(), line.contains("proto-cli")));
+                }
+            }
+            rows.push(row("policy", "CLI and core are active 0.1.x surfaces; ACP stays prerelease until implemented", green(), false));
+            rows.push(row("sources", "cli/Cargo.toml, core/pyproject.toml, acp/VERSION", muted(), false));
+        }
         PanelView::Help => {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
             rows.push(row("guide", "/help <question> asks isolated Guide with current settings", magenta(), true));
             rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
             rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
             rows.push(row("prompt", "/agents profile auto|small|medium|large|api", cyan(), false));
-            rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline", magenta(), false));
+            rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline /version", magenta(), false));
             rows.push(row("context", "/context on | off | history | window 16k | compact | reset", green(), false));
             rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
             rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
@@ -749,6 +760,7 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
         (PanelView::Timeline, "/timeline"),
         (PanelView::Check, "/check"),
         (PanelView::Config, "/config"),
+        (PanelView::Versions, "/version"),
         (PanelView::Help, "/help"),
     ];
     let mut x = 1u16;

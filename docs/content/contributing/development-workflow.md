@@ -16,6 +16,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install "protolink[http,llms]>=0.6.3" ruff ty
+python -m pip install -e core
 rustup component add rustfmt clippy
 cargo build --manifest-path cli/Cargo.toml
 ```
@@ -29,6 +30,7 @@ configures Rust formatting for the CLI crate.
 | --- | --- | --- |
 | Python core | `core/protoagent_core/` | ProtoLink runtime wiring, agents, Context Loom, model config, state, and tools. |
 | Rust CLI | `cli/` | Terminal UX, PyO3 calls, project/session state, approvals, traces, and cancellation controls. |
+| Versioning | `cli/Cargo.toml`, `core/pyproject.toml`, `acp/VERSION` | Component release markers and version inventory. |
 | Docs | `docs/content/` | User-facing guides, reference pages, and contributor process. |
 | Playground | `playground/` | Sample apps used as agent targets and integration sandboxes. |
 
@@ -46,6 +48,7 @@ ruff format --check .
 ruff check .
 ty check --extra-search-path core
 PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
+PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 ```
 
 Ruff covers checked-in Python source under `core/`, `cli/python/`, and

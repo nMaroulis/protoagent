@@ -6,6 +6,8 @@
 
 Instead of forcing you to choose between a fast terminal experience and intelligent multi-agent routing, Proto-CLI gives you both. By utilizing a hybrid architecture via PyO3, it wraps the powerful Python-based orchestration engine into a standalone, lightning-fast Rust binary.
 
+Current CLI version: `0.1.0`, sourced from `cli/Cargo.toml`.
+
 ---
 
 ## 🏗️ Monorepo Context
@@ -41,7 +43,8 @@ If you haven't already, initialize the Python environment in the monorepo root:
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.2"
+pip install "protolink[http,llms]>=0.6.3"
+pip install -e core
 
 ```
 
@@ -116,6 +119,7 @@ Inside the TUI you can use slash commands:
 * `/models` - Shows model/provider status.
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
+* `/version` - Shows CLI, Python core, and planned ACP component versions.
 * `/agents` - Shows the runtime kernel, RunContract, stateful Architect, stateless Explorer/Coder workers, and policy gate.
 * `/agents profile [auto|small|medium|large|api]` - Shows or sets the prompt profile used by the agent deck.
 * `/context` - Shows Context Loom index status for the active project.
@@ -143,6 +147,7 @@ cargo run --manifest-path cli/Cargo.toml -- models
 cargo run --manifest-path cli/Cargo.toml -- model
 cargo run --manifest-path cli/Cargo.toml -- key openai
 cargo run --manifest-path cli/Cargo.toml -- config
+cargo run --manifest-path cli/Cargo.toml -- version
 cargo run --manifest-path cli/Cargo.toml -- check
 cargo run --manifest-path cli/Cargo.toml -- agents
 cargo run --manifest-path cli/Cargo.toml -- agents profile api
@@ -156,7 +161,8 @@ Interactive mode is the fullscreen TUI by default. The top area is a fixed
 status panel, the middle viewport is the chat transcript, and the bottom bar is
 the input editor. `/project`, `/models`, `/agents`, `/context`, `/check`,
 `/config`, `/help`, and `/dashboard` switch the fixed status panel instead of
-printing status blocks into the chat.
+printing status blocks into the chat. `/version` opens the component version
+panel and also writes the current inventory into the transcript.
 
 ---
 

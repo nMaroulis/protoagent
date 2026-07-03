@@ -4,6 +4,8 @@
 
 **Proto-ACP** is the editor-facing component of the ecosystem. It connects local LLMs (via Ollama or LM Studio) directly to your favorite code editor (Zed, JetBrains) using the Agent Client Protocol (ACP), while seamlessly routing external tools via the Model Context Protocol (MCP).
 
+Current ACP marker: `0.0.0-dev.0` in `acp/VERSION`. This is a planned-component marker, not a shipped server release.
+
 ---
 
 ## 🏗️ Monorepo Context
@@ -45,7 +47,8 @@ If you haven't already, set up the Python environment from the root of the repos
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.1" pydantic
+pip install "protolink[http,llms]>=0.6.3" pydantic
+pip install -e core
 
 ```
 

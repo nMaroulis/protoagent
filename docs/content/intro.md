@@ -12,11 +12,11 @@ state, actions, and approvals.
 
 The current monorepo has three main product surfaces:
 
-| Surface | Path | Status | Responsibility |
-| --- | --- | --- | --- |
-| Rust CLI and TUI | `cli/` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
-| Python core | `core/protoagent_core/` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
-| ACP server | `acp/` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
+| Surface | Path | Version | Status | Responsibility |
+| --- | --- | --- | --- | --- |
+| Rust CLI and TUI | `cli/` | `0.1.0` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
+| Python core | `core/protoagent_core/` | `0.1.0` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
+| ACP server | `acp/` | `0.0.0-dev.0` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
 
 The rest of the repo supports those surfaces:
 
@@ -76,6 +76,7 @@ updating one page, not rewriting a manual.
 | Provider discovery, API keys, or model selection | `CLI / Models and Config` and `Core / Config and Models` |
 | Context Loom scoring, index schema, or prompt format | `CLI / Context Loom` and `Core / Context Loom` |
 | Runtime transport, budgets, streaming, tracing, or cancellation | `Core / Runtime` and `Reference / Environment` |
+| Component version source or release marker | `Reference / Versioning` |
 | Agent prompts, tools, or policies | `Core / Agent Deck` and `Core / Safety and Tools` |
 | Contributor tooling, linting, type-checking, or formatting | `Contributing / Development Workflow` and `Reference / Verification` |
 | ACP implementation | `ACP / Plan` |
@@ -103,5 +104,7 @@ Useful source entrypoints:
 | `core/protoagent_core/history.py` | ProtoLink state describe, compact, reset, and persistence helpers. |
 | `core/protoagent_core/tools.py` | Workspace-safe read, search, diff preview, and writes. |
 | `pyproject.toml` | Ruff and ty configuration for the Python surface. |
+| `core/pyproject.toml` | Python core package metadata and core release version. |
+| `VERSIONING.md` | Component version policy and source-of-truth map. |
 | `rustfmt.toml` | Rust formatting configuration for the CLI crate. |
 | `CONTRIBUTING.md` | GitHub-facing contributor setup and pull request workflow. |

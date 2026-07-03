@@ -35,6 +35,7 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_history_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_llm_context
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_help_agent
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_quality_eval
+PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 ```
 
 ## Rust CLI
@@ -57,6 +58,12 @@ Runtime diagnostics:
 
 ```bash
 cargo run --manifest-path cli/Cargo.toml -- check
+```
+
+Component version inventory:
+
+```bash
+cargo run --manifest-path cli/Cargo.toml -- version
 ```
 
 No-model smoke test:

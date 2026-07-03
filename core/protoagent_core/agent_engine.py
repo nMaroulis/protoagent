@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ._version import component_versions as build_component_versions
 from .config import (
     LOCAL_PROVIDERS,
     MAX_CONTEXT_WINDOW,
@@ -51,6 +52,11 @@ def list_models(validate_api_keys: bool = False) -> str:
 def get_config() -> str:
     """Return redacted provider configuration JSON for display."""
     return _json(visible_config())
+
+
+def component_versions(cli_version: str | None = None) -> str:
+    """Return version metadata for the CLI, core, and ACP components."""
+    return _json(build_component_versions(cli_version))
 
 
 def add_api_key(provider: str, api_key: str) -> str:
@@ -266,6 +272,7 @@ def doctor(workspace: str | None = None) -> str:
             "platform": platform.platform(),
             "workspace": str(workspace_root(workspace)),
             "config_path": config["config_path"],
+            "component_versions": build_component_versions()["components"],
             "protolink": protolink,
             "active_provider": active_provider,
             "active_model": active.get("model", ""),
@@ -505,7 +512,9 @@ def _model_response(
         else ""
     )
     return {
-        "status": runtime_status if runtime_status in {"blocked", "canceled", "incomplete"} else "answered",
+        "status": runtime_status
+        if runtime_status in {"blocked", "canceled", "incomplete"}
+        else "answered",
         "headline": "Architect completed the ProtoLink run.",
         "answer": answer,
         "thought_process": (
@@ -722,10 +731,7 @@ def _contract_summary(contract: Any) -> str:
     artifacts = (
         ", ".join(str(artifact) for artifact in contract.get("expected_artifacts", [])) or "none"
     )
-    return (
-        f"{contract.get('task_kind', 'unknown')} | workers: {workers} | "
-        f"artifacts: {artifacts}"
-    )
+    return f"{contract.get('task_kind', 'unknown')} | workers: {workers} | artifacts: {artifacts}"
 
 
 def _completion_summary(completion: Any) -> str:

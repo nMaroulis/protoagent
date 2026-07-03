@@ -142,6 +142,8 @@ struct DoctorReport {
     platform: String,
     workspace: String,
     config_path: String,
+    #[serde(default)]
+    component_versions: Vec<ComponentVersion>,
     protolink: ProtolinkStatus,
     active_provider: String,
     #[serde(default)]
@@ -153,6 +155,21 @@ struct DoctorReport {
     #[serde(default)]
     architecture: ArchitectureManifest,
     agents: Vec<AgentManifest>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct ComponentVersion {
+    id: String,
+    name: String,
+    version: String,
+    status: String,
+    source: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ComponentVersionInventory {
+    #[serde(default)]
+    components: Vec<ComponentVersion>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,6 +294,10 @@ async fn main() -> Result<()> {
             print_header()?;
             show_config()
         }
+        Some("version") | Some("versions") | Some("--version") | Some("-V") => {
+            print_header()?;
+            show_versions()
+        }
         Some("project") | Some("projects") | Some("open") => {
             print_header()?;
             handle_project_command(&args[1..])
@@ -349,6 +370,7 @@ fn print_cli_help() {
     println!("  proto-cli model              Pick active provider/model");
     println!("  proto-cli key [provider]     Add API key");
     println!("  proto-cli config             Show current config");
+    println!("  proto-cli version            Show CLI, core, and ACP component versions");
     println!("  proto-cli project            Show or choose active project folder");
     println!("  proto-cli project set PATH   Set active project folder");
     println!("  proto-cli project clear      Clear active project folder");
@@ -1205,6 +1227,43 @@ fn selected_model_label() -> Option<String> {
     }
 }
 
+fn show_versions() -> Result<()> {
+    print_panel("VERSIONS", &component_version_rows()?, PanelTone::Cyan);
+    Ok(())
+}
+
+pub(crate) fn component_version_text() -> Result<String> {
+    Ok(component_version_rows()?.join("\n"))
+}
+
+fn component_version_rows() -> Result<Vec<String>> {
+    let versions = load_component_versions()?;
+    Ok(format_component_version_rows(&versions))
+}
+
+fn format_component_version_rows(versions: &[ComponentVersion]) -> Vec<String> {
+    versions
+        .iter()
+        .map(|component| {
+            format!(
+                "{} ({}) : {} [{}] - {}",
+                component.name,
+                component.id,
+                empty_as_unknown(&component.version),
+                empty_as_unknown(&component.status),
+                empty_as_unknown(&component.source)
+            )
+        })
+        .collect()
+}
+
+fn load_component_versions() -> Result<Vec<ComponentVersion>> {
+    let json = call_component_versions(env!("CARGO_PKG_VERSION").to_string())
+        .map_err(|err| anyhow!("Python component version error: {err:?}"))?;
+    let inventory: ComponentVersionInventory = serde_json::from_str(&json)?;
+    Ok(inventory.components)
+}
+
 fn show_check() -> Result<()> {
     let report = load_doctor()?;
     print_panel(
@@ -1248,6 +1307,14 @@ fn show_check() -> Result<()> {
         ],
         PanelTone::Magenta,
     );
+
+    if !report.component_versions.is_empty() {
+        print_panel(
+            "VERSIONS",
+            &format_component_version_rows(&report.component_versions),
+            PanelTone::Cyan,
+        );
+    }
 
     let rows: Vec<String> = report
         .agents
@@ -2503,6 +2570,14 @@ fn call_doctor(workspace: String) -> PyResult<String> {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module.getattr("doctor")?.call1((workspace,))?.extract()
+    })
+}
+
+fn call_component_versions(cli_version: String) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module.getattr("component_versions")?.call1((cli_version,))?.extract()
     })
 }
 

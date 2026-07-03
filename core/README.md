@@ -3,6 +3,9 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
+Current package version: `0.1.0`. The source of truth is
+`core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
+
 Install ProtoLink 0.6.3 or newer with the HTTP/SSE transport and LLM extras so
 the embedded Agent runtime can import streaming agents, lifecycle-aware task
 status events, recursive stream serialization, history compaction, metrics,
@@ -15,6 +18,7 @@ pip install "protolink[http,llms]>=0.6.3"
 ## Layout
 
 - `protoagent_core/agent_engine.py` - PyO3-facing functions for prompts, model discovery, config, and doctor checks.
+- `protoagent_core/_version.py` - Runtime version metadata and component version inventory for the CLI.
 - `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget` plus a task `RunContract`, records `RunEvent`s with `RunRecorder`, validates completion, can write local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic Architect token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.

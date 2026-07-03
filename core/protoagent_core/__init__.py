@@ -5,9 +5,11 @@ discovery, configuration, tools, and protolink agent wiring here so other
 frontends can share the same brain.
 """
 
+from ._version import __version__, acp_version
 from .agent_engine import (
     add_api_key,
     answer_help_question,
+    component_versions,
     configure_agent_prompt_profile,
     configure_context_window,
     doctor,
@@ -22,8 +24,11 @@ from .agent_engine import (
 )
 
 __all__ = [
+    "__version__",
     "add_api_key",
     "answer_help_question",
+    "acp_version",
+    "component_versions",
     "configure_agent_prompt_profile",
     "configure_context_window",
     "doctor",

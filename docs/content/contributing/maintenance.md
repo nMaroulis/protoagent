@@ -16,6 +16,7 @@ runtime contracts, or architecture boundaries change.
 | New TUI panel or modal | `CLI / Fullscreen TUI` |
 | New provider or config key | `CLI / Models And Config`, `Core / Config And Models`, `Reference / Environment` |
 | New runtime env var | `Reference / Environment` |
+| New component version or bump policy | `Reference / Versioning`, affected component README, `VERSIONING.md` |
 | New agent, tool, or capability | `Core / Agent Deck`, `Core / Safety And Tools` |
 | New Context Loom signal or schema field | `Core / Context Loom Internals`, `CLI / Context Loom In The CLI` |
 | New memory behavior | `Core / State And Memory`, `CLI / Projects And Sessions` |

@@ -29,6 +29,7 @@ Installed examples use `proto-cli <command>`.
 | `model` | Pick the active provider/model interactively. |
 | `key [provider]` | Store an API key for a supported API provider, then optionally choose a model. |
 | `config` | Show redacted provider config. |
+| `version`, `versions`, `--version`, `-V` | Show CLI, Python core, and planned ACP component versions. |
 | `project` | Show active project and recent projects. |
 | `project set PATH` | Set the active project folder. |
 | `project clear` | Clear the active project folder. |
@@ -86,6 +87,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/diff` | Reopen the latest proposed diff or approval preview in the styled review modal. |
 | `/diff raw` | Print a truncated raw diff into the transcript. |
 | `/config` | Pin provider config panel. |
+| `/version`, `/versions` | Show CLI, Python core, and planned ACP component versions. |
 | `/project`, `/open` | Choose the active project. |
 | `/project PATH` | Open a project directly. |
 | `/project clear` | Clear the active project. |

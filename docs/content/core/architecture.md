@@ -12,6 +12,7 @@ thin but important adaptation layer around the rest of the Python core.
 | --- | --- | --- |
 | `list_models(validate_api_keys=False)` | `models`, `/models`, `/model`, `/key` | Model inventory JSON. |
 | `get_config()` | `config`, dashboard, model panels | Redacted config JSON. |
+| `component_versions(cli_version=None)` | `version`, `/version` | CLI, core, and ACP component version inventory JSON. |
 | `add_api_key(provider, api_key)` | `key`, `/key` | Redacted config JSON after storing key. |
 | `set_model(provider, model, base_url)` | `model`, `/model` | Redacted config JSON after selection. |
 | `answer_help_question(question)` | `help QUESTION`, `/help QUESTION` | Guide answer JSON. |
@@ -28,6 +29,9 @@ thin but important adaptation layer around the rest of the Python core.
 
 Every function returns a JSON string through `_json()`, which normalizes values
 for Rust.
+
+`doctor()` also includes `component_versions` so the runtime check can display
+the same component inventory alongside Python, ProtoLink, and provider status.
 
 ## `process_prompt()` Stages
 

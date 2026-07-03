@@ -243,8 +243,10 @@ def _used_agent(run_events: list[Any], agent_name: str) -> bool:
     for event in run_events:
         if not isinstance(event, dict):
             continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        raw_payload = event.get("payload")
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        raw_metadata = payload.get("metadata")
+        metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
         llm_type = str(payload.get("llm_event_type") or "").lower()
         if (
             llm_type == "agent_call_start"

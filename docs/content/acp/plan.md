@@ -6,6 +6,9 @@ description: Planned implementation phases for the ProtoAgent ACP server.
 This is the current plan for the ACP surface. It is intentionally written as a
 roadmap because `acp/` does not yet contain server code.
 
+ACP is currently versioned as `0.0.0-dev.0` in `acp/VERSION`. Keep that marker
+until the first server skeleton creates a real compatibility surface.
+
 ## Phase 1: Minimal Server Skeleton
 
 Goal: create a stdio ACP server that can start, report capabilities, and accept
@@ -14,10 +17,12 @@ a simple user request.
 Planned work:
 
 1. Add `acp/server.py`.
-2. Define protocol message parsing and response serialization.
-3. Add a small adapter around `protoagent_core.agent_engine`.
-4. Support basic request/response tasks without editor-side file writes.
-5. Add tests for protocol frames and error handling.
+2. Decide the first ACP prerelease version and replace `0.0.0-dev.0` when the
+   skeleton is actually usable.
+3. Define protocol message parsing and response serialization.
+4. Add a small adapter around `protoagent_core.agent_engine`.
+5. Support basic request/response tasks without editor-side file writes.
+6. Add tests for protocol frames and error handling.
 
 Docs to update:
 

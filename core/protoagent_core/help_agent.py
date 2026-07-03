@@ -66,6 +66,8 @@ Manual:
   structured agent path. `/diff` shows proposed file changes from the last run.
 - `/sessions` shows saved project session records. `/last` reopens the last
   response in the current TUI process. `/clear` clears the visible transcript.
+- `/version` shows the current CLI, Python core, and planned ACP component
+  versions. From the shell, use `proto-cli version`.
 - Esc or Ctrl-C while a task is running requests task cancellation. `/quit`
   exits immediately.
 - Configuration is stored under `~/.protoagent` by default. Set

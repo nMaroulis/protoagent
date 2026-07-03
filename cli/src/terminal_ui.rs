@@ -4,9 +4,9 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    agent_profile_text, call_process_prompt_with_progress, compact_context_history, context_history_text, context_memory_text,
-    context_pack_text, context_status_text, context_window_text, empty_as_unknown, help_availability_text,
-    help_question_text, load_doctor,
+    agent_profile_text, call_process_prompt_with_progress, compact_context_history, component_version_text,
+    context_history_text, context_memory_text, context_pack_text, context_status_text, context_window_text,
+    empty_as_unknown, help_availability_text, help_question_text, load_doctor,
     progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
     reset_context_history, set_context_memory_text, CoreResponse,
 };
@@ -135,6 +135,18 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         }
         "/config" => {
             switch_panel(app, PanelView::Config, command, "Config panel pinned.");
+            Ok(true)
+        }
+        "/version" | "/versions" => {
+            match component_version_text() {
+                Ok(text) => {
+                    app.panel = PanelView::Versions;
+                    app.version_rows = text.lines().map(str::to_string).collect();
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &format!("Version check failed: {err}")),
+            }
             Ok(true)
         }
         "/project" | "/open" => {

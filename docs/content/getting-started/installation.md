@@ -24,12 +24,14 @@ cd protoagent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install "protolink[http,llms]>=0.6.3"
+pip install -e core
 ```
 
 The core imports are resolved from `core/` by the Rust CLI at runtime. The CLI
 also checks common `.venv/lib/python3.x/site-packages` paths so ProtoLink and
 provider extras can be found when the binary starts from either the repo root or
-the `cli/` folder.
+the `cli/` folder. The editable core install exposes the `protoagent-core`
+package metadata and keeps `protoagent_core.__version__` available to tools.
 
 ## Build The CLI
 
@@ -51,6 +53,12 @@ cargo run --manifest-path cli/Cargo.toml -- start
 
 Many user-facing examples use `proto-cli` or `protoagent` as the installed
 binary name. During development, replace that with the `cargo run` form above.
+
+Check component versions with:
+
+```bash
+cargo run --manifest-path cli/Cargo.toml -- version
+```
 
 ## Install The Docs Site
 

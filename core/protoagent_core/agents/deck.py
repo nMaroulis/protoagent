@@ -139,5 +139,5 @@ def agent_manifest(profile: dict[str, Any] | None = None) -> dict[str, Any]:
                 "tools": ["generate_unified_diff", "create_new_file"],
                 **profile_fields,
             },
-        ]
+        ],
     }

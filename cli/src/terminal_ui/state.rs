@@ -14,6 +14,7 @@ pub(super) struct TerminalApp {
     pub(super) last_query: String,
     pub(super) last_response: Option<CoreResponse>,
     pub(super) last_diff_preview: String,
+    pub(super) version_rows: Vec<String>,
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
     pub(super) context_usage: ContextUsage,
@@ -31,6 +32,7 @@ impl TerminalApp {
             last_query: String::new(),
             last_response: None,
             last_diff_preview: String::new(),
+            version_rows: Vec::new(),
             activity: "idle".to_string(),
             scroll_offset: 0,
             context_usage: ContextUsage::default(),
@@ -232,6 +234,7 @@ pub(super) enum PanelView {
     Timeline,
     Check,
     Config,
+    Versions,
     Help,
 }
 
@@ -247,6 +250,7 @@ impl PanelView {
             Self::Timeline => "timeline",
             Self::Check => "check",
             Self::Config => "config",
+            Self::Versions => "versions",
             Self::Help => "help",
         }
     }

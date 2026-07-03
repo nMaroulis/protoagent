@@ -32,12 +32,13 @@ The pinned panel is a compact status dashboard at the top of the screen.
 | Timeline | Latest structured agent path. |
 | Check | Runtime readiness, active provider, workspace, config. |
 | Config | Provider/model/config/key hints. |
+| Versions | CLI, Python core, and planned ACP version inventory. |
 | Help | Command map, scrolling, cancellation, launch forms. |
 
 The command bar exposes quick panel commands:
 
 ```text
-/dashboard /project /models /agents /context /sessions /timeline /check /config /help
+/dashboard /project /models /agents /context /sessions /timeline /check /config /version /help
 ```
 
 ## Input Editor

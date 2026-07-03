@@ -16,6 +16,7 @@ Its job is to:
 5. Display typed approval requests before workspace writes execute.
 6. Request live task cancellation when the user presses Esc or Ctrl-C.
 7. Store UI session summaries and expose trace/timeline/debug views.
+8. Report component versions for the CLI, Python core, and planned ACP surface.
 
 ## Runtime Boundary
 
@@ -48,6 +49,7 @@ sequenceDiagram
 | --- | --- | --- |
 | Fullscreen TUI | `proto-cli start`, `proto-cli tui`, `proto-cli cli` | Daily interactive work, panels, file tagging, model/key modal flows, live progress. |
 | One-shot command | `proto-cli run "task"` | Debugging, shell scripts, copy-pasteable trace capture, non-fullscreen usage. |
+| Version check | `proto-cli version` | Confirm component versions before release notes, bug reports, or support handoff. |
 
 The fullscreen TUI and one-shot runner share the same core functions and live
 progress parser. They differ in presentation.
@@ -57,6 +59,7 @@ progress parser. They differ in presentation.
 | File | Responsibility |
 | --- | --- |
 | `cli/src/main.rs` | Command routing, PyO3 functions, shell output panels, project/config helpers. |
+| `cli/Cargo.toml` | CLI package metadata and the `proto-cli` version. |
 | `cli/src/terminal_ui.rs` | Fullscreen loop, slash command routing, task loop, cancellation polling. |
 | `cli/src/terminal_ui/render.rs` | Header, panels, transcript, command bar, context meter, bottom input. |
 | `cli/src/terminal_ui/project.rs` | `/project` flow and `@file` picker. |
