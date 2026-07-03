@@ -19,10 +19,10 @@ ProtoAgent isn't just a script; it's a unified, modular ecosystem. By keeping th
 **Powered by `protolink` • Python**
 If **LangChain** is the massive, heavy enterprise framework for cloud models, `protolink` is the lightning-fast, minimalist alternative engineered strictly building autonomous agents using a simple intuitive API, powered by the Agent-to-Agent (A2A) protocol.
 
-* **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. Protolink acts as a buffer, specifically hand-holding 7B/8B parameter models (like Qwen, Llama 3) through strict multi-agent loops (Planner ➔ Coder ➔ Critic) without them hallucinating or breaking syntax.
+* **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. ProtoAgent keeps a stateful Architect controller on top of stateless Explorer/Coder workers, so 7B/8B parameter models get narrow tasks, typed artifacts, and runtime completion checks instead of a giant prompt.
 * **Prompt Profiles:** The agent deck can run in `auto`, `small`, `medium`, `large`, or `api` prompt modes, so local 7B models get terse deterministic instructions while frontier API models get richer planning and verification behavior.
 * **Context Loom:** ProtoAgent builds a local, source-cited Context Pack from the active workspace before the agent deck runs. This gives smaller models a compact evidence map instead of a giant hidden repo dump.
-* **ProtoLink-native context control:** Every model is configured with a typed `LLMModelProfile`; live context events drive the Rust meter, while persistent per-agent history is described, compacted, and reset through ProtoLink state APIs.
+* **ProtoLink-native context control:** Every model is configured with a typed `LLMModelProfile`; live context events drive the Rust meter, while persistent Architect history is described, compacted, and reset through ProtoLink state APIs. Explorer and Coder stay task-local.
 * **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits lifecycle-aware task events plus typed action payloads.
 
 Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).

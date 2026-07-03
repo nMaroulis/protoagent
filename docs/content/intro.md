@@ -40,7 +40,11 @@ split into small, inspectable components:
    streaming task channels, and cancellation requests.
 4. **Context is visible.** Context Loom builds a deterministic, source-cited
    evidence pack before the model reasons.
-5. **Writes are approval-gated.** Coder prepares `RunAction` objects with
+5. **State is deliberate.** Architect keeps durable conversation memory, while
+   Explorer and Coder are task-local stateless workers.
+6. **Runs have contracts.** Write tasks must reach Coder, an approval/diff
+   artifact, or an explicit blocker before runtime marks them complete.
+7. **Writes are approval-gated.** Coder prepares `RunAction` objects with
    `text/x-diff` preview artifacts. The Rust application decides whether the
    action can execute.
 
@@ -49,12 +53,14 @@ flowchart LR
   User["Developer"] --> CLI["Rust CLI / TUI"]
   CLI --> Core["PyO3 JSON entrypoints"]
   Core --> Loom["Context Loom"]
-  Core --> Runtime["ProtoLink runtime"]
-  Runtime --> Architect["Architect"]
-  Architect --> Explorer["Explorer"]
-  Architect --> Coder["Coder"]
+  Core --> Contract["RunContract"]
+  Contract --> Runtime["ProtoLink runtime kernel"]
+  Runtime --> Architect["Architect stateful controller"]
+  Architect --> Explorer["Explorer stateless read worker"]
+  Architect --> Coder["Coder stateless write worker"]
   Coder --> Approval["Human approval"]
-  Approval --> Workspace["Workspace files"]
+  Approval --> Guard["Completion guard"]
+  Guard --> Workspace["Workspace files"]
 ```
 
 ## How These Docs Are Organized

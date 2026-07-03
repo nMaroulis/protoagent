@@ -39,7 +39,8 @@ for Rust.
 4. Resolve `@file` tags through `_tagged_file_context()`.
 5. Build Context Loom context through `_context_pack_for_prompt()`.
 6. If `PROTOAGENT_SCAFFOLD=1`, return `_fallback_response()`.
-7. Otherwise call `_model_response()`.
+7. Otherwise call `_model_response()`, which passes the original user prompt to
+   runtime contract inference.
 8. If the model path raises, return fallback diagnostics with status `fallback`.
 
 ## Runtime Prompt
@@ -93,7 +94,7 @@ numbers. Paths are resolved by `safe_path()`.
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `answered`, `canceled`, `ready`, or `fallback`. |
+| `status` | `answered`, `blocked`, `canceled`, `incomplete`, `ready`, or `fallback`. |
 | `headline` | Short run headline. |
 | `answer` | Final readable answer. |
 | `thought_process` | Core diagnostics and runtime notes. |
@@ -105,6 +106,8 @@ numbers. Paths are resolved by `safe_path()`.
 | `approval_decisions` | Serialized decisions. |
 | `run_context` | Final serialized `RunContext`. |
 | `run_report` | Redacted ProtoLink `RunReport`. |
+| `run_contract` | Inferred worker/artifact requirements for the original prompt. |
+| `completion_validation` | Runtime validation result comparing the trace to the contract. |
 | `provider` | Provider id. |
 | `model` | Model id. |
 | `responder` | Usually `architect`. |

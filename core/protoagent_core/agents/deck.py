@@ -27,8 +27,9 @@ def create_agent_deck(
     """Create the ProtoLink agent deck using the selected LLM config.
 
     Every LLM-capable agent receives its own LLM instance configured with the
-    same provider/model. Separate instances keep per-agent prompts and histories
-    isolated while still honoring the user's model selection.
+    same provider/model. Architect is the durable controller; Explorer and
+    Coder are task-local workers with isolated prompts and no persisted
+    conversation state.
     """
     provider = normalize_provider(provider)
     urls = urls or {}
@@ -71,25 +72,54 @@ def create_agent_deck(
 
 
 def agent_manifest(profile: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Static manifest used by the CLI doctor and fallback mode."""
+    """Return the visible runtime architecture and worker manifest."""
     profile = profile or prompt_profile_status({"active_provider": "ollama", "providers": {}})
     profile_fields = {
         "prompt_profile": str(profile.get("resolved", "")),
         "prompt_profile_label": str(profile.get("label", "")),
     }
     return {
+        "architecture": {
+            "kernel": "ProtoLink runtime kernel",
+            "controller": "architect",
+            "stateful": [
+                "architect conversation memory",
+                "Context Loom workspace index",
+                "RunContext, RunRecorder, policy, approvals, reports",
+            ],
+            "stateless": ["explorer", "coder"],
+            "contract": (
+                "RunContract classifies each request and marks write tasks "
+                "incomplete unless Coder, a write approval/diff artifact, or "
+                "an explicit blocker appears."
+            ),
+            "flow": [
+                "Context Loom evidence",
+                "RunContract",
+                "Architect controller",
+                "Stateless specialist workers",
+                "ProtoLink policy gate",
+                "RunReport",
+            ],
+        },
         "agents": [
             {
                 "name": "architect",
-                "role": "orchestrator",
+                "role": "stateful controller",
                 "memory": "protoagent-architect",
+                "persistence": "durable conversation memory",
+                "state": "stateful",
+                "contract": "routes by RunContract; no direct workspace tools",
                 "tools": [],
                 **profile_fields,
             },
             {
                 "name": "explorer",
-                "role": "context",
-                "memory": "protoagent-explorer",
+                "role": "stateless context worker",
+                "memory": "task-local",
+                "persistence": "no durable conversation state",
+                "state": "stateless",
+                "contract": "returns read-only evidence for the current task",
                 "tools": [
                     "build_context_pack",
                     "read_file",
@@ -101,8 +131,11 @@ def agent_manifest(profile: dict[str, Any] | None = None) -> dict[str, Any]:
             },
             {
                 "name": "coder",
-                "role": "synthesis",
-                "memory": "protoagent-coder",
+                "role": "stateless write worker",
+                "memory": "task-local",
+                "persistence": "no durable conversation state",
+                "state": "stateless",
+                "contract": "prepares RunAction diff artifacts behind approval",
                 "tools": ["generate_unified_diff", "create_new_file"],
                 **profile_fields,
             },

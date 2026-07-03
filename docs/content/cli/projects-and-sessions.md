@@ -13,7 +13,7 @@ The active project is the root of the workspace boundary. It controls:
 1. Which files `@` can tag.
 2. Which files Context Loom indexes.
 3. Which paths Explorer and Coder tools may read or write.
-4. Which project session id is used for ProtoLink memory.
+4. Which project session id is used for durable Architect memory.
 
 Commands:
 

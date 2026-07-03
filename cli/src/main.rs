@@ -150,6 +150,8 @@ struct DoctorReport {
     active_provider_status: String,
     #[serde(default)]
     prompt_profile: PromptProfileStatus,
+    #[serde(default)]
+    architecture: ArchitectureManifest,
     agents: Vec<AgentManifest>,
 }
 
@@ -185,10 +187,32 @@ struct AgentManifest {
     #[serde(default)]
     memory: String,
     #[serde(default)]
+    persistence: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    contract: String,
+    #[serde(default)]
     prompt_profile: String,
     #[serde(default)]
     prompt_profile_label: String,
     tools: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ArchitectureManifest {
+    #[serde(default)]
+    kernel: String,
+    #[serde(default)]
+    controller: String,
+    #[serde(default)]
+    stateful: Vec<String>,
+    #[serde(default)]
+    stateless: Vec<String>,
+    #[serde(default)]
+    contract: String,
+    #[serde(default)]
+    flow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -329,7 +353,7 @@ fn print_cli_help() {
     println!("  proto-cli project set PATH   Set active project folder");
     println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
-    println!("  proto-cli agents             Show Architect/Explorer/Coder topology");
+    println!("  proto-cli agents             Show runtime kernel, contract, and workers");
     println!("  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api");
     println!("  proto-cli eval profiles      Run prompt-profile evals; use --live for model calls");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
@@ -670,10 +694,11 @@ fn show_dashboard() -> Result<()> {
         "/models scans local and cloud model options".to_string(),
         "/project sets the active project folder".to_string(),
         "Use @ inside a task to tag project files".to_string(),
+        "/agents shows runtime kernel, RunContract, and worker state".to_string(),
         "/agents profile controls small/medium/large/API prompt modes".to_string(),
         "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
-        "Type any coding task to dispatch Architect -> Explorer -> Coder".to_string(),
+        "Type any coding task to dispatch RunContract -> Architect -> workers".to_string(),
     ];
     print_panel("HOTKEYS", &commands, PanelTone::Cyan);
     Ok(())
@@ -1274,6 +1299,11 @@ fn show_agents() -> Result<()> {
     print_agent_graph();
     if let Ok(report) = load_doctor() {
         print_panel(
+            "RUNTIME ARCHITECTURE",
+            &format_architecture_manifest(&report.architecture),
+            PanelTone::Magenta,
+        );
+        print_panel(
             "PROMPT PROFILE",
             &[format_prompt_profile(&report.prompt_profile)],
             PanelTone::Magenta,
@@ -1289,11 +1319,9 @@ fn show_agents() -> Result<()> {
 }
 
 fn format_agent_manifest(agent: &AgentManifest) -> String {
-    let memory = if agent.memory.is_empty() {
-        format!("protoagent-{}", agent.name)
-    } else {
-        agent.memory.clone()
-    };
+    let memory = empty_as_unknown(&agent.memory);
+    let state = empty_as_unknown(&agent.state);
+    let persistence = empty_as_unknown(&agent.persistence);
     let tools = if agent.tools.is_empty() {
         "no direct tools".to_string()
     } else {
@@ -1305,13 +1333,36 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
         agent.prompt_profile_label.clone()
     };
     format!(
-        "{} ({}) | prompt: {} | memory: {} | tools: {}",
+        "{} ({}) | state: {} | memory: {} | persistence: {} | prompt: {} | tools: {} | contract: {}",
         agent.name,
         agent.role,
-        empty_as_unknown(&profile),
+        state,
         memory,
-        tools
+        persistence,
+        empty_as_unknown(&profile),
+        tools,
+        empty_as_unknown(&agent.contract)
     )
+}
+
+fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<String> {
+    let mut rows = vec![
+        format!("Kernel     : {}", empty_as_unknown(&architecture.kernel)),
+        format!("Controller : {}", empty_as_unknown(&architecture.controller)),
+    ];
+    if !architecture.stateful.is_empty() {
+        rows.push(format!("Stateful   : {}", architecture.stateful.join(" | ")));
+    }
+    if !architecture.stateless.is_empty() {
+        rows.push(format!("Stateless  : {}", architecture.stateless.join(" | ")));
+    }
+    if !architecture.contract.is_empty() {
+        rows.push(format!("Contract   : {}", architecture.contract));
+    }
+    if !architecture.flow.is_empty() {
+        rows.push(format!("Flow       : {}", architecture.flow.join(" -> ")));
+    }
+    rows
 }
 
 pub(crate) fn agent_profile_text(value: Option<String>) -> Result<String> {
@@ -1961,16 +2012,22 @@ fn print_agent_graph() {
         "[CONTEXT LOOM] deterministic workspace index and evidence pack".to_string(),
         "   |".to_string(),
         "   v".to_string(),
-        "[ARCHITECT] intent, routing, approval gate".to_string(),
-        "   |".to_string(),
-        "   +--> [EXPLORER] context pack, read_file, list_directory, search_regex, git status".to_string(),
-        "   |".to_string(),
-        "   +--> [CODER] generate_unified_diff, create_new_file".to_string(),
+        "[RUN CONTRACT] classifies required workers and artifacts".to_string(),
         "   |".to_string(),
         "   v".to_string(),
-        "[HUMAN APPROVAL] before writes land on disk".to_string(),
+        "[ARCHITECT] stateful controller and user-facing answer".to_string(),
+        "   |".to_string(),
+        "   +--> [EXPLORER] stateless read worker: pack, read, search, git status".to_string(),
+        "   |".to_string(),
+        "   +--> [CODER] stateless write worker: diff preview, new file".to_string(),
+        "   |".to_string(),
+        "   v".to_string(),
+        "[PROTOLINK POLICY] approval gate, events, report".to_string(),
+        "   |".to_string(),
+        "   v".to_string(),
+        "[COMPLETION GUARD] incomplete if required write artifacts are missing".to_string(),
     ];
-    print_panel("AGENT DECK", &rows, PanelTone::Magenta);
+    print_panel("RUNTIME KERNEL", &rows, PanelTone::Magenta);
 }
 
 fn load_inventory() -> Result<ModelInventory> {
@@ -2194,7 +2251,10 @@ fn render_brand_header() {
     println!("{}", style(repeat_char('=', width)).magenta().bold());
     println!("{}", style(APP_TITLE).bold().magenta());
     println!("{}", style(TAGLINE).cyan().bold());
-    println!("{}", style("Architect -> Explorer -> Coder // approval-gated local ops").dim());
+    println!(
+        "{}",
+        style("RunContract -> Architect -> stateless workers // approval-gated local ops").dim()
+    );
     println!("{}", style(repeat_char('=', width)).magenta().bold());
     println!();
 }

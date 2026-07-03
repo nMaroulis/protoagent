@@ -15,6 +15,7 @@ from .config import load_config, normalize_provider, provider_config
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
 from .prompt_profiles import prompt_profile_status
+from .run_contracts import infer_run_contract, validate_run_completion
 from .runtime_bridge import RuntimeBridge
 
 _FALLBACK_PORT = 19100
@@ -26,6 +27,7 @@ def run_selected_model(
     workspace: str | None = None,
     session_id: str | None = None,
     progress_path: str | None = None,
+    user_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Run the selected model through the ProtoLink Architect agent.
 
@@ -44,7 +46,16 @@ def run_selected_model(
     bridge = RuntimeBridge(progress_path)
     try:
         return asyncio.run(
-            _run_agent_deck(prompt, provider, model, workspace, session_id, bridge, profile)
+            _run_agent_deck(
+                prompt,
+                provider,
+                model,
+                workspace,
+                session_id,
+                bridge,
+                profile,
+                user_prompt=user_prompt,
+            )
         )
     finally:
         bridge.cleanup()
@@ -58,6 +69,7 @@ async def _run_agent_deck(
     session_id: str | None,
     bridge: RuntimeBridge,
     prompt_profile: dict[str, Any],
+    user_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink import DEFAULT_REDACTION_POLICY, RunBudget, RunContext, RunRecorder, Task
@@ -70,6 +82,7 @@ async def _run_agent_deck(
     events: list[str] = []
     recorder = RunRecorder()
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
+    contract = infer_run_contract(user_prompt or prompt)
     task = Task.create_infer(prompt=prompt)
     context = RunContext(
         session_id=session_id,
@@ -84,6 +97,7 @@ async def _run_agent_deck(
             "application": "protoagent",
             "interface": "rust-cli",
             "prompt_profile": prompt_profile,
+            "run_contract": contract.to_dict(),
         },
     )
     context.trace_id = context.run_id
@@ -118,6 +132,7 @@ async def _run_agent_deck(
     )
     emit(f"Active project workspace: {project}.")
     emit(f"Conversation session: {session_id or 'task-local'}.")
+    emit(f"Run contract: {contract.task_kind}; {contract.completion_rule}")
     if provider == "ollama":
         emit(f"Ollama context window: {ollama_context_window()} tokens.")
     emit(f"Run context: {context.run_id}.")
@@ -238,6 +253,28 @@ async def _run_agent_deck(
         events.extend(
             _approval_event_summaries(bridge.approval_requests, bridge.approval_decisions)
         )
+        run_events = _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY)
+        completion = validate_run_completion(
+            contract,
+            answer=answer,
+            status=status,
+            run_events=run_events,
+            approval_requests=bridge.approval_requests,
+            diff_items=previews["diffs"],
+        )
+        if completion.outcome == "incomplete":
+            missing = " ".join(completion.missing)
+            emit(f"Run contract incomplete: {missing}")
+            answer = (
+                "Runtime completion guard: the model ended before satisfying the "
+                f"required worker/artifact contract. {missing}\n\n{answer}"
+            )
+            status = "incomplete"
+        elif completion.outcome == "blocked":
+            emit("Run contract blocked: model reported an explicit blocker before writing.")
+            status = "blocked"
+        elif completion.outcome == "satisfied":
+            emit("Run contract satisfied by Coder delegation or write artifact.")
 
         return {
             "provider": provider,
@@ -246,7 +283,7 @@ async def _run_agent_deck(
             "answer": answer,
             "status": status,
             "events": events,
-            "run_events": _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY),
+            "run_events": run_events,
             "run_report": run_report,
             "diffs": previews["diffs"],
             "targets": previews["targets"],
@@ -254,6 +291,8 @@ async def _run_agent_deck(
             "approval_decisions": bridge.approval_decisions,
             "run_context": final_context.to_dict(),
             "prompt_profile": prompt_profile,
+            "run_contract": contract.to_dict(),
+            "completion_validation": completion.to_dict(),
         }
     finally:
         if cancellation_monitor is not None:

@@ -97,14 +97,20 @@ The CLI presents the runtime as an agent deck:
 [CONTEXT LOOM] deterministic workspace index and evidence pack
    |
    v
-[ARCHITECT] intent, routing, approval gate
-   |
-   +--> [EXPLORER] context pack, read_file, list_directory, search_regex, git status
-   |
-   +--> [CODER] generate_unified_diff, create_new_file
+[RUN CONTRACT] required workers and write artifacts
    |
    v
-[HUMAN APPROVAL] before writes land on disk
+[ARCHITECT] stateful controller and final answer
+   |
+   +--> [EXPLORER] stateless read worker: pack, read_file, search, git status
+   |
+   +--> [CODER] stateless write worker: diff preview, create_new_file
+   |
+   v
+[POLICY + HUMAN APPROVAL] before writes land on disk
+   |
+   v
+[COMPLETION GUARD] answered, blocked, incomplete, or canceled
 ```
 
 The CLI does not parse model prose to decide whether a write is allowed. Writes

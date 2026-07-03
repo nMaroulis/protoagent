@@ -50,7 +50,7 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertLess(len(compacted), original_messages)
             self.assertEqual(compacted.messages[0]["role"], "system")
 
-    def test_explicit_compaction_and_reset_cover_the_full_agent_deck(self) -> None:
+    def test_explicit_compaction_and_reset_cover_stateful_agent_memory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             storages = {
                 name: SQLiteStorage(
@@ -89,6 +89,7 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
             self.assertGreater(report["removed_messages"], 0)
             self.assertEqual(report["state_results"][0]["operation"], "compact")
             self.assertEqual(set(reset["cleared_agents"]), set(AGENT_NAMES))
+            self.assertEqual(set(AGENT_NAMES), {"architect"})
             for storage in storages.values():
                 self.assertNotIn("session-test", ConversationState(storage).to_dict())
 
@@ -111,14 +112,13 @@ class ProtoLinkHistoryIntegrationTests(unittest.TestCase):
                 report = describe_saved_histories("session-test", recent_messages=2)
 
             architect = next(item for item in report["agents"] if item["agent"] == "architect")
-            explorer = next(item for item in report["agents"] if item["agent"] == "explorer")
             self.assertTrue(report["found"])
             self.assertTrue(architect["found"])
             self.assertGreater(architect["message_count"], 0)
             self.assertGreater(architect["estimated_tokens"], 0)
             self.assertEqual(len(architect["recent"]), 2)
             self.assertEqual(architect["state_result"]["operation"], "describe")
-            self.assertFalse(explorer["found"])
+            self.assertEqual([item["agent"] for item in report["agents"]], ["architect"])
 
     def test_persist_architect_turn_appends_missing_top_level_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

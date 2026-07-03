@@ -42,15 +42,17 @@ Manual:
 - `/index refresh` rebuilds the Context Loom index.
 - `/context window 16k` sets the Ollama `num_ctx` window. `/context window auto`
   clears the override. This is currently app-controlled for Ollama.
-- `/context history` inspects saved ProtoLink conversation memory.
-- `/context compact [recent|tokens|summary] [limit]` compacts saved memory.
-- `/context reset` clears ProtoLink conversation memory for the project session
-  and compacts the Rust session index to zero stored turns.
+- `/context history` inspects saved ProtoLink Architect conversation memory.
+- `/context compact [recent|tokens|summary] [limit]` compacts saved Architect
+  memory.
+- `/context reset` clears ProtoLink Architect conversation memory for the
+  project session and compacts the Rust session index to zero stored turns.
 - `/context on` enables persistent project conversation memory. This is the
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
-- `/agents` opens the Architect / Explorer / Coder panel and shows the current
-  prompt profile.
+- `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
+  RunContract, stateful Architect, stateless Explorer/Coder workers, policy
+  gate, completion guard, and current prompt profile.
 - `/agents profile [auto|small|medium|large|api]` shows or changes the prompt
   profile used by Architect, Explorer, and Coder. Shorthands such as
   `/agents small` and `/agents api` also work. From the shell, use
@@ -72,8 +74,9 @@ Manual:
 - Active project and the context memory toggle are in
   `~/.protoagent/project.json`.
 - Rust UI session summaries are in `~/.protoagent/sessions.json`.
-- ProtoLink per-agent conversation state is in
-  `~/.protoagent/conversations.sqlite`.
+- ProtoLink Architect conversation state is in
+  `~/.protoagent/conversations.sqlite`. Explorer and Coder are task-local
+  stateless workers.
 - Context Loom indexes are under `~/.protoagent/indexes`.
 - Short-lived live progress/control JSONL files are written in the OS temp
   directory while a task is running and are cleaned up after the run.
@@ -85,9 +88,10 @@ Manual:
   `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`,
   `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS`,
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
-- Agent roles: Architect receives the user request and routes work; Explorer
-  reads/searches/builds context; Coder prepares approval-gated file changes.
-  Guide is separate and only answers help questions.
+- Agent roles: Architect is the stateful controller; Explorer reads/searches
+  and builds context as a stateless worker; Coder prepares approval-gated file
+  changes as a stateless worker. Guide is separate and only answers help
+  questions.
 """
 
 

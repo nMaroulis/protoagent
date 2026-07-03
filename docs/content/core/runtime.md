@@ -9,7 +9,7 @@ runtime integration point between ProtoAgent and ProtoLink.
 ## Entry Point
 
 ```python
-run_selected_model(prompt, workspace=None, session_id=None, progress_path=None)
+run_selected_model(prompt, workspace=None, session_id=None, progress_path=None, user_prompt=None)
 ```
 
 Steps:
@@ -33,8 +33,30 @@ Inside `_run_agent_deck()`:
 | `Task` | User request task. |
 | `RunContext` | Session id, workspace URI, permissions, budget, metadata, run id, trace id. |
 | `RunBudget` | Typed runtime budget from environment/provider settings. |
+| `RunContract` | Task kind, required workers, required write artifacts, and completion rule derived from the original user prompt. |
 | `RunRecorder` | Captures normalized `RunEvent`s and builds a redacted `RunReport`. |
 | `RuntimeBridge` | Emits CLI progress, handles approvals, watches cancellation. |
+
+## Run Contracts
+
+`run_contracts.py` derives a contract before the model receives the prompt.
+Runtime attaches it to:
+
+```python
+RunContext.metadata["run_contract"]
+```
+
+Read-only repository questions do not require write artifacts. Workspace-change
+tasks require one of these terminal signals:
+
+1. Coder delegation in the normalized run events.
+2. A write approval request or diff preview artifact.
+3. An explicit blocker in the model answer.
+
+After Architect returns, runtime calls `validate_run_completion()`. If a write
+task ended as prose without Coder, approval/diff artifacts, or blocker, the
+runtime changes the status to `incomplete` and prefixes the answer with a
+completion-guard message.
 
 ## RunContext Permissions
 
@@ -93,12 +115,14 @@ sequenceDiagram
   participant Client as AgentClient
 
   Core->>Reg: start(background=True)
-  Core->>Exp: create and start
-  Core->>Cod: create and start
+  Core->>Core: infer RunContract
+  Core->>Exp: create stateless worker and start
+  Core->>Cod: create stateless worker and start
   Core->>Arc: create and start
   Core->>Arc: discover_agents()
   Core->>Client: send_task_streaming(Architect, Task)
   Client-->>Core: task stream events
+  Core->>Core: validate RunContract
   Core->>Core: record RunEvents and build RunReport
 ```
 
@@ -134,7 +158,8 @@ recorder.to_report(
 ```
 
 Rust stores this in `CoreResponse.run_report` so users can inspect structured
-diagnostics.
+diagnostics. `CoreResponse.status` can be `answered`, `blocked`, `canceled`, or
+`incomplete`.
 
 ## Run Budgets
 

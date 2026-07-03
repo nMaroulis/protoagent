@@ -63,6 +63,10 @@ Each task declares:
 The scorer reads normalized `RunEvent`s, approval requests, diff targets, and
 response text. It checks for Explorer delegation, Coder delegation or approval
 requests, expected path hits, docs/test coverage, and over-edit risk.
+Runtime also derives a `RunContract` for each live task. Missing Coder/write
+artifacts on a workspace-change task can now produce an `incomplete` run status,
+so eval failures in that area indicate runtime enforcement issues as well as
+prompt-profile issues.
 
 Scaffold mode marks behavior checks as informational because no real agent
 delegation happens. Use live mode when tuning prompt profile quality.

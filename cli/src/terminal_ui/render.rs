@@ -300,7 +300,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("project", &app.status.workspace, magenta(), app.status.project_ready));
             rows.push(row("models", &app.status.model_summary, cyan(), false));
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
-            rows.push(row("agents", "Architect routes | Explorer reads | Coder drafts | human approves", yellow(), false));
+            rows.push(row("agents", "RunContract -> Architect -> stateless workers -> policy gate", yellow(), false));
             rows.push(row(
                 "last",
                 if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() },
@@ -333,27 +333,40 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
         }
         PanelView::Agents => {
             rows.push(row(
+                "kernel",
+                "ProtoLink owns RunContext, budgets, events, approvals, reports",
+                magenta(),
+                true,
+            ));
+            rows.push(row(
+                "contract",
+                "write tasks must reach Coder, diff approval, or explicit blocker",
+                green(),
+                true,
+            ));
+            rows.push(row(
                 "architect",
-                "intake, routing, delegation, final answer; memory protoagent-architect",
+                "stateful controller; durable memory protoagent-architect",
                 magenta(),
                 true,
             ));
             rows.push(row("loom", "Context Loom feeds source-cited evidence before routing", green(), true));
             rows.push(row(
                 "explorer",
-                "read-only repository evidence; memory protoagent-explorer",
+                "stateless read worker; context pack, read_file, search, git status",
                 cyan(),
                 false,
             ));
             rows.push(row(
                 "coder",
-                "RunAction previews and policy-gated writes; memory protoagent-coder",
+                "stateless write worker; RunAction diff previews behind approval",
                 yellow(),
                 false,
             ));
-            rows.push(row("approval", "Protolink pauses execution until the human decides", green(), false));
+            rows.push(row("approval", "ProtoLink pauses execution until the human decides", green(), false));
+            rows.push(row("guard", "runtime marks missing write artifacts as incomplete", red(), false));
             rows.push(row("prompt", format!("{}; /agents profile changes it", app.status.prompt_profile), magenta(), false));
-            rows.push(row("surface", "terminal mirrors the browser cockpit without scrollback pollution", muted(), false));
+            rows.push(row("surface", "shell command: proto-cli agents", muted(), false));
         }
         PanelView::Context => {
             rows.push(row("loom", "deterministic workspace index plus source-cited Context Packs", magenta(), true));

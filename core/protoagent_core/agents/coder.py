@@ -11,7 +11,6 @@ from protolink.types import TransportType
 from .. import tools
 from .common import (
     QUIET_LOGGER,
-    conversation_storage,
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
@@ -20,6 +19,9 @@ from .common import (
 )
 
 CODER_SYSTEM_PROMPT = """You are the ProtoAgent Coder.
+
+You are a stateless, task-local write worker. Do not rely on prior conversation
+memory; use only the objective, Explorer context, and your write-preview tools.
 
 Given a user objective and Explorer context, produce exact file modifications.
 Use your tools for file changes. Each tool prepares a unified-diff preview and
@@ -45,13 +47,13 @@ def create_coder_agent(
     telemetry=None,
     prompt_profile: str = "auto",
 ):
-    """Create the policy-gated file modification agent."""
+    """Create the stateless policy-gated file modification worker."""
     agent = Agent(
         card={
             "name": "coder",
             "description": (
-                "File modification agent. Previews writes as unified diffs and "
-                "executes them only after runtime authorization."
+                "Stateless file modification worker. Previews writes as "
+                "unified diffs and executes them only after runtime authorization."
             ),
             "url": resolve_agent_url("coder", url),
             "capabilities": {
@@ -75,16 +77,12 @@ def create_coder_agent(
             workspace,
             "Coder",
         ),
-        storage=conversation_storage("coder"),
-        state=["conversation"],
+        storage=None,
+        state=[],
         telemetry=telemetry,
         logger=QUIET_LOGGER,
         policy=CapabilityPolicy(
             {
-                "llm.history.compact": "allow",
-                "state.compact": "allow",
-                "state.describe": "allow",
-                "state.reset": "allow",
                 "workspace.write": "require_approval",
             },
             default_effect="deny",

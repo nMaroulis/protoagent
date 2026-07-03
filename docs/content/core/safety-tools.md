@@ -73,8 +73,8 @@ Agent policies use deny-by-default behavior:
 | Agent | Default effect | Important allows |
 | --- | --- | --- |
 | Architect | deny | delegation and state/history operations |
-| Explorer | deny | workspace reads and state/history operations |
-| Coder | deny | workspace writes with approval plus state/history operations |
+| Explorer | deny | workspace reads only |
+| Coder | deny | workspace writes with approval only |
 | Guide | deny | no tools, no state, no delegation |
 
 This means adding a new tool requires both tool registration and policy review.

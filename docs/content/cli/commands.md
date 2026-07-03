@@ -34,7 +34,7 @@ Installed examples use `proto-cli <command>`.
 | `project clear` | Clear the active project folder. |
 | `project choose` | Prompt for a project folder. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
-| `agents` | Show Architect/Explorer/Coder topology and tool isolation. |
+| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, and tool isolation. |
 | `agents profile [auto|small|medium|large|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
 | `agents small`, `agents medium`, `agents large`, `agents api` | Shorthand for setting the deck prompt profile. |
 | `eval profiles [--plan|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
@@ -42,7 +42,7 @@ Installed examples use `proto-cli <command>`.
 | `context` | Show Context Loom status for the active project. |
 | `context QUERY` | Build a source-cited Context Pack without running a model. |
 | `context window [16k|auto]` | Show, set, or clear the Ollama context window override. |
-| `context history` | Inspect saved ProtoLink per-agent conversation state. |
+| `context history` | Inspect saved ProtoLink Architect conversation state. |
 | `context compact [recent|tokens|summary] [limit]` | Compact saved ProtoLink histories and trim the Rust session index. |
 | `context reset` | Clear ProtoLink histories for the project session and trim Rust UI turns to zero. |
 | `context on` | Enable persistent project conversation memory. |
@@ -65,7 +65,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the agent topology panel; the confirmation shows the current prompt profile and how to change it. |
+| `/agents` | Pin the runtime architecture panel; the confirmation shows the RunContract flow, worker state boundary, current prompt profile, and how to change it. |
 | `/agents profile [auto|small|medium|large|api]` | Show or set the deck prompt profile. |
 | `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
 | `/context`, `/loom` | Show Context Loom status. |

@@ -75,9 +75,9 @@ export default function Home() {
 $ proto-cli model
 $ proto-cli run "explain the auth flow and propose a safer diff"
 
-Architect -> Explorer -> Coder
+RunContract -> Architect -> stateless workers
 Context Loom evidence
-Approval-gated workspace writes`}
+Approval gate + completion guard`}
             </pre>
           </div>
           <div className={styles.terminalCopy}>

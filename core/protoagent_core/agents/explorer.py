@@ -11,7 +11,6 @@ from .. import tools
 from ..context import build_context_pack as loom_context_pack
 from .common import (
     QUIET_LOGGER,
-    conversation_storage,
     create_selected_llm,
     resolve_agent_url,
     set_transport_timeout,
@@ -20,6 +19,9 @@ from .common import (
 )
 
 EXPLORER_SYSTEM_PROMPT = """You are the ProtoAgent Explorer.
+
+You are a stateless, task-local context worker. Do not rely on prior
+conversation memory; use only the task, Context Loom, and read-only tools.
 
 Build dense context maps for coding tasks. You may read files, list directories,
 search with regexes, ask Context Loom for a source-cited pack, and inspect git
@@ -41,14 +43,14 @@ def create_explorer_agent(
     telemetry=None,
     prompt_profile: str = "auto",
 ):
-    """Create the read-only repository cartographer."""
+    """Create the stateless read-only repository worker."""
     agent = Agent(
         card={
             "name": "explorer",
             "description": (
-                "Read-only repository cartographer. Lists files, reads files, "
-                "searches regexes, reports git status, and summarizes precise "
-                "workspace context for coding tasks."
+                "Stateless read-only repository worker. Lists files, reads "
+                "files, searches regexes, reports git status, and summarizes "
+                "precise workspace context for coding tasks."
             ),
             "url": resolve_agent_url("explorer", url),
             "capabilities": {
@@ -72,16 +74,12 @@ def create_explorer_agent(
             workspace,
             "Explorer",
         ),
-        storage=conversation_storage("explorer"),
-        state=["conversation"],
+        storage=None,
+        state=[],
         telemetry=telemetry,
         logger=QUIET_LOGGER,
         policy=CapabilityPolicy(
             {
-                "llm.history.compact": "allow",
-                "state.compact": "allow",
-                "state.describe": "allow",
-                "state.reset": "allow",
                 "workspace.read": "allow",
             },
             default_effect="deny",

@@ -12,7 +12,9 @@ from protolink.state.conversation import ConversationState
 
 from .agents.common import QUIET_LOGGER, conversation_storage, with_workspace_contract
 
-AGENT_NAMES = ("architect", "explorer", "coder")
+STATEFUL_AGENT_NAMES = ("architect",)
+STATELESS_WORKER_NAMES = ("explorer", "coder")
+AGENT_NAMES = STATEFUL_AGENT_NAMES
 DEFAULT_HISTORY_BUDGET_RATIO = 0.7
 
 
@@ -27,6 +29,9 @@ async def compact_agent_histories_for_run(
     reports: list[dict[str, Any]] = []
     ratio = _history_budget_ratio()
     for agent in agents:
+        storage = getattr(agent, "storage", None)
+        if not _is_durable_storage(storage):
+            continue
         llm = getattr(agent, "llm", None)
         profile = getattr(llm, "metrics_profile", None)
         context_window = getattr(profile, "context_window", None)
@@ -207,14 +212,8 @@ def _control_agent(agent_name: str) -> Agent:
 
 def _compaction_agents(provider: str, model: str | None) -> list[tuple[str, Any]]:
     from .agents.architect import create_architect_agent
-    from .agents.coder import create_coder_agent
-    from .agents.explorer import create_explorer_agent
 
-    return [
-        ("architect", create_architect_agent(provider=provider, model=model, transport=None)),
-        ("explorer", create_explorer_agent(provider=provider, model=model, transport=None)),
-        ("coder", create_coder_agent(provider=provider, model=model, transport=None)),
-    ]
+    return [("architect", create_architect_agent(provider=provider, model=model, transport=None))]
 
 
 def _state_policy() -> CapabilityPolicy:
@@ -337,6 +336,11 @@ def _compaction_metadata(store) -> dict[str, Any]:
         return {}
     compaction = store.metadata.get("compaction") if isinstance(store.metadata, dict) else None
     return dict(compaction or {})
+
+
+def _is_durable_storage(storage: Any) -> bool:
+    """Return true for persisted ProtoLink storage, not task-local memory."""
+    return storage is not None and storage.__class__.__name__ == "SQLiteStorage"
 
 
 def _state_existed_before(result: StateOperationResult) -> bool:

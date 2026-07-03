@@ -1,6 +1,6 @@
 # ProtoAgent Architecture: Local-First A2A Orchestration for Autonomous Coding
 
-**Abstract** As agentic coding transitions from experimental chat interfaces to autonomous, multi-step execution, the industry has heavily centralized around massive cloud inference models. Tools like Antigravity CLI, Claude Code, and Devin rely on monolithic context windows and heavy systemic routing that drain API token quotas rapidly during iterative loops. ProtoAgent proposes a radical alternative: a decentralized, Agent-to-Agent ($A2A$) orchestration architecture powered by the `protolink` engine. By breaking complex coding tasks into delegated sub-routines, feeding them through deterministic local context, and adapting prompts to the active model's capability class, ProtoAgent enables highly capable autonomous coding workflows on local hardware while still scaling cleanly to frontier API models.
+**Abstract** As agentic coding transitions from experimental chat interfaces to autonomous, multi-step execution, the industry has heavily centralized around massive cloud inference models. Tools like Antigravity CLI, Claude Code, and Devin rely on monolithic context windows and heavy systemic routing that drain API token quotas rapidly during iterative loops. ProtoAgent proposes a radical alternative: a local-first Agent-to-Agent ($A2A$) orchestration architecture powered by the `protolink` engine. It separates a stateful runtime kernel from small, stateless specialist workers, feeds each task through deterministic local context, and adapts prompts to the active model's capability class. This lets ProtoAgent run highly capable autonomous coding workflows on local hardware while still scaling cleanly to frontier API models.
 
 ---
 
@@ -21,40 +21,109 @@ At the heart of the ecosystem is `protolink`, a minimalist Python orchestration 
 * **Structured Delegation:** Agents delegate through `protolink` task and `agent_call` semantics instead of unbounded conversational handoffs. The Architect remains the routing authority for normal coding workflows.
 * **Tool Isolation:** An agent is only injected with the exact JSON Schema tools it needs for its specific role.
 * **Structured Handoffs:** Agents communicate through typed tasks, actions, artifacts, and events, removing conversational "fluff" from the internal execution path.
+* **Runtime Contracts:** ProtoAgent derives a task contract before the model runs, attaches it to `RunContext`, and validates the resulting trace before declaring the task complete.
 
 ---
 
-## Three: The ProtoAgent Triad (Agent Topology)
+## Three: Runtime Kernel And Worker Topology
 
-To optimize execution speed and enforce cognitive guardrails on smaller models, ProtoAgent separates core responsibilities into a three-node topology.
+To optimize execution speed and enforce cognitive guardrails on smaller models,
+ProtoAgent separates stateful control from stateless specialist execution. The
+developer still sees one assistant, but the runtime is split into a small set of
+durable control surfaces and disposable worker roles.
 
-### I. The Architect (The Orchestrator)
+### I. The ProtoLink Runtime Kernel
 
-The Architect is the brain of the operation. It is the only agent that speaks directly to the user through ProtoAgent's frontends.
+The runtime kernel is not another LLM persona. It is the non-LLM control plane
+that owns `RunContext`, `RunBudget`, `RunRecorder`, policy checks, approval
+requests, cancellation, redaction, trace events, and durable run reports. This
+is where safety and observability live.
+
+* **Role:** Execute the run protocol, enforce policy, preserve traceability, and
+  keep durable runtime state out of worker prompts.
+* **Runtime Surface:** `RunContext`, `RunBudget`, `RunAction`, `RunEvent`,
+  `RunReport`, `CapabilityPolicy`, and the application approval bridge.
+* **Logic:** A task is not complete merely because the model produced prose. The
+  kernel checks the task contract against worker usage and artifacts.
+
+### II. The Architect (Stateful Controller)
+
+The Architect is the only LLM agent that keeps durable conversation memory. It
+receives the user-facing task from the CLI, reads the current Context Loom pack,
+and delegates to workers through ProtoLink discovery and `agent_call`.
 
 * **Role:** Intent classification, task breakdown, and delegation.
 * **Runtime Surface:** `protolink` registry discovery, `agent_call` delegation, `RunContext`, `RunEvent`, and policy-aware action authorization.
-* **Logic:** It receives the raw user prompt, decomposes it into a sequential execution plan, and dispatches specialized nodes. It maintains the task route but performs no file system operations itself.
+* **Logic:** It maintains the route and final answer but performs no file system
+  operations itself. Because workers are stateless, its handoffs must include
+  the objective, paths, evidence, and acceptance criteria needed for the
+  current run.
 
-### II. The Explorer (Context & Cartography)
+### III. The Explorer (Stateless Context Worker)
 
-Coding requires high-fidelity context. The Explorer acts as the eyes and scouts of the system.
+Explorer is a task-local read-only worker. It has no durable conversation
+memory. Each call starts from the current task, Context Loom evidence, and its
+read-only tools.
 
 * **Role:** Read-only repository exploration and context framing.
 * **Tools:** `build_context_pack`, `read_file`, `list_directory`, `search_regex`, `get_git_status`.
-* **Logic:** When the Architect needs to understand a codebase, it dispatches the Explorer. The Explorer aggressively scans the filesystem, reads relevant files, and compiles a dense, markdown-formatted **Context Map**. By isolating search and reading to this agent, we prevent the code-generating agent from wasting reasoning cycles on exploration.
+* **Logic:** When the Architect needs repository ground truth, it dispatches
+  Explorer with a focused question. Explorer returns compact, source-cited
+  evidence for the current run and then disappears.
 
-### III. The Coder (Synthesis & Assembly)
+### IV. The Coder (Stateless Write Worker)
 
-The Coder is a highly specialized, hyper-focused engineering engine. It does not know how to search a repository; it only knows how to write software.
+Coder is a task-local write worker. It does not keep durable memory and does not
+receive Explorer's broad read/search tools. It receives a localized objective
+and enough evidence to prepare a patch.
 
 * **Role:** Synthesize code and generate file modifications.
 * **Tools:** `generate_unified_diff`, `create_new_file`.
 * **Logic:** The Architect hands the Coder the exact user objective *and* the pristine Context Map generated by the Explorer. The Coder prepares `RunAction` write operations with unified-diff preview artifacts, so policy and approval happen before files are modified.
 
+This split is the core design move: **stateful controller, stateless workers,
+typed artifacts, and runtime completion checks**. The architecture can grow by
+adding more workers, such as Test Locator, Patch Planner, Review Worker, or
+Verification Planner, without giving every role durable memory or every tool.
+
 ---
 
-## Four: Context Loom (The Local Context Fabric)
+## Four: Run Contracts And Completion Guards
+
+Before the model runs, ProtoAgent derives a small **Run Contract** from the
+original user request. The contract is attached to `RunContext.metadata` and
+becomes part of the observable trace.
+
+For a read-only repository question, the contract may expect evidence but no
+write artifact. For a workspace-change task, the contract requires the run to
+reach one of three terminal conditions:
+
+1. Coder delegation happened.
+2. A `RunAction` approval request or diff preview artifact exists.
+3. The model reported an explicit blocker.
+
+If a write task ends in prose without Coder, approval, diff, or blocker,
+ProtoAgent marks the run as `incomplete`. This is deliberately outside the
+prompt. The model can suggest a route, but the runtime decides whether the route
+satisfied the contract.
+
+Example contract:
+
+```json
+{
+  "task_kind": "workspace-change",
+  "requires_explorer": true,
+  "requires_coder": true,
+  "requires_write": true,
+  "expected_workers": ["explorer", "coder"],
+  "expected_artifacts": ["approval_request", "diff_preview"],
+  "completion_rule": "Workspace changes must reach Coder, a write approval/diff preview, or an explicit blocker before the run is terminal."
+}
+```
+
+---
+
+## Five: Context Loom (The Local Context Fabric)
 
 The missing layer in most local coding agents is not another chat prompt. It is
 a deterministic context substrate that can decide what a small model should see
@@ -125,7 +194,7 @@ believes is relevant before it writes a diff. This makes local autonomous coding
 auditable in a way that hidden embedding retrieval and giant context windows are
 not.
 
-## Five: Capability-Scaled Prompting
+## Six: Capability-Scaled Prompting
 
 The triad creates stable roles, but model capability still matters. A prompt
 that helps a frontier API model reason carefully can overload a small local
@@ -135,11 +204,12 @@ than a single universal instruction block.
 
 The invariant layer is the role contract:
 
-* Architect routes and coordinates.
-* Explorer gathers read-only evidence.
-* Coder prepares policy-gated modifications.
+* Architect routes and coordinates as the stateful controller.
+* Explorer gathers read-only evidence as a stateless worker.
+* Coder prepares policy-gated modifications as a stateless worker.
 * ProtoLink owns delegation, tools, memory, events, approvals, and runtime
   reports.
+* Run Contracts define required workers and artifacts before the model answers.
 
 On top of that invariant layer, ProtoAgent applies one of four prompt profiles:
 
@@ -178,38 +248,42 @@ separate model setting.
 
 ---
 
-## Six: System Graph
+## Seven: System Graph
 
 The complete theoretical control loop is:
 
 ```mermaid
 flowchart LR
     U["User / CLI / TUI"] --> L["Context Loom\nsource-cited Context Pack"]
+    U --> K["ProtoLink Runtime Kernel\ncontext / budget / recorder"]
+    L --> RC["Run Contract\nrequired workers + artifacts"]
+    K --> RC
+    RC --> A["Architect\nstateful controller"]
     PP["Prompt Profile\nsmall / medium / large / api"] -. overlays .-> A
     PP -. overlays .-> E
     PP -. overlays .-> C
-    L --> A["Architect\nrouting authority"]
-    A -->|read-only evidence| E["Explorer\nrepository cartography"]
-    E -->|Context Map| A
-    A -->|localized change task| C["Coder\npatch synthesis"]
+    A -->|read-only evidence task| E["Explorer\nstateless context worker"]
+    E -->|Context Map artifact| A
+    A -->|localized write task| C["Coder\nstateless write worker"]
     C -->|RunAction + diff artifact| P["ProtoLink Policy\napproval gate"]
     P -->|approved| W["Workspace mutation"]
     P -->|denied| N["No mutation"]
-    P --> R["RunEvent / RunReport\nobservable trace"]
+    P --> G["Completion Guard\nsatisfied / blocked / incomplete"]
+    G --> R["RunEvent / RunReport\nobservable trace"]
     A --> O["Final answer"]
     R --> O
 ```
 
 This graph is deliberately asymmetric. The user sees one coherent assistant,
 but the runtime preserves distinct responsibilities. Context is selected before
-reasoning, routing happens before synthesis, synthesis produces an explicit
-action, and policy evaluates the action before the workspace changes. Prompt
-profiles influence the quality of reasoning inside the nodes, not the shape of
-the trust boundary around them.
+reasoning, a contract defines the required route, routing happens before
+synthesis, synthesis produces an explicit action, and policy evaluates the
+action before the workspace changes. Prompt profiles influence the quality of
+reasoning inside the nodes, not the shape of the trust boundary around them.
 
 ---
 
-## Seven: Quality Evaluation Loop
+## Eight: Quality Evaluation Loop
 
 Prompt engineering cannot be treated as prose alone. A professional agent needs
 a regression surface for behavior, not just unit tests for code. ProtoAgent
@@ -222,6 +296,7 @@ The evaluation loop asks questions such as:
 * Did a change task route through Coder instead of letting Architect mutate?
 * Did the run cite or touch the expected source, docs, or test paths?
 * Did a write request reach ProtoLink's approval boundary?
+* Did the runtime mark missing write artifacts as incomplete?
 * Did the proposed edit stay within a reasonable file-count budget?
 
 This creates a feedback system for prompt work. If a `small` profile wanders
@@ -246,36 +321,52 @@ an opaque God Prompt.
 
 ---
 
-## Eight: The Standard Execution Flow
+## Nine: The Standard Execution Flow
 
 When a user runs a command in the terminal (e.g., `protoagent run "Extract the hardcoded strings in main.rs into a config file"`), the following $A2A$ flow executes:
 
 ```
 [User Input] -> [Context Loom] -> [Prompt Profile] -> [Architect]
+       |              |
+       v              v
+ [Run Contract] -> [ProtoLink Runtime Kernel]
                                                         |
                     [Explorer verifies/expands] <-------|
                                                         |
 [User Approval] <- [Approval Request] <- [Coder RunAction] <- Context Pack
+                                                        |
+                                                        v
+                                              [Completion Guard]
 
 ```
 
 1. **Intake:** The CLI receives the user prompt and asks Context Loom for an initial Context Pack.
 2. **Weaving:** Context Loom refreshes the local index, scores files and symbols against the prompt, and records an Evidence Ledger for every included item.
-3. **Prompt Scaling:** ProtoAgent resolves the active prompt profile and attaches the role-specific overlay to Architect, Explorer, and Coder.
-4. **Planning:** The **Architect** receives the prompt plus the Context Pack and initializes the execution state.
-5. **Contextualization:** The Architect delegates to the **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
-6. **Synthesis:** The Architect passes the localized task and compact evidence to the **Coder**.
-7. **Diff Generation:** The Coder prepares a strict unified-diff preview through a `RunAction` artifact.
-8. **Policy & Approval:** ProtoLink evaluates the action capability, publishes a typed approval request with the preview artifact, and halts execution until ProtoAgent's frontend returns the human decision.
+3. **Contracting:** ProtoAgent derives a Run Contract from the original user prompt and attaches it to `RunContext.metadata`.
+4. **Prompt Scaling:** ProtoAgent resolves the active prompt profile and attaches the role-specific overlay to Architect, Explorer, and Coder.
+5. **Planning:** The stateful **Architect** receives the prompt plus the Context Pack and initializes the execution route.
+6. **Contextualization:** The Architect delegates to the stateless **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
+7. **Synthesis:** The Architect passes the localized task and compact evidence to the stateless **Coder**.
+8. **Diff Generation:** The Coder prepares a strict unified-diff preview through a `RunAction` artifact.
+9. **Policy & Approval:** ProtoLink evaluates the action capability, publishes a typed approval request with the preview artifact, and halts execution until ProtoAgent's frontend returns the human decision.
+10. **Completion Guard:** Runtime validation checks the Run Contract against worker usage, approval requests, and diff artifacts before marking the task answered, blocked, incomplete, or canceled.
 
 ---
 
-## Nine: Tool Abstraction and MCP
+## Ten: Tool Abstraction and MCP
 
 Because of strict tool isolation, ProtoAgent treats external capabilities as plug-and-play modules. External read-only tools can be mapped to the Explorer, while write-capable tools should enter through the same `RunAction` and approval boundary as workspace edits. The Coder never needs broad ambient access; it receives the clear schemas and evidence that earlier stages pass forward.
 
 ---
 
-## Ten: Conclusion
+## Eleven: Conclusion
 
-By fracturing the monolithic system prompt into isolated, specialized roles (**Architect**, **Explorer**, **Coder**), feeding them through **Context Loom**, and scaling instructions through prompt profiles, ProtoAgent creates an agentic coding system that is local-first, inspectable, and model-portable. It bypasses the cognitive limits of smaller parameter models without wasting the capabilities of stronger ones. Most importantly, it makes autonomy auditable: context is cited, roles are isolated, actions are previewed, approvals are explicit, and prompt quality can be evaluated over time.
+By separating the stateful runtime kernel from stateless specialist workers
+(**Architect**, **Explorer**, **Coder**), feeding them through **Context Loom**,
+and validating every run against a **Run Contract**, ProtoAgent creates an
+agentic coding system that is local-first, inspectable, and model-portable. It
+bypasses the cognitive limits of smaller parameter models without wasting the
+capabilities of stronger ones. Most importantly, it makes autonomy auditable:
+context is cited, roles are isolated, actions are previewed, approvals are
+explicit, missing write artifacts are marked incomplete, and prompt quality can
+be evaluated over time.

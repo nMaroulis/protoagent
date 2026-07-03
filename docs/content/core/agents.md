@@ -1,15 +1,32 @@
 ---
 title: Agent Deck
-description: Architect, Explorer, Coder, Guide, policies, tools, and memory namespaces.
+description: Runtime kernel, RunContract, Architect, stateless workers, Guide, policies, tools, and memory boundaries.
 ---
 
-The active coding mesh has three LLM-capable agents:
+The active coding mesh exposes three LLM-capable roles:
 
 1. Architect
 2. Explorer
 3. Coder
 
-Guide is separate and only answers usage help questions.
+They no longer have the same state model. Architect is the stateful controller.
+Explorer and Coder are stateless, task-local workers. Guide is separate and
+only answers usage help questions.
+
+## Runtime Shape
+
+The user-facing architecture is:
+
+```text
+Context Loom -> RunContract -> Architect -> Explorer/Coder -> Policy Gate -> Completion Guard
+```
+
+The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
+requests, cancellation, and run reports. `run_contracts.py` classifies the
+original user request before the model runs and validates the result after the
+task stream finishes. Write tasks are returned as `incomplete` unless the trace
+contains Coder delegation, a write approval/diff artifact, or an explicit
+blocker.
 
 ## Deck Assembly
 
@@ -23,9 +40,10 @@ Guide is separate and only answers usage help questions.
 }
 ```
 
-Every LLM-capable agent receives a separate ProtoLink LLM instance configured
-with the selected provider and model. Separate instances keep prompts and
-histories isolated.
+Every LLM-capable role receives a separate ProtoLink LLM instance configured
+with the selected provider and model. Architect receives durable conversation
+storage. Explorer and Coder receive task-local in-memory state so their worker
+calls do not accumulate long-term history.
 
 ## Prompt Profiles
 
@@ -62,8 +80,9 @@ TUI:
 ```
 
 The resolved profile is included in `doctor()`, `/check`, `/agents`, runtime
-progress, and `RunContext.metadata["prompt_profile"]`. ProtoLink still owns
-agent calls, tool calls, policy approvals, events, memory, and reports; prompt
+progress, and `RunContext.metadata["prompt_profile"]`. The inferred contract is
+included in `RunContext.metadata["run_contract"]`. ProtoLink still owns agent
+calls, tool calls, policy approvals, events, memory, and reports; prompt
 profiles only change the instructions given to each LLM-capable role.
 
 ## Shared Agent Helpers
@@ -73,7 +92,7 @@ profiles only change the instructions given to each LLM-capable role.
 | Helper | Purpose |
 | --- | --- |
 | `create_selected_llm()` | Create a ProtoLink LLM from the active provider/model. |
-| `conversation_storage(agent_name)` | SQLite storage in `~/.protoagent/conversations.sqlite`, namespace `protoagent-<agent>`. |
+| `conversation_storage(agent_name)` | SQLite storage in `~/.protoagent/conversations.sqlite`. Currently used for the stateful Architect namespace. |
 | `resolve_agent_url()` | Explicit URL, environment URL, or default local URL. |
 | `set_transport_timeout()` | Apply long timeouts across ProtoLink transports. |
 | `with_prompt_profile()` | Attach the resolved model-capability prompt overlay. |
@@ -84,7 +103,8 @@ profiles only change the instructions given to each LLM-capable role.
 Source: `core/protoagent_core/agents/architect.py`
 
 Architect receives the user-facing task from the CLI. It owns intent
-classification, routing, delegation, and final answers.
+classification, routing, delegation, durable conversation memory, and final
+answers.
 
 Capabilities:
 
@@ -98,14 +118,17 @@ Capabilities:
 | default | deny |
 
 Architect has no direct workspace read or write tools. It should delegate to
-Explorer for evidence and Coder for file changes.
+Explorer for evidence and Coder for file changes. Because workers are
+stateless, Architect handoffs must include the objective, relevant paths,
+evidence, and acceptance criteria for the current task.
 
 ## Explorer
 
 Source: `core/protoagent_core/agents/explorer.py`
 
-Explorer is read-only. It builds context maps, reads files, searches, checks git
-status, and can request a focused Context Loom pack.
+Explorer is a stateless read-only worker. It builds context maps, reads files,
+searches, checks git status, and can request a focused Context Loom pack. It
+does not persist conversation history between tasks.
 
 Tools:
 
@@ -122,16 +145,15 @@ Policy:
 | Capability | Effect |
 | --- | --- |
 | `workspace.read` | allow |
-| state and history compaction capabilities | allow |
 | default | deny |
 
 ## Coder
 
 Source: `core/protoagent_core/agents/coder.py`
 
-Coder is the only agent that can prepare file modifications. It does not get
-Explorer's broad read/search tools. It is expected to receive enough context
-from Architect and Explorer.
+Coder is the stateless worker that can prepare file modifications. It does not
+get Explorer's broad read/search tools. It is expected to receive enough context
+from Architect and Explorer for the current task.
 
 Tools:
 
@@ -145,12 +167,13 @@ Policy:
 | Capability | Effect |
 | --- | --- |
 | `workspace.write` | require approval |
-| state and history compaction capabilities | allow |
 | default | deny |
 
 The action builder creates a `RunAction` with a `text/x-diff` preview artifact.
 The write helper only executes after ProtoLink receives an approving
-`ApprovalDecision`.
+`ApprovalDecision`. If a write task finishes without Coder, approval/diff
+artifacts, or an explicit blocker, runtime completion validation returns the run
+as `incomplete`.
 
 ## Guide
 
@@ -174,10 +197,12 @@ answers ProtoAgent usage questions, not project coding questions.
 
 The CLI doctor and fallback paths use `agent_manifest()`:
 
-| Agent | Role | Memory namespace | Tools |
-| --- | --- | --- | --- |
-| Architect | orchestrator | `protoagent-architect` | none |
-| Explorer | context | `protoagent-explorer` | Context/read/search/git tools |
-| Coder | synthesis | `protoagent-coder` | diff/create tools |
+| Agent | Role | State | Memory | Tools |
+| --- | --- | --- | --- | --- |
+| Architect | stateful controller | stateful | `protoagent-architect` | none |
+| Explorer | stateless context worker | stateless | task-local | Context/read/search/git tools |
+| Coder | stateless write worker | stateless | task-local | diff/create tools |
 
-Update this manifest when the visible topology changes.
+The manifest also reports the runtime kernel, stateful pieces, stateless
+workers, and RunContract rule used by `proto-cli agents` and `/agents`. Update
+this manifest when the visible topology changes.

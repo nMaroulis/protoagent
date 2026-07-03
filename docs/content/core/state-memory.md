@@ -18,13 +18,16 @@ Conversation state uses ProtoLink `SQLiteStorage`:
 ~/.protoagent/conversations.sqlite
 ```
 
-Each agent has its own namespace:
+Only the stateful Architect uses durable model-facing conversation storage:
 
-| Agent | Namespace |
-| --- | --- |
-| Architect | `protoagent-architect` |
-| Explorer | `protoagent-explorer` |
-| Coder | `protoagent-coder` |
+| Role | State model | Namespace |
+| --- | --- | --- |
+| Architect | durable conversation memory | `protoagent-architect` |
+| Explorer | task-local stateless worker | none |
+| Coder | task-local stateless worker | none |
+
+ProtoLink may allocate in-memory state for worker execution, but that state is
+discarded with the task and is not part of `conversations.sqlite`.
 
 The session id is usually derived from the active project path:
 
@@ -37,9 +40,10 @@ use task-local state.
 
 ## Run-Boundary Compaction
 
-Before a session resumes, `compact_agent_histories_for_run()` checks each
-running agent's `LLMModelProfile.context_window`. It compacts history when the
-budget is exceeded.
+Before a session resumes, `compact_agent_histories_for_run()` checks durable
+agent storage and the active `LLMModelProfile.context_window`. In the current
+architecture this applies to Architect memory only; stateless workers are
+skipped.
 
 Default ratio:
 
@@ -53,9 +57,9 @@ The code clamps the ratio between 0.2 and 0.9.
 
 | CLI command | Python function | ProtoLink operation |
 | --- | --- | --- |
-| `/context history` | `describe_saved_histories()` | `describe_state()` |
-| `/context compact` | `compact_saved_histories()` | `compact_state()` |
-| `/context reset` | `reset_saved_histories()` | `reset_state()` |
+| `/context history` | `describe_saved_histories()` | `describe_state()` for Architect memory |
+| `/context compact` | `compact_saved_histories()` | `compact_state()` for Architect memory |
+| `/context reset` | `reset_saved_histories()` | `reset_state()` for Architect memory |
 
 State control facades are regular ProtoLink `Agent` instances with no LLM. Their
 policy allows history/state operations and denies everything else.
@@ -68,7 +72,7 @@ policy allows history/state operations and denies everything else.
 | `tokens` | `max_tokens`, `preserve_recent=6` |
 | `summary` | `preserve_recent` |
 
-When no token limit is passed, `tokens` uses the agent model profile and the
+When no token limit is passed, `tokens` uses the Architect model profile and the
 history budget ratio. If no context window exists, it falls back to 4000 tokens.
 
 ## Top-Level Turn Persistence

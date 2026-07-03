@@ -259,6 +259,7 @@ def doctor(workspace: str | None = None) -> str:
         (provider for provider in inventory["providers"] if provider["id"] == active_provider),
         None,
     )
+    manifest = agent_manifest(profile)
     return _json(
         {
             "python": platform.python_version(),
@@ -272,7 +273,8 @@ def doctor(workspace: str | None = None) -> str:
             if provider_inventory
             else "unknown",
             "prompt_profile": profile,
-            "agents": agent_manifest(profile)["agents"],
+            "architecture": manifest["architecture"],
+            "agents": manifest["agents"],
         }
     )
 
@@ -456,7 +458,13 @@ def _model_response(
 
     tagged_context = tagged_context or {"items": [], "errors": []}
     runtime_prompt = _runtime_prompt(prompt, tagged_context, loom_context)
-    result = run_selected_model(runtime_prompt, workspace, session_id, progress_path)
+    result = run_selected_model(
+        runtime_prompt,
+        workspace,
+        session_id,
+        progress_path,
+        user_prompt=prompt,
+    )
     runtime_status = str(result.get("status") or "completed")
     if runtime_status == "canceled":
         targets = []
@@ -489,8 +497,15 @@ def _model_response(
         else ""
     )
     diff = "\n".join(str(item.get("diff", "")) for item in diff_items if isinstance(item, dict))
+    run_contract = result.get("run_contract", {})
+    completion = result.get("completion_validation", {})
+    completion_warning = (
+        str(completion.get("message") or "")
+        if isinstance(completion, dict) and runtime_status in {"blocked", "incomplete"}
+        else ""
+    )
     return {
-        "status": "canceled" if runtime_status == "canceled" else "answered",
+        "status": runtime_status if runtime_status in {"blocked", "canceled", "incomplete"} else "answered",
         "headline": "Architect completed the ProtoLink run.",
         "answer": answer,
         "thought_process": (
@@ -503,6 +518,8 @@ def _model_response(
             f"Likely target: {target_label or '(not selected yet)'}\n"
             f"Context Loom: {_context_summary(loom_context)}\n"
             f"Tagged context: {_tag_summary(tagged_context)}\n"
+            f"Run contract: {_contract_summary(run_contract)}\n"
+            f"Completion validation: {_completion_summary(completion)}\n"
             "Conversation memory: ProtoLink per-agent session state"
         ),
         "file_target": target_label,
@@ -520,8 +537,10 @@ def _model_response(
         "model": result["model"],
         "responder": result.get("responder", "architect"),
         "workspace": workspace,
-        "warning": "; ".join(tagged_context.get("errors", [])),
+        "warning": "; ".join([*tagged_context.get("errors", []), completion_warning]).strip("; "),
         "elapsed_ms": int((time.time() - started) * 1000),
+        "run_contract": run_contract,
+        "completion_validation": completion,
     }
 
 
@@ -694,6 +713,27 @@ def _context_events(loom_context: dict[str, Any] | None) -> list[str]:
     events = context_pack_events(loom_context)
     events.extend(f"Context Loom warning: {error}" for error in loom_context.get("errors", []))
     return events
+
+
+def _contract_summary(contract: Any) -> str:
+    if not isinstance(contract, dict) or not contract:
+        return "none"
+    workers = ", ".join(str(worker) for worker in contract.get("expected_workers", [])) or "none"
+    artifacts = (
+        ", ".join(str(artifact) for artifact in contract.get("expected_artifacts", [])) or "none"
+    )
+    return (
+        f"{contract.get('task_kind', 'unknown')} | workers: {workers} | "
+        f"artifacts: {artifacts}"
+    )
+
+
+def _completion_summary(completion: Any) -> str:
+    if not isinstance(completion, dict) or not completion:
+        return "none"
+    outcome = str(completion.get("outcome") or "unknown")
+    message = str(completion.get("message") or "").strip()
+    return f"{outcome}: {message}" if message else outcome
 
 
 def _tag_summary(tagged_context: dict[str, Any]) -> str:

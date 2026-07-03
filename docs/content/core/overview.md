@@ -71,7 +71,8 @@ ProtoLink objects used by the core include:
 | `ApprovalRequest` | Policy pause before write execution. |
 | `ApprovalDecision` | Human decision from the Rust app. |
 | `TaskCancellationRequest` | Live cancellation from the TUI. |
-| `ConversationState` | Durable per-agent memory. |
+| `ConversationState` | Durable Architect memory and state-control facades. |
+| `RunContract` | ProtoAgent task contract attached to `RunContext.metadata`. |
 
 ## Primary Flow
 
@@ -82,11 +83,12 @@ flowchart TD
   C --> D{"PROTOAGENT_SCAFFOLD=1?"}
   D -->|yes| E["fallback diagnostics"]
   D -->|no| F["runtime.run_selected_model"]
-  F --> G["create RunContext and RunBudget"]
+  F --> G["create RunContract, RunContext, and RunBudget"]
   G --> H["start Registry and agent deck"]
   H --> I["send task stream to Architect"]
   I --> J["record RunEvents and approvals"]
-  J --> K["return CoreResponse JSON"]
+  J --> K["validate completion contract"]
+  K --> L["return CoreResponse JSON"]
 ```
 
 ## Tests
@@ -97,6 +99,8 @@ The core tests focus on runtime contracts rather than only prompt text:
 | --- | --- |
 | `core/tests/test_runtime_integration.py` | Policies, approvals, cancellation, streaming, run budgets, event/report behavior. |
 | `core/tests/test_history_integration.py` | ProtoLink conversation state describe, compact, reset, and top-level turn persistence. |
+| `core/tests/test_run_contracts.py` | Task contract inference and completion validation. |
+| `core/tests/test_agent_manifest.py` | Runtime architecture manifest exposed to CLI diagnostics. |
 | `core/tests/test_llm_context.py` | Ollama context window, metrics profile, runtime prompt budget, context continuity ownership. |
 | `core/tests/test_help_agent.py` | Guide isolation, no tools/storage, current settings snapshot. |
 

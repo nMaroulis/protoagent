@@ -336,7 +336,7 @@ fn handle_agents_command(app: &mut TerminalApp, command: &str, arg: &str) -> Res
 
 fn agents_panel_pinned_text(app: &TerminalApp) -> String {
     format!(
-        "Agents panel pinned. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
+        "Agents panel pinned. Runtime kernel uses a RunContract, stateful Architect, stateless Explorer/Coder workers, and ProtoLink policy gates. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
         empty_as_unknown(&app.status.prompt_profile)
     )
 }
@@ -485,10 +485,21 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
     if let Err(err) = crate::sessions::record_turn(query, &response) {
         app.push(Role::Error, "Session history", &err.to_string());
     }
-    let canceled = response.status == "canceled";
-    app.activity = format!("{} in {} ms", if canceled { "canceled" } else { "completed" }, response.elapsed_ms);
+    let terminal_status = match response.status.as_str() {
+        "blocked" => "blocked",
+        "canceled" => "canceled",
+        "incomplete" => "incomplete",
+        _ => "completed",
+    };
+    app.activity = format!("{} in {} ms", terminal_status, response.elapsed_ms);
     if let Some(message) = app.messages.get_mut(progress_index) {
-        message.label = if canceled { "Canceled" } else { "Completed" }.to_string();
+        message.label = match response.status.as_str() {
+            "blocked" => "Blocked",
+            "canceled" => "Canceled",
+            "incomplete" => "Incomplete",
+            _ => "Completed",
+        }
+        .to_string();
         message.body = format!(
             "{} / {} | {} ms\n{} live event(s); /trace shows the full agent run",
             empty_as_unknown(&response.provider),

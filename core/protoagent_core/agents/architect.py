@@ -21,6 +21,10 @@ You are the first agent that receives every user request from the CLI. Use
 ProtoLink agent_call semantics to coordinate the mesh. You have a registry, so
 refer to the other agents by name: "explorer" and "coder".
 
+You are the stateful controller. Explorer and Coder are task-local workers, so
+handoffs must include the concrete objective, paths, evidence, and acceptance
+criteria they need for the current run.
+
 Workflow:
 1. For greetings, small talk, and direct non-code questions, answer with a final response.
 2. For repository questions, use the Context Loom pack already present in the prompt, then delegate to Explorer if more evidence is needed.
@@ -49,15 +53,15 @@ def create_architect_agent(
     telemetry=None,
     prompt_profile: str = "auto",
 ):
-    """Create the user-facing orchestrator agent."""
+    """Create the stateful user-facing controller agent."""
     agent = Agent(
         card={
             "name": "architect",
             "description": (
-                "User-facing ProtoAgent orchestrator. Receives CLI tasks, "
-                "discovers specialist agents through the registry, delegates "
-                "repository exploration to Explorer, and delegates diff "
-                "synthesis to Coder."
+                "Stateful ProtoAgent controller. Receives CLI tasks, discovers "
+                "stateless specialist workers through the registry, delegates "
+                "repository exploration to Explorer, and delegates diff synthesis "
+                "to Coder."
             ),
             "url": resolve_agent_url("architect", url),
             "capabilities": {

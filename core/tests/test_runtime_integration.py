@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from protolink import ActionDeniedError, RunAction, RunBudget, RunContext
 
+import protoagent_core.agents.architect as architect_module
 import protoagent_core.agents.coder as coder_module
 import protoagent_core.agents.explorer as explorer_module
 from protoagent_core.runtime import (
@@ -23,12 +24,15 @@ from protoagent_core.runtime_bridge import RuntimeBridge
 
 class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self._create_architect_llm = architect_module.create_selected_llm
         self._create_selected_llm = coder_module.create_selected_llm
         self._create_explorer_llm = explorer_module.create_selected_llm
+        architect_module.create_selected_llm = lambda *_args, **_kwargs: None
         coder_module.create_selected_llm = lambda *_args, **_kwargs: None
         explorer_module.create_selected_llm = lambda *_args, **_kwargs: None
 
     def tearDown(self) -> None:
+        architect_module.create_selected_llm = self._create_architect_llm
         coder_module.create_selected_llm = self._create_selected_llm
         explorer_module.create_selected_llm = self._create_explorer_llm
 
@@ -50,7 +54,7 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await agent.authorize_action(action, RunContext(session_id="session-test"))
 
     async def test_state_compaction_control_plane_is_agent_authorized(self) -> None:
-        agent = explorer_module.create_explorer_agent(workspace=".", transport="http")
+        agent = architect_module.create_architect_agent(workspace=".", transport="http")
         action = RunAction(
             kind="state.compact",
             name="compact_state",
@@ -58,6 +62,13 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         authorization = await agent.authorize_action(action, RunContext(session_id="session-test"))
         self.assertEqual(authorization.action.name, "compact_state")
+
+    def test_explorer_and_coder_are_stateless_workers(self) -> None:
+        explorer = explorer_module.create_explorer_agent(workspace=".", transport="http")
+        coder = coder_module.create_coder_agent(workspace=".", transport="http")
+
+        self.assertEqual(explorer.storage.__class__.__name__, "InMemoryStorage")
+        self.assertEqual(coder.storage.__class__.__name__, "InMemoryStorage")
 
     def test_run_budget_uses_protolink_budget_carrier(self) -> None:
         with patch.dict(

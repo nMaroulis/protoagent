@@ -23,7 +23,7 @@ This project is the terminal frontend of the **ProtoAgent Ecosystem**.
 ### ✨ Key Features
 
 * **🦀 Zero-Overhead UI:** Written purely in Rust. Enjoy snappy rendering, smooth spinners, and instant boot times without the bloat of standard Python CLI libraries.
-* **🐍 Python Hackability:** All the actual AI logic (prompts, tool routing, sub-agents) lives next door in the `core/` directory. If you want to tweak how the Planner or Coder agents think, you edit simple Python scripts while keeping your fast Rust terminal.
+* **🐍 Python Hackability:** All the actual AI logic (prompts, tool routing, run contracts, and workers) lives next door in the `core/` directory. If you want to tweak how Architect, Explorer, or Coder behave, you edit simple Python scripts while keeping your fast Rust terminal.
 * **🔒 100% Local Privacy:** Native, first-class support for OpenAI-compatible local endpoints (`http://localhost:11434/v1`). Your code never leaves your machine.
 * **🛡️ Human-in-the-Loop:** Automatically halts and renders a clean diff, requiring an explicit `[Y/n]` approval before executing shell commands or writing files to disk.
 
@@ -116,13 +116,13 @@ Inside the TUI you can use slash commands:
 * `/models` - Shows model/provider status.
 * `/config` - Shows redacted provider config status.
 * `/check` - Refreshes Python, protolink, and active provider status.
-* `/agents` - Shows the Architect / Explorer / Coder topology and per-agent ProtoLink memory namespaces.
+* `/agents` - Shows the runtime kernel, RunContract, stateful Architect, stateless Explorer/Coder workers, and policy gate.
 * `/agents profile [auto|small|medium|large|api]` - Shows or sets the prompt profile used by the agent deck.
 * `/context` - Shows Context Loom index status for the active project.
 * `/context QUERY` - Builds a source-cited Context Pack without running a model.
 * `/context window 16k` - Sets the Ollama request window and ProtoLink `LLMModelProfile` together.
-* `/context compact [recent|tokens|summary] [limit]` - Compacts the active per-agent ProtoLink session.
-* `/context reset` - Clears the active ProtoLink histories and the Rust session index.
+* `/context compact [recent|tokens|summary] [limit]` - Compacts the active Architect ProtoLink session.
+* `/context reset` - Clears active Architect memory and the Rust session index.
 * `/index refresh` - Refreshes the local Context Loom SQLite index.
 * `/last` - Replays the last agent response.
 * `/run` - Runs a task from a slash command.
