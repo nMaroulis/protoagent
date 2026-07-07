@@ -22,7 +22,7 @@ Context Loom -> RunContract -> Architect -> Explorer/Coder -> Policy Gate -> Com
 ```
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
-requests, cancellation, and run reports. `run_contracts.py` classifies the
+requests, cancellation, authentication, and run reports. `run_contracts.py` classifies the
 original user request before the model runs and validates the result after the
 task stream finishes. Write tasks are returned as `incomplete` unless the trace
 contains Coder delegation, a write approval/diff artifact, or an explicit
@@ -44,6 +44,11 @@ Every LLM-capable role receives a separate ProtoLink LLM instance configured
 with the selected provider and model. Architect receives durable conversation
 storage. Explorer and Coder receive task-local in-memory state so their worker
 calls do not accumulate long-term history.
+
+The embedded deck also receives a per-run ProtoLink `APIKeyAuth` bundle. The
+runtime generates the credential automatically, passes the authenticator and
+credential to Architect, Explorer, Coder, and uses the same credential for the
+CLI-side `AgentClient`. Users do not need to configure a token for local runs.
 
 ## Prompt Profiles
 

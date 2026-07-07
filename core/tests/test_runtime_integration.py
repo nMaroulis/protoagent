@@ -12,7 +12,10 @@ from protolink import ActionDeniedError, RunAction, RunBudget, RunContext
 import protoagent_core.agents.architect as architect_module
 import protoagent_core.agents.coder as coder_module
 import protoagent_core.agents.explorer as explorer_module
+from protoagent_core.agents.common import create_runtime_auth
+from protoagent_core.agents.deck import create_agent_deck
 from protoagent_core.runtime import (
+    _authenticated_client_transport,
     _context_from_delivery,
     _monitor_cancellation,
     _preflight_cancellation_result,
@@ -69,6 +72,30 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(explorer.storage.__class__.__name__, "InMemoryStorage")
         self.assertEqual(coder.storage.__class__.__name__, "InMemoryStorage")
+
+    def test_agent_deck_uses_shared_protolink_auth(self) -> None:
+        auth = create_runtime_auth()
+        deck = create_agent_deck(workspace=".", transport="http", auth=auth)
+
+        for agent in deck.values():
+            self.assertIs(agent.authenticator, auth.authenticator)
+            self.assertEqual(agent.credentials, auth.credentials)
+            self.assertIs(agent.transport.authenticator, auth.authenticator)
+            self.assertEqual(agent.transport.credentials, auth.credentials)
+            self.assertIn("apiKey", agent.card.security_schemes)
+
+    def test_runtime_client_transport_uses_shared_protolink_auth(self) -> None:
+        auth = create_runtime_auth()
+        transport = _authenticated_client_transport(
+            "sse",
+            "http://127.0.0.1:9999",
+            auth,
+            timeout=1,
+        )
+
+        self.assertIs(transport.authenticator, auth.authenticator)
+        self.assertEqual(transport.credentials, auth.credentials)
+        self.assertIsNone(transport.security_context)
 
     def test_run_budget_uses_protolink_budget_carrier(self) -> None:
         with patch.dict(

@@ -14,6 +14,7 @@ class AgentManifestTests(unittest.TestCase):
         self.assertEqual(architecture["controller"], "architect")
         self.assertIn("explorer", architecture["stateless"])
         self.assertIn("RunContract", architecture["contract"])
+        self.assertIn("ProtoLink API-key auth", architecture["flow"])
 
         agents = {agent["name"]: agent for agent in manifest["agents"]}
         self.assertEqual(agents["architect"]["state"], "stateful")

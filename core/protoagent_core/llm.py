@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any
 
@@ -150,6 +151,8 @@ def validate_protolink() -> dict[str, Any]:
         from protolink.llms.base import LLM
         from protolink.llms.factory import create_llm  # noqa: F401
         from protolink.logging import QuietLogger
+        from protolink.security.auth import APIKeyAuth
+        from protolink.transport.http_transport import HTTPTransport
 
         streaming_ready = hasattr(Agent, "handle_task_streaming") and hasattr(
             AgentClient, "send_task_streaming"
@@ -173,6 +176,15 @@ def validate_protolink() -> dict[str, Any]:
             and TaskCancellationRequest is not None
         )
         logging_ready = QuietLogger is not None
+        agent_parameters = inspect.signature(Agent).parameters
+        transport_parameters = inspect.signature(HTTPTransport.__init__).parameters
+        auth_ready = (
+            APIKeyAuth is not None
+            and "authenticator" in agent_parameters
+            and "credentials" in agent_parameters
+            and "authenticator" in transport_parameters
+            and "credentials" in transport_parameters
+        )
         agent_ready = all(
             (
                 streaming_ready,
@@ -183,6 +195,7 @@ def validate_protolink() -> dict[str, Any]:
                 state_ready,
                 cancellation_ready,
                 logging_ready,
+                auth_ready,
             )
         )
 
@@ -198,6 +211,7 @@ def validate_protolink() -> dict[str, Any]:
             "state_ready": state_ready,
             "cancellation_ready": cancellation_ready,
             "logging_ready": logging_ready,
+            "auth_ready": auth_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
@@ -216,6 +230,7 @@ def validate_protolink() -> dict[str, Any]:
                 "state_ready": False,
                 "cancellation_ready": False,
                 "logging_ready": False,
+                "auth_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -231,6 +246,7 @@ def validate_protolink() -> dict[str, Any]:
                 "state_ready": False,
                 "cancellation_ready": False,
                 "logging_ready": False,
+                "auth_ready": False,
                 "error": str(exc),
             }
 

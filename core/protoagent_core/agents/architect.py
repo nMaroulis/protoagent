@@ -52,6 +52,8 @@ def create_architect_agent(
     transport: TransportType | None = "sse",
     telemetry=None,
     prompt_profile: str = "auto",
+    authenticator=None,
+    credentials: str | None = None,
 ):
     """Create the stateful user-facing controller agent."""
     agent = Agent(
@@ -88,6 +90,8 @@ def create_architect_agent(
         storage=conversation_storage("architect"),
         state=["conversation"],
         telemetry=telemetry,
+        authenticator=authenticator,
+        credentials=credentials,
         policy=CapabilityPolicy(
             {
                 "agent.delegate": "allow",

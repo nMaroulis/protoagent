@@ -70,13 +70,16 @@ class OllamaContextTests(unittest.TestCase):
         self.assertEqual(llm.profile.model, "gemma4:e4b")
 
     def test_protolink_readiness_includes_shared_quiet_logger(self) -> None:
-        from protoagent_core.agents.common import QUIET_LOGGER
+        from protoagent_core.agents.common import QUIET_LOGGER, create_runtime_auth
 
         report = validate_protolink()
+        auth = create_runtime_auth()
 
         self.assertTrue(report["logging_ready"])
+        self.assertTrue(report["auth_ready"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")
+        self.assertEqual(auth.authenticator.__class__.__module__, "protolink.security.auth")
 
     def test_context_window_honors_protoagent_environment_override(self) -> None:
         with patch.dict(os.environ, {"PROTOAGENT_OLLAMA_NUM_CTX": "16384"}, clear=False):

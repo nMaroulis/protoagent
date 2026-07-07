@@ -425,7 +425,7 @@ fn provider_chip(provider: &crate::ModelProvider) -> String {
 fn doctor_summary(report: &DoctorReport) -> String {
     let protolink = if report.protolink.installed && report.protolink.agent_ready {
         format!(
-            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}",
+            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}",
             empty_as_unknown(&report.protolink.version),
             crate::readiness(report.protolink.streaming_ready),
             crate::readiness(report.protolink.metrics_ready),
@@ -435,6 +435,7 @@ fn doctor_summary(report: &DoctorReport) -> String {
             crate::readiness(report.protolink.run_report_ready),
             crate::readiness(report.protolink.cancellation_ready),
             crate::readiness(report.protolink.logging_ready),
+            crate::readiness(report.protolink.auth_ready),
         )
     } else if report.protolink.installed {
         format!("ProtoLink blocked ({})", report.protolink.error)

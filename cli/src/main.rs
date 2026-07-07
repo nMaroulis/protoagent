@@ -196,6 +196,8 @@ struct ProtolinkStatus {
     #[serde(default)]
     logging_ready: bool,
     #[serde(default)]
+    auth_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
@@ -1279,7 +1281,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1289,6 +1291,7 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.run_report_ready),
                         readiness(report.protolink.cancellation_ready),
                         readiness(report.protolink.logging_ready),
+                        readiness(report.protolink.auth_ready),
                     )
                 } else if report.protolink.installed {
                     format!("installed, agent runtime blocked ({})", report.protolink.error)

@@ -42,6 +42,8 @@ def create_explorer_agent(
     transport: TransportType | None = "sse",
     telemetry=None,
     prompt_profile: str = "auto",
+    authenticator=None,
+    credentials: str | None = None,
 ):
     """Create the stateless read-only repository worker."""
     agent = Agent(
@@ -78,6 +80,8 @@ def create_explorer_agent(
         state=[],
         telemetry=telemetry,
         logger=QUIET_LOGGER,
+        authenticator=authenticator,
+        credentials=credentials,
         policy=CapabilityPolicy(
             {
                 "workspace.read": "allow",

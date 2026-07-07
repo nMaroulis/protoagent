@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from .agents import create_agent_deck
+from .agents.common import AgentRuntimeAuth, create_runtime_auth
 from .config import load_config, normalize_provider, provider_config
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
@@ -136,6 +137,8 @@ async def _run_agent_deck(
     if provider == "ollama":
         emit(f"Ollama context window: {ollama_context_window()} tokens.")
     emit(f"Run context: {context.run_id}.")
+    auth = create_runtime_auth()
+    emit("Agent auth: ProtoLink API-key auth enabled for the local mesh.")
     registry = None
     client = None
     deck: dict[str, Any] = {}
@@ -166,6 +169,7 @@ async def _run_agent_deck(
             approval_handler=bridge.approval_handler,
             telemetry=telemetry,
             prompt_profile=str(prompt_profile["resolved"]),
+            auth=auth,
         )
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
@@ -194,7 +198,12 @@ async def _run_agent_deck(
             return canceled
 
         client = AgentClient(
-            url=urls["client"], transport=agent_transport, timeout=_runtime_timeout()
+            transport=_authenticated_client_transport(
+                agent_transport,
+                urls["client"],
+                auth,
+                timeout=_runtime_timeout(),
+            )
         )
         cancellation_monitor = asyncio.create_task(
             _monitor_cancellation(
@@ -456,6 +465,25 @@ def _streaming_enabled(transport: TransportName) -> bool:
     if raw in {"1", "true", "yes", "on"}:
         return transport != "http"
     return transport != "http"
+
+
+def _authenticated_client_transport(
+    transport: TransportName,
+    url: str,
+    auth: AgentRuntimeAuth,
+    *,
+    timeout: int,
+):
+    """Create a ProtoLink client transport with the deck's runtime auth."""
+    from protolink.transport import get_transport
+
+    return get_transport(
+        transport=transport,
+        url=url,
+        timeout=timeout,
+        authenticator=auth.authenticator,
+        credentials=auth.credentials,
+    )
 
 
 async def _send_task_once(client, agent_url: str, task) -> Any:

@@ -10,6 +10,7 @@ from ..config import normalize_provider
 from ..prompt_profiles import prompt_profile_status
 from .architect import create_architect_agent
 from .coder import create_coder_agent
+from .common import AgentRuntimeAuth, create_runtime_auth
 from .explorer import create_explorer_agent
 
 
@@ -23,6 +24,7 @@ def create_agent_deck(
     approval_handler=None,
     telemetry=None,
     prompt_profile: str = "auto",
+    auth: AgentRuntimeAuth | None = None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -33,6 +35,7 @@ def create_agent_deck(
     """
     provider = normalize_provider(provider)
     urls = urls or {}
+    auth = auth or create_runtime_auth()
     explorer = create_explorer_agent(
         registry=registry,
         provider=provider,
@@ -42,6 +45,8 @@ def create_agent_deck(
         transport=transport,
         telemetry=telemetry,
         prompt_profile=prompt_profile,
+        authenticator=auth.authenticator,
+        credentials=auth.credentials,
     )
     coder = create_coder_agent(
         registry=registry,
@@ -53,6 +58,8 @@ def create_agent_deck(
         approval_handler=approval_handler,
         telemetry=telemetry,
         prompt_profile=prompt_profile,
+        authenticator=auth.authenticator,
+        credentials=auth.credentials,
     )
     architect = create_architect_agent(
         registry=registry,
@@ -63,6 +70,8 @@ def create_agent_deck(
         transport=transport,
         telemetry=telemetry,
         prompt_profile=prompt_profile,
+        authenticator=auth.authenticator,
+        credentials=auth.credentials,
     )
     return {
         "explorer": explorer,
@@ -96,6 +105,7 @@ def agent_manifest(profile: dict[str, Any] | None = None) -> dict[str, Any]:
             "flow": [
                 "Context Loom evidence",
                 "RunContract",
+                "ProtoLink API-key auth",
                 "Architect controller",
                 "Stateless specialist workers",
                 "ProtoLink policy gate",

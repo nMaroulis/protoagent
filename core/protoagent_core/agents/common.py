@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import secrets
+from dataclasses import dataclass
 from pathlib import Path
 
 from protolink.logging import QuietLogger
@@ -19,6 +21,25 @@ DEFAULT_AGENT_URLS = {
 
 
 QUIET_LOGGER = QuietLogger(name="protoagent-quiet")
+
+
+@dataclass(frozen=True)
+class AgentRuntimeAuth:
+    """Shared ProtoLink authentication bundle for one embedded agent deck."""
+
+    authenticator: object
+    credentials: str
+
+
+def create_runtime_auth() -> AgentRuntimeAuth:
+    """Create per-run ProtoLink API-key auth for the local agent mesh."""
+    from protolink.security.auth import APIKeyAuth
+
+    token = secrets.token_urlsafe(32)
+    authenticator = APIKeyAuth(
+        valid_keys={token: ["agent.delegate", "workspace.read", "workspace.write"]}
+    )
+    return AgentRuntimeAuth(authenticator=authenticator, credentials=token)
 
 
 def create_selected_llm(provider: str, model: str | None = None):

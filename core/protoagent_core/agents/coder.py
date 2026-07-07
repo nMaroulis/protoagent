@@ -46,6 +46,8 @@ def create_coder_agent(
     approval_handler=None,
     telemetry=None,
     prompt_profile: str = "auto",
+    authenticator=None,
+    credentials: str | None = None,
 ):
     """Create the stateless policy-gated file modification worker."""
     agent = Agent(
@@ -81,6 +83,8 @@ def create_coder_agent(
         state=[],
         telemetry=telemetry,
         logger=QUIET_LOGGER,
+        authenticator=authenticator,
+        credentials=credentials,
         policy=CapabilityPolicy(
             {
                 "workspace.write": "require_approval",

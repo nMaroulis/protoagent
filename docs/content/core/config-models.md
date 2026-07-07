@@ -124,5 +124,6 @@ features ProtoAgent expects:
 | `state_ready` | describe, reset, and compact state APIs exist on Agent and AgentClient. |
 | `cancellation_ready` | task cancellation APIs exist. |
 | `logging_ready` | the shared no-output `QuietLogger` exists for embedded agent runs. |
+| `auth_ready` | `APIKeyAuth` plus agent and HTTP transport credential hooks exist. |
 
 `agent_ready` is true only when all expected runtime capabilities are ready.
