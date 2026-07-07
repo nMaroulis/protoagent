@@ -149,6 +149,7 @@ def validate_protolink() -> dict[str, Any]:
         from protolink.client import AgentClient
         from protolink.llms.base import LLM
         from protolink.llms.factory import create_llm  # noqa: F401
+        from protolink.logging import QuietLogger
 
         streaming_ready = hasattr(Agent, "handle_task_streaming") and hasattr(
             AgentClient, "send_task_streaming"
@@ -171,6 +172,7 @@ def validate_protolink() -> dict[str, Any]:
             and hasattr(AgentClient, "cancel_task")
             and TaskCancellationRequest is not None
         )
+        logging_ready = QuietLogger is not None
         agent_ready = all(
             (
                 streaming_ready,
@@ -180,6 +182,7 @@ def validate_protolink() -> dict[str, Any]:
                 run_report_ready,
                 state_ready,
                 cancellation_ready,
+                logging_ready,
             )
         )
 
@@ -194,6 +197,7 @@ def validate_protolink() -> dict[str, Any]:
             "run_report_ready": run_report_ready,
             "state_ready": state_ready,
             "cancellation_ready": cancellation_ready,
+            "logging_ready": logging_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
@@ -211,6 +215,7 @@ def validate_protolink() -> dict[str, Any]:
                 "run_report_ready": False,
                 "state_ready": False,
                 "cancellation_ready": False,
+                "logging_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -225,6 +230,7 @@ def validate_protolink() -> dict[str, Any]:
                 "run_report_ready": False,
                 "state_ready": False,
                 "cancellation_ready": False,
+                "logging_ready": False,
                 "error": str(exc),
             }
 

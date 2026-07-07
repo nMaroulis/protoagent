@@ -16,6 +16,7 @@ from protoagent_core.llm import (
     llm_model_profile,
     ollama_context_window,
     ollama_context_window_details,
+    validate_protolink,
 )
 
 
@@ -67,6 +68,15 @@ class OllamaContextTests(unittest.TestCase):
         self.assertIs(created, llm)
         self.assertEqual(llm.profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
         self.assertEqual(llm.profile.model, "gemma4:e4b")
+
+    def test_protolink_readiness_includes_shared_quiet_logger(self) -> None:
+        from protoagent_core.agents.common import QUIET_LOGGER
+
+        report = validate_protolink()
+
+        self.assertTrue(report["logging_ready"])
+        self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
+        self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")
 
     def test_context_window_honors_protoagent_environment_override(self) -> None:
         with patch.dict(os.environ, {"PROTOAGENT_OLLAMA_NUM_CTX": "16384"}, clear=False):

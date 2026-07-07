@@ -73,7 +73,7 @@ cd protoagent
 # Initialize the Brain
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.3"
+pip install "protolink[http,llms]>=0.6.4"
 pip install -e core
 
 ```

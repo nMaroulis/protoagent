@@ -12,7 +12,7 @@ status events, recursive stream serialization, history compaction, metrics,
 state operations, run reports, context manifests, and provider clients:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.3"
+pip install "protolink[http,llms]>=0.6.4"
 ```
 
 ## Layout

@@ -57,12 +57,12 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.3"
+pip install "protolink[http,llms]>=0.6.4"
 proto-cli check
 ```
 
 `check` should report streaming, metrics, compaction, context, state, reports,
-and cancellation as ready.
+cancellation, and logging as ready.
 
 ## Localhost Runtime Fails In A Sandbox
 

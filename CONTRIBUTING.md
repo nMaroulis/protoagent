@@ -12,7 +12,7 @@ Use Python 3.12 or newer and a current Rust toolchain.
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms]>=0.6.3" ruff ty
+python -m pip install "protolink[http,llms]>=0.6.4" ruff ty
 rustup component add rustfmt clippy
 cargo build --manifest-path cli/Cargo.toml
 ```
