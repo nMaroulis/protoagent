@@ -99,7 +99,7 @@ profiles only change the instructions given to each LLM-capable role.
 | `create_selected_llm()` | Create a ProtoLink LLM from the active provider/model. |
 | `conversation_storage(agent_name)` | SQLite storage in `~/.protoagent/conversations.sqlite`. Currently used for the stateful Architect namespace. |
 | `resolve_agent_url()` | Explicit URL, environment URL, or default local URL. |
-| `set_transport_timeout()` | Apply long timeouts across ProtoLink transports. |
+| `create_configured_transport()` | Build a concrete ProtoLink transport with the 0.6.5 limits, health, lifecycle, and metrics contract. |
 | `with_prompt_profile()` | Attach the resolved model-capability prompt overlay. |
 | `with_workspace_contract()` | Attach active project path and file-write rules to each system prompt. |
 

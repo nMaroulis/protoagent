@@ -5,15 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from protolink import Agent, CapabilityPolicy
+from protolink.transport import Transport
 from protolink.types import TransportType
 
 from .. import tools
 from ..context import build_context_pack as loom_context_pack
 from .common import (
     QUIET_LOGGER,
+    create_configured_transport,
     create_selected_llm,
     resolve_agent_url,
-    set_transport_timeout,
     with_prompt_profile,
     with_workspace_contract,
 )
@@ -39,13 +40,14 @@ def create_explorer_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: TransportType | None = "sse",
+    transport: TransportType | Transport | None = "sse",
     telemetry=None,
     prompt_profile: str = "auto",
     authenticator=None,
     credentials: str | None = None,
 ):
     """Create the stateless read-only repository worker."""
+    agent_url = resolve_agent_url("explorer", url)
     agent = Agent(
         card={
             "name": "explorer",
@@ -54,7 +56,7 @@ def create_explorer_agent(
                 "files, searches regexes, reports git status, and summarizes "
                 "precise workspace context for coding tasks."
             ),
-            "url": resolve_agent_url("explorer", url),
+            "url": agent_url,
             "capabilities": {
                 "delegation": False,
                 "tool_calling": True,
@@ -62,7 +64,12 @@ def create_explorer_agent(
             },
             "tags": ["protoagent", "context", "read-only", "coding"],
         },
-        transport=transport,
+        transport=create_configured_transport(
+            transport,
+            agent_url,
+            authenticator=authenticator,
+            credentials=credentials,
+        ),
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
@@ -90,7 +97,6 @@ def create_explorer_agent(
         ),
         verbosity=0,
     )
-    set_transport_timeout(agent.transport, 600)
 
     @agent.tool(
         name="read_file",

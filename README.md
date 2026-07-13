@@ -25,6 +25,7 @@ If **LangChain** is the massive, heavy enterprise framework for cloud models, `p
 * **Prompt Profiles:** The agent deck can run in `auto`, `small`, `medium`, `large`, or `api` prompt modes, so local 7B models get terse deterministic instructions while frontier API models get richer planning and verification behavior.
 * **Context Loom:** ProtoAgent builds a local, source-cited Context Pack from the active workspace before the agent deck runs. This gives smaller models a compact evidence map instead of a giant hidden repo dump.
 * **ProtoLink-native context control:** Every model is configured with a typed `LLMModelProfile`; live context events drive the Rust meter, while persistent Architect history is described, compacted, and reset through ProtoLink state APIs. Explorer and Coder stay task-local.
+* **ProtoLink-native transport operations:** Concrete 0.6.5 transports own payload/concurrency limits, health, lifecycle cleanup, and dependency-free metrics; the Rust CLI surfaces readiness and per-run counters without a parallel transport layer.
 * **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits lifecycle-aware task events plus typed action payloads.
 
 Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).
@@ -73,7 +74,7 @@ cd protoagent
 # Initialize the Brain
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.4"
+pip install "protolink[http,llms]>=0.6.5"
 pip install -e core
 
 ```

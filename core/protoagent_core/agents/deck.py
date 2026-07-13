@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from protolink.transport import Transport
 from protolink.types import TransportType
 
 from ..config import normalize_provider
@@ -20,7 +21,7 @@ def create_agent_deck(
     model: str | None = None,
     workspace: str | None = None,
     urls: dict[str, str] | None = None,
-    transport: TransportType = "sse",
+    transport: TransportType | Transport = "sse",
     approval_handler=None,
     telemetry=None,
     prompt_profile: str = "auto",

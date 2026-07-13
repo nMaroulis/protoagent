@@ -51,6 +51,8 @@ struct CoreResponse {
     #[serde(default)]
     run_report: Value,
     #[serde(default)]
+    transport_report: Value,
+    #[serde(default)]
     provider: String,
     #[serde(default)]
     model: String,
@@ -197,6 +199,8 @@ struct ProtolinkStatus {
     logging_ready: bool,
     #[serde(default)]
     auth_ready: bool,
+    #[serde(default)]
+    transport_ready: bool,
     #[serde(default)]
     error: String,
 }
@@ -551,6 +555,9 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     }
     if let Some(run_id) = response.run_context.get("run_id").and_then(Value::as_str) {
         summary.push(format!("Run ID      : {run_id}"));
+    }
+    if let Some(transport) = transport_metrics_summary(&response.transport_report) {
+        summary.push(format!("Transport   : {transport}"));
     }
     print_panel("RUN SUMMARY", &summary, PanelTone::Magenta);
 
@@ -1281,7 +1288,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1292,6 +1299,7 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.cancellation_ready),
                         readiness(report.protolink.logging_ready),
                         readiness(report.protolink.auth_ready),
+                        readiness(report.protolink.transport_ready),
                     )
                 } else if report.protolink.installed {
                     format!("installed, agent runtime blocked ({})", report.protolink.error)
@@ -1501,7 +1509,8 @@ fn is_prompt_profile_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod agent_command_tests {
-    use super::{is_prompt_profile_value, parse_eval_options};
+    use super::{is_prompt_profile_value, parse_eval_options, transport_metrics_summary};
+    use serde_json::json;
 
     #[test]
     fn recognizes_prompt_profile_values_and_aliases() {
@@ -1529,6 +1538,27 @@ mod agent_command_tests {
         assert_eq!(options.tasks, vec!["approval-denial-regression"]);
         assert_eq!(options.limit, Some(3));
         assert!(options.json);
+    }
+
+    #[test]
+    fn summarizes_protolink_transport_metrics() {
+        let report = json!({
+            "client": {
+                "transport": "sse",
+                "metrics": {
+                    "requests_started": 2,
+                    "streams_started": 1,
+                    "retries": 0,
+                    "bytes_sent": 128,
+                    "bytes_received": 512
+                }
+            }
+        });
+
+        assert_eq!(
+            transport_metrics_summary(&report).as_deref(),
+            Some("sse, 2 request(s), 1 stream(s), 0 retry attempt(s), 128/512 bytes sent/received")
+        );
     }
 }
 
@@ -2418,6 +2448,35 @@ pub(crate) fn response_actor(response: &CoreResponse) -> String {
     } else {
         title_case_agent(&response.responder)
     }
+}
+
+pub(crate) fn transport_metrics_summary(report: &Value) -> Option<String> {
+    let client = report.get("client")?;
+    let metrics = client.get("metrics")?;
+    let transport = client
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let requests = metrics
+        .get("requests_started")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let streams = metrics
+        .get("streams_started")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let retries = metrics.get("retries").and_then(Value::as_u64).unwrap_or(0);
+    let bytes_sent = metrics
+        .get("bytes_sent")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let bytes_received = metrics
+        .get("bytes_received")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some(format!(
+        "{transport}, {requests} request(s), {streams} stream(s), {retries} retry attempt(s), {bytes_sent}/{bytes_received} bytes sent/received"
+    ))
 }
 
 fn title_case_agent(value: &str) -> String {

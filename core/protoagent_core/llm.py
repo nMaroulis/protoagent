@@ -142,9 +142,13 @@ def validate_protolink() -> dict[str, Any]:
             HistoryCompactor,
             LLMModelProfile,
             RedactionPolicy,
+            RetryPolicy,
             RunRecorder,
             StateOperationResult,
             TaskCancellationRequest,
+            TransportConfig,
+            TransportLimits,
+            TransportMetricsSnapshot,
         )
         from protolink.agents import Agent
         from protolink.client import AgentClient
@@ -152,7 +156,9 @@ def validate_protolink() -> dict[str, Any]:
         from protolink.llms.factory import create_llm  # noqa: F401
         from protolink.logging import QuietLogger
         from protolink.security.auth import APIKeyAuth
+        from protolink.transport import Transport, TransportCapabilities, TransportRequestContext
         from protolink.transport.http_transport import HTTPTransport
+        from protolink.transport.runtime_transport import RuntimeTransport
 
         streaming_ready = hasattr(Agent, "handle_task_streaming") and hasattr(
             AgentClient, "send_task_streaming"
@@ -177,13 +183,29 @@ def validate_protolink() -> dict[str, Any]:
         )
         logging_ready = QuietLogger is not None
         agent_parameters = inspect.signature(Agent).parameters
-        transport_parameters = inspect.signature(HTTPTransport.__init__).parameters
+        http_transport_parameters = inspect.signature(HTTPTransport.__init__).parameters
+        runtime_transport_parameters = inspect.signature(RuntimeTransport.__init__).parameters
+        transport_ready = all(
+            (
+                TransportConfig is not None,
+                TransportLimits is not None,
+                RetryPolicy is not None,
+                TransportCapabilities is not None,
+                TransportMetricsSnapshot is not None,
+                TransportRequestContext is not None,
+                "config" in http_transport_parameters,
+                "config" in runtime_transport_parameters,
+                hasattr(Transport, "health"),
+                hasattr(Transport, "metrics"),
+                hasattr(TransportMetricsSnapshot, "to_dict"),
+            )
+        )
         auth_ready = (
             APIKeyAuth is not None
             and "authenticator" in agent_parameters
             and "credentials" in agent_parameters
-            and "authenticator" in transport_parameters
-            and "credentials" in transport_parameters
+            and "authenticator" in http_transport_parameters
+            and "credentials" in http_transport_parameters
         )
         agent_ready = all(
             (
@@ -196,6 +218,7 @@ def validate_protolink() -> dict[str, Any]:
                 cancellation_ready,
                 logging_ready,
                 auth_ready,
+                transport_ready,
             )
         )
 
@@ -212,6 +235,7 @@ def validate_protolink() -> dict[str, Any]:
             "cancellation_ready": cancellation_ready,
             "logging_ready": logging_ready,
             "auth_ready": auth_ready,
+            "transport_ready": transport_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
@@ -231,6 +255,7 @@ def validate_protolink() -> dict[str, Any]:
                 "cancellation_ready": False,
                 "logging_ready": False,
                 "auth_ready": False,
+                "transport_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -247,6 +272,7 @@ def validate_protolink() -> dict[str, Any]:
                 "cancellation_ready": False,
                 "logging_ready": False,
                 "auth_ready": False,
+                "transport_ready": False,
                 "error": str(exc),
             }
 

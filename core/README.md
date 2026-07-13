@@ -6,13 +6,14 @@ through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 Current package version: `0.1.0`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.6.3 or newer with the HTTP/SSE transport and LLM extras so
+Install ProtoLink 0.6.5 or newer with the HTTP/SSE transport and LLM extras so
 the embedded Agent runtime can import streaming agents, lifecycle-aware task
 status events, recursive stream serialization, history compaction, metrics,
-state operations, run reports, context manifests, and provider clients:
+state operations, run reports, context manifests, provider clients, and the
+shared transport limits/health/metrics contract:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.4"
+pip install "protolink[http,llms]>=0.6.5"
 ```
 
 ## Layout

@@ -9,7 +9,7 @@ description = "Shared Python runtime core for ProtoAgent frontends."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "protolink[http,llms]>=0.6.4",
+    "protolink[http,llms]>=0.6.5",
 ]
 
 [tool.setuptools.packages.find]

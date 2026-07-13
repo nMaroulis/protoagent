@@ -15,7 +15,7 @@ Install the Python and Rust tooling from the repository root:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms]>=0.6.4" ruff ty
+python -m pip install "protolink[http,llms]>=0.6.5" ruff ty
 python -m pip install -e core
 rustup component add rustfmt clippy
 cargo build --manifest-path cli/Cargo.toml

@@ -77,6 +77,7 @@ class OllamaContextTests(unittest.TestCase):
 
         self.assertTrue(report["logging_ready"])
         self.assertTrue(report["auth_ready"])
+        self.assertTrue(report["transport_ready"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")
         self.assertEqual(auth.authenticator.__class__.__module__, "protolink.security.auth")

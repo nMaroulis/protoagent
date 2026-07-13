@@ -97,6 +97,18 @@ PROTOAGENT_AGENT_TRANSPORT=http
 Aliases such as `jsonrpc`, `json-rpc`, `sse-jsonrpc`, and `sse-json-rpc` map to
 `sse`.
 
+ProtoAgent constructs concrete transports through ProtoLink's shared
+`TransportConfig` contract. ProtoLink therefore owns payload and concurrency
+limits, idempotency, lifecycle health, shutdown, capabilities, and operational
+metrics for the Registry, each agent, and the CLI-side `AgentClient`. The core
+does not maintain a parallel retry, health, or transport-metrics layer.
+
+ProtoLink 0.6.5 also accepts `grpc` when the separate `protolink[grpc]` extra is
+installed. It remains opt-in rather than adding `grpcio` to every local CLI
+installation. TLS and multi-interface agent metadata are likewise left to
+networked deployments because ProtoAgent's embedded mesh uses loopback
+HTTP/SSE by default.
+
 Streaming can be disabled independently:
 
 ```bash
@@ -139,6 +151,12 @@ summary rows to the Rust progress bridge, and extracts final content from:
 
 If streaming is unavailable for a transport, runtime falls back to one-shot
 `send_task()`.
+
+Each completed core response includes a `transport_report` containing the
+first-party configuration, capabilities, and `TransportMetricsSnapshot` for
+the Registry, client, Architect, Explorer, and Coder transports. The shell CLI
+summarizes client request, stream, retry, and byte counters; the TUI keeps the
+full report in response details.
 
 ## Run Reports
 

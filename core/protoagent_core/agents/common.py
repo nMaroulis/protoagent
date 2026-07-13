@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from protolink.logging import QuietLogger
+from protolink.transport import Transport, get_transport
+from protolink.types import TransportType
 
 from ..config import normalize_provider, provider_config
 from ..llm import create_llm_from_config
@@ -72,12 +74,30 @@ def resolve_agent_url(name: str, explicit_url: str | None = None) -> str:
     return os.getenv(env_name, DEFAULT_AGENT_URLS[name])
 
 
-def set_transport_timeout(transport, timeout: int) -> None:
-    """Apply a long request timeout across ProtoLink transport implementations."""
-    if hasattr(transport, "timeout"):
-        transport.timeout = timeout
-    elif hasattr(transport, "_timeout"):
-        transport._timeout = timeout
+def create_configured_transport(
+    transport: TransportType | Transport | None,
+    url: str,
+    *,
+    timeout: int = 600,
+    authenticator=None,
+    credentials: str | None = None,
+) -> Transport | None:
+    """Create a concrete ProtoLink transport with its shared 0.6.5 contract."""
+    if transport is None or isinstance(transport, Transport):
+        return transport
+
+    from protolink import TransportConfig
+
+    return get_transport(
+        transport,
+        url=url,
+        timeout=timeout,
+        authenticator=authenticator,
+        credentials=credentials,
+        config=TransportConfig(),
+        log_level="critical",
+        access_log=False,
+    )
 
 
 def with_workspace_contract(system_prompt: str, workspace: str | None, role: str) -> str:

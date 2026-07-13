@@ -26,9 +26,8 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `EXPLORER_AGENT_URL` | generated | Legacy Explorer URL override. |
 | `PROTOAGENT_CODER_URL` | generated | Coder URL override. |
 | `CODER_AGENT_URL` | generated | Legacy Coder URL override. |
-| `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response. |
+| `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |
 | `PROTOAGENT_STREAM` | `1` | Set to `0` to disable streaming consumption. |
-| `PROTOAGENT_DISCOVERY_DELAY` | `0.15` | Delay before Architect discovery after agents start. |
 | `PROTOAGENT_AGENT_TIMEOUT` | `600` | AgentClient timeout seconds. |
 
 ## Tracing And Progress

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from protolink import Agent, CapabilityPolicy
+from protolink.transport import Transport
 from protolink.types import TransportType
 
 from .common import (
     QUIET_LOGGER,
     conversation_storage,
+    create_configured_transport,
     create_selected_llm,
     resolve_agent_url,
-    set_transport_timeout,
     with_prompt_profile,
     with_workspace_contract,
 )
@@ -49,13 +50,14 @@ def create_architect_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: TransportType | None = "sse",
+    transport: TransportType | Transport | None = "sse",
     telemetry=None,
     prompt_profile: str = "auto",
     authenticator=None,
     credentials: str | None = None,
 ):
     """Create the stateful user-facing controller agent."""
+    agent_url = resolve_agent_url("architect", url)
     agent = Agent(
         card={
             "name": "architect",
@@ -65,7 +67,7 @@ def create_architect_agent(
                 "repository exploration to Explorer, and delegates diff synthesis "
                 "to Coder."
             ),
-            "url": resolve_agent_url("architect", url),
+            "url": agent_url,
             "capabilities": {
                 "delegation": True,
                 "tool_calling": True,
@@ -73,7 +75,12 @@ def create_architect_agent(
             },
             "tags": ["protoagent", "orchestrator", "coding"],
         },
-        transport=transport,
+        transport=create_configured_transport(
+            transport,
+            agent_url,
+            authenticator=authenticator,
+            credentials=credentials,
+        ),
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
@@ -105,6 +112,5 @@ def create_architect_agent(
         logger=QUIET_LOGGER,
         verbosity=0,
     )
-    set_transport_timeout(agent.transport, 600)
 
     return agent

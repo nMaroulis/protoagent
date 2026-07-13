@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from protolink import ActionDeniedError, RunAction, RunBudget, RunContext
@@ -21,6 +22,7 @@ from protoagent_core.runtime import (
     _preflight_cancellation_result,
     _run_budget,
     _send_task_streaming,
+    _transport_report,
 )
 from protoagent_core.runtime_bridge import RuntimeBridge
 
@@ -83,6 +85,18 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(agent.transport.authenticator, auth.authenticator)
             self.assertEqual(agent.transport.credentials, auth.credentials)
             self.assertIn("apiKey", agent.card.security_schemes)
+            self.assertTrue(agent.transport.config.collect_metrics)
+            self.assertTrue(agent.transport.capabilities.networked)
+            self.assertEqual(agent.transport.metrics.requests_started, 0)
+
+        report = _transport_report(
+            SimpleNamespace(transport=deck["architect"].transport),
+            deck,
+            deck["architect"].transport,
+        )
+        self.assertEqual(report["client"]["transport"], "http")
+        self.assertTrue(report["client"]["config"]["collect_metrics"])
+        self.assertEqual(report["agents"]["coder"]["metrics"]["requests_started"], 0)
 
     def test_runtime_client_transport_uses_shared_protolink_auth(self) -> None:
         auth = create_runtime_auth()
@@ -96,6 +110,8 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(transport.authenticator, auth.authenticator)
         self.assertEqual(transport.credentials, auth.credentials)
         self.assertIsNone(transport.security_context)
+        self.assertTrue(transport.config.collect_metrics)
+        self.assertTrue(transport.capabilities.streaming)
 
     def test_run_budget_uses_protolink_budget_carrier(self) -> None:
         with patch.dict(

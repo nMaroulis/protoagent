@@ -47,7 +47,7 @@ If you haven't already, set up the Python environment from the root of the repos
 cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.4" pydantic
+pip install "protolink[http,llms]>=0.6.5" pydantic
 pip install -e core
 
 ```

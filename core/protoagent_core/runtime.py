@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from .agents import create_agent_deck
-from .agents.common import AgentRuntimeAuth, create_runtime_auth
+from .agents.common import AgentRuntimeAuth, create_configured_transport, create_runtime_auth
 from .config import load_config, normalize_provider, provider_config
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
@@ -140,6 +140,7 @@ async def _run_agent_deck(
     auth = create_runtime_auth()
     emit("Agent auth: ProtoLink API-key auth enabled for the local mesh.")
     registry = None
+    registry_transport = None
     client = None
     deck: dict[str, Any] = {}
     started_agents: list[Any] = []
@@ -148,9 +149,18 @@ async def _run_agent_deck(
     try:
         if canceled := canceled_before_execution():
             return canceled
-        registry = Registry(url=urls["registry"], transport="http", verbosity=0)
+        registry_transport = create_configured_transport(
+            "http",
+            urls["registry"],
+            timeout=_runtime_timeout(),
+        )
+        if registry_transport is None:  # pragma: no cover - concrete name cannot return None
+            raise RuntimeError("ProtoLink could not construct the Registry transport")
+        registry = Registry(transport=registry_transport, verbosity=0)
         registry.start(background=True)
-        emit("Registry started.")
+        if not registry_transport.health().get("ready"):
+            raise RuntimeError("ProtoLink Registry transport did not become ready")
+        emit("Registry started with ProtoLink transport limits and metrics enabled.")
         if canceled := canceled_before_execution():
             return canceled
 
@@ -186,11 +196,13 @@ async def _run_agent_deck(
         for name in ("explorer", "coder", "architect"):
             deck[name].start(background=True)
             started_agents.append(deck[name])
-            emit(f"{name.title()} registered at {deck[name].card.url}.")
+            transport_health = deck[name].transport.health()
+            if not transport_health.get("ready"):
+                raise RuntimeError(f"ProtoLink {name} transport did not become ready")
+            emit(f"{name.title()} registered at {deck[name].card.url}; transport ready.")
             if canceled := canceled_before_execution():
                 return canceled
 
-        await asyncio.sleep(float(os.getenv("PROTOAGENT_DISCOVERY_DELAY", "0.15")))
         discovered = await deck["architect"].discover_agents()
         names = ", ".join(sorted(card.name for card in discovered)) or "none"
         emit(f"Architect discovery sees: {names}.")
@@ -285,6 +297,15 @@ async def _run_agent_deck(
         elif completion.outcome == "satisfied":
             emit("Run contract satisfied by Coder delegation or write artifact.")
 
+        transport_report = _transport_report(client, deck, registry_transport)
+        client_metrics = transport_report.get("client", {}).get("metrics", {})
+        emit(
+            "ProtoLink transport metrics: "
+            f"{client_metrics.get('requests_started', 0)} request(s), "
+            f"{client_metrics.get('streams_started', 0)} stream(s), "
+            f"{client_metrics.get('retries', 0)} retry attempt(s)."
+        )
+
         return {
             "provider": provider,
             "model": model,
@@ -302,6 +323,7 @@ async def _run_agent_deck(
             "prompt_profile": prompt_profile,
             "run_contract": contract.to_dict(),
             "completion_validation": completion.to_dict(),
+            "transport_report": transport_report,
         }
     finally:
         if cancellation_monitor is not None:
@@ -309,7 +331,7 @@ async def _run_agent_deck(
             with suppress(asyncio.CancelledError):
                 await cancellation_monitor
         if client is not None:
-            transport = getattr(client, "_transport", None)
+            transport = client.transport
             if transport is not None and hasattr(transport, "stop"):
                 with suppress(Exception):
                     await transport.stop()
@@ -475,15 +497,49 @@ def _authenticated_client_transport(
     timeout: int,
 ):
     """Create a ProtoLink client transport with the deck's runtime auth."""
-    from protolink.transport import get_transport
-
-    return get_transport(
-        transport=transport,
-        url=url,
+    configured = create_configured_transport(
+        transport,
+        url,
         timeout=timeout,
         authenticator=auth.authenticator,
         credentials=auth.credentials,
     )
+    if configured is None:  # pragma: no cover - concrete name cannot return None
+        raise RuntimeError(f"ProtoLink could not construct the {transport} client transport")
+    return configured
+
+
+def _transport_report(client, deck: dict[str, Any], registry_transport) -> dict[str, Any]:
+    """Return ProtoLink's structured transport configuration and live counters."""
+    return {
+        "registry": _transport_snapshot(registry_transport),
+        "client": _transport_snapshot(client.transport if client is not None else None),
+        "agents": {
+            name: _transport_snapshot(getattr(agent, "transport", None))
+            for name, agent in deck.items()
+        },
+    }
+
+
+def _transport_snapshot(transport) -> dict[str, Any]:
+    """Serialize one first-party ProtoLink transport diagnostics snapshot."""
+    if transport is None:
+        return {}
+    capabilities = transport.capabilities
+    config = transport.config
+    return {
+        "transport": str(getattr(transport, "transport_type", "unknown")),
+        "url": str(getattr(transport, "url", "")),
+        "capabilities": {
+            "networked": bool(capabilities.networked),
+            "streaming": bool(capabilities.streaming),
+            "tls": bool(capabilities.tls),
+            "bidirectional": bool(capabilities.bidirectional),
+            "persistent_connections": bool(capabilities.persistent_connections),
+        },
+        "config": config.to_dict(),
+        "metrics": transport.metrics.to_dict(),
+    }
 
 
 async def _send_task_once(client, agent_url: str, task) -> Any:

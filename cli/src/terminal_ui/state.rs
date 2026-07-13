@@ -150,6 +150,9 @@ impl TerminalApp {
         if !response.warning.is_empty() {
             message.meta.push(format!("warning {}", response.warning));
         }
+        if let Some(transport) = crate::transport_metrics_summary(&response.transport_report) {
+            message.meta.push(transport);
+        }
         if !response.thought_process.is_empty() {
             message.details.push(("Core notes".to_string(), response.thought_process.clone()));
         }
@@ -172,6 +175,11 @@ impl TerminalApp {
         if !response.run_report.is_null() {
             if let Ok(report) = serde_json::to_string_pretty(&response.run_report) {
                 message.details.push(("RunReport".to_string(), report));
+            }
+        }
+        if !response.transport_report.is_null() {
+            if let Ok(report) = serde_json::to_string_pretty(&response.transport_report) {
+                message.details.push(("ProtoLink transports".to_string(), report));
             }
         }
         if !response.diff.trim().is_empty() {
@@ -425,7 +433,7 @@ fn provider_chip(provider: &crate::ModelProvider) -> String {
 fn doctor_summary(report: &DoctorReport) -> String {
     let protolink = if report.protolink.installed && report.protolink.agent_ready {
         format!(
-            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}",
+            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}",
             empty_as_unknown(&report.protolink.version),
             crate::readiness(report.protolink.streaming_ready),
             crate::readiness(report.protolink.metrics_ready),
@@ -436,6 +444,7 @@ fn doctor_summary(report: &DoctorReport) -> String {
             crate::readiness(report.protolink.cancellation_ready),
             crate::readiness(report.protolink.logging_ready),
             crate::readiness(report.protolink.auth_ready),
+            crate::readiness(report.protolink.transport_ready),
         )
     } else if report.protolink.installed {
         format!("ProtoLink blocked ({})", report.protolink.error)

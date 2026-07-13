@@ -57,7 +57,7 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.4"
+pip install "protolink[http,llms]>=0.6.5"
 proto-cli check
 ```
 

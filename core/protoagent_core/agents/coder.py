@@ -6,14 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from protolink import Agent, Artifact, CapabilityPolicy, Part, RunAction, RunContext
+from protolink.transport import Transport
 from protolink.types import TransportType
 
 from .. import tools
 from .common import (
     QUIET_LOGGER,
+    create_configured_transport,
     create_selected_llm,
     resolve_agent_url,
-    set_transport_timeout,
     with_prompt_profile,
     with_workspace_contract,
 )
@@ -42,7 +43,7 @@ def create_coder_agent(
     model: str | None = None,
     workspace: str | None = None,
     url: str | None = None,
-    transport: TransportType | None = "sse",
+    transport: TransportType | Transport | None = "sse",
     approval_handler=None,
     telemetry=None,
     prompt_profile: str = "auto",
@@ -50,6 +51,7 @@ def create_coder_agent(
     credentials: str | None = None,
 ):
     """Create the stateless policy-gated file modification worker."""
+    agent_url = resolve_agent_url("coder", url)
     agent = Agent(
         card={
             "name": "coder",
@@ -57,7 +59,7 @@ def create_coder_agent(
                 "Stateless file modification worker. Previews writes as "
                 "unified diffs and executes them only after runtime authorization."
             ),
-            "url": resolve_agent_url("coder", url),
+            "url": agent_url,
             "capabilities": {
                 "delegation": False,
                 "tool_calling": True,
@@ -65,7 +67,12 @@ def create_coder_agent(
             },
             "tags": ["protoagent", "diffs", "coding"],
         },
-        transport=transport,
+        transport=create_configured_transport(
+            transport,
+            agent_url,
+            authenticator=authenticator,
+            credentials=credentials,
+        ),
         registry=registry,
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
@@ -94,7 +101,6 @@ def create_coder_agent(
         approval_handler=approval_handler,
         verbosity=0,
     )
-    set_transport_timeout(agent.transport, 600)
 
     @agent.tool(
         name="generate_unified_diff",
