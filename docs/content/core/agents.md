@@ -1,6 +1,6 @@
 ---
 title: Agent Deck
-description: Runtime kernel, RunContract, Architect, stateless workers, Guide, policies, tools, and memory boundaries.
+description: Runtime kernel, Architect, narrow workers, optional Scout, Guide, policies, tools, and memory boundaries.
 ---
 
 The active coding mesh exposes three LLM-capable roles:
@@ -9,16 +9,17 @@ The active coding mesh exposes three LLM-capable roles:
 2. Explorer
 3. Coder
 
-They no longer have the same state model. Architect is the stateful controller.
-Explorer and Coder are stateless, task-local workers. Guide is separate and
-only answers usage help questions.
+Architect is the stateful controller. Explorer and Coder are stateless,
+task-local workers. A fourth role, Scout, is a tool-only web-research agent that
+is disabled by default. Guide is separate and only answers usage help
+questions.
 
 ## Runtime Shape
 
 The user-facing architecture is:
 
 ```text
-Context Loom -> RunContract -> Architect -> Explorer/Coder -> Policy Gate -> Completion Guard
+Context Loom -> RunContract -> Architect -> Explorer/Coder/(optional Scout) -> Policy Gate -> Completion Guard
 ```
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
@@ -30,12 +31,13 @@ blocker.
 
 ## Deck Assembly
 
-`agents/deck.py` creates the deck:
+`agents/deck.py` creates the default deck and conditionally inserts Scout:
 
 ```python
 {
     "explorer": create_explorer_agent(...),
     "coder": create_coder_agent(...),
+    **({"scout": create_scout_agent(...)} if scout_enabled else {}),
     "architect": create_architect_agent(...),
 }
 ```
@@ -43,12 +45,15 @@ blocker.
 Every LLM-capable role receives a separate ProtoLink LLM instance configured
 with the selected provider and model. Architect receives durable conversation
 storage. Explorer and Coder receive task-local in-memory state so their worker
-calls do not accumulate long-term history.
+calls do not accumulate long-term history. Scout has `llm=None`, no durable
+storage, no enabled conversation state, and `expose_chat=False`; Architect
+discovers the registered agent and calls its tools rather than asking Scout to
+generate prose.
 
 The embedded deck also receives a per-run ProtoLink `APIKeyAuth` bundle. The
 runtime generates the credential automatically, passes the authenticator and
-credential to Architect, Explorer, Coder, and uses the same credential for the
-CLI-side `AgentClient`. Users do not need to configure a token for local runs.
+credential to every enabled agent, and uses the same credential for the
+CLI-side `AgentClient`. Users do not need to configure this mesh token.
 
 ## Prompt Profiles
 
@@ -99,7 +104,7 @@ profiles only change the instructions given to each LLM-capable role.
 | `create_selected_llm()` | Create a ProtoLink LLM from the active provider/model. |
 | `conversation_storage(agent_name)` | SQLite storage in `~/.protoagent/conversations.sqlite`. Currently used for the stateful Architect namespace. |
 | `resolve_agent_url()` | Explicit URL, environment URL, or default local URL. |
-| `create_configured_transport()` | Build a concrete ProtoLink transport with the 0.6.5 limits, health, lifecycle, and metrics contract. |
+| `create_configured_transport()` | Build a concrete ProtoLink transport with shared limits, health, lifecycle, and metrics contracts. |
 | `with_prompt_profile()` | Attach the resolved model-capability prompt overlay. |
 | `with_workspace_contract()` | Attach active project path and file-write rules to each system prompt. |
 
@@ -131,7 +136,7 @@ evidence, and acceptance criteria for the current task.
 
 Source: `core/protoagent_core/agents/explorer.py`
 
-Explorer is a stateless read-only worker. It builds context maps, reads files,
+Explorer is a stateless read-only worker. It builds Context Packs, reads files,
 searches, checks git status, and can request a focused Context Loom pack. It
 does not persist conversation history between tasks.
 
@@ -180,6 +185,62 @@ The write helper only executes after ProtoLink receives an approving
 artifacts, or an explicit blocker, runtime completion validation returns the run
 as `incomplete`.
 
+## Scout
+
+Source: `core/protoagent_core/agents/scout.py`
+
+Scout is an optional, stateless, tool-only network worker. It isolates external
+research from repository exploration and mutation. The default config is:
+
+```json
+{
+  "optional_agents": {
+    "scout": {
+      "enabled": false
+    }
+  }
+}
+```
+
+Toggle it from the shell or TUI:
+
+```bash
+proto-cli agents scout on
+proto-cli agents scout off
+```
+
+```text
+/agents scout on
+/agents scout off
+```
+
+Changes apply to the next run. Disabled means the factory is not called, the
+agent is not started, and Architect cannot discover it.
+
+Scout exposes fresh instances of the ProtoLink 0.6.6 built-ins:
+
+| Tool | Capability | Behavior |
+| --- | --- | --- |
+| `web_search(query, engine=..., freshness=...)` | `network.read` | Bounded normalized results from Brave, DuckDuckGo, or English Wikipedia. |
+| `fetch_url(url)` | `network.read` | Fetch bounded text from public HTTP(S) URLs on standard ports. |
+
+Brave is the default engine and reads `BRAVE_SEARCH_API_KEY` only when invoked.
+DuckDuckGo is keyless best-effort search. English Wikipedia is keyless and
+supports only `freshness="any"`. Registering Scout does not itself make a
+network request.
+
+`fetch_url` rejects private/loopback targets, unsafe redirects, HTTPS
+downgrades, binary bodies, and oversized responses. Tool results are marked
+`untrusted_content`; they are evidence, never instructions or authorization.
+Scout has no workspace capability.
+
+Policy:
+
+| Capability | Effect |
+| --- | --- |
+| `network.read` | allow |
+| default | deny |
+
 ## Guide
 
 Source: `core/protoagent_core/help_agent.py`
@@ -207,7 +268,9 @@ The CLI doctor and fallback paths use `agent_manifest()`:
 | Architect | stateful controller | stateful | `protoagent-architect` | none |
 | Explorer | stateless context worker | stateless | task-local | Context/read/search/git tools |
 | Coder | stateless write worker | stateless | task-local | diff/create tools |
+| Scout | optional tool-only web worker | stateless | none | `web_search`, `fetch_url` |
 
 The manifest also reports the runtime kernel, stateful pieces, stateless
-workers, and RunContract rule used by `proto-cli agents` and `/agents`. Update
-this manifest when the visible topology changes.
+workers, `enabled`/`optional` state, and RunContract rule used by
+`proto-cli agents` and `/agents`. Update this manifest when the visible topology
+changes.

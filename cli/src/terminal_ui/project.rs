@@ -6,11 +6,14 @@ use std::io::{stdout, Write};
 use std::path::Path;
 
 use super::input::InputEditor;
-use super::modal::{draw_input_modal, draw_modal, draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
+use super::modal::{
+    draw_input_modal, draw_modal, draw_modal_backdrop, draw_modal_shadow, draw_modal_sides,
+    modal_title,
+};
 use super::state::{PanelView, Role, TerminalApp};
 use super::theme::{
-    black, clip_plain, cyan, modal_bg, modal_border, modal_list_bg, modal_selection_bg, muted, size, text,
-    write_at, yellow,
+    black, clip_plain, cyan, modal_bg, modal_border, modal_list_bg, modal_selection_bg, muted,
+    size, text, write_at, yellow,
 };
 use super::TerminalSurface;
 
@@ -24,7 +27,11 @@ pub(super) fn handle_project_command(
         crate::clear_active_project()?;
         app.panel = PanelView::Project;
         app.refresh(None);
-        app.push(Role::Command, command, "Project cleared. Choose a folder before running tasks.");
+        app.push(
+            Role::Command,
+            command,
+            "Project cleared. Choose a folder before running tasks.",
+        );
         return Ok(());
     }
 
@@ -62,13 +69,20 @@ pub(super) fn handle_project_command(
         Err(err) => {
             app.panel = PanelView::Project;
             app.refresh(None);
-            app.push(Role::Error, command, &format!("Could not open project: {err}"));
+            app.push(
+                Role::Error,
+                command,
+                &format!("Could not open project: {err}"),
+            );
         }
     }
     Ok(())
 }
 
-pub(super) fn pick_project_file(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<Option<String>> {
+pub(super) fn pick_project_file(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+) -> Result<Option<String>> {
     let Some(root) = crate::active_project_dir() else {
         return Ok(None);
     };
@@ -159,7 +173,9 @@ fn project_prompt(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<O
             KeyCode::Enter => return Ok(Some(editor.line())),
             KeyCode::Esc => return Ok(None),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                editor.insert(ch)
+            }
             KeyCode::Backspace => editor.backspace(),
             KeyCode::Delete => editor.delete(),
             KeyCode::Left => editor.move_left(),
@@ -195,7 +211,9 @@ fn collect_project_files(root: &Path, limit: usize) -> Result<Vec<String>> {
         entries.sort_by(|a, b| {
             let a_dir = a.is_dir();
             let b_dir = b.is_dir();
-            b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+            b_dir
+                .cmp(&a_dir)
+                .then_with(|| a.file_name().cmp(&b.file_name()))
         });
 
         for path in entries {
@@ -228,12 +246,24 @@ fn collect_project_files(root: &Path, limit: usize) -> Result<Vec<String>> {
 fn ignored_picker_name(name: &str) -> bool {
     matches!(
         name,
-        ".git" | ".hg" | ".svn" | ".venv" | "__pycache__" | "node_modules" | "target" | "dist" | "build"
+        ".git"
+            | ".hg"
+            | ".svn"
+            | ".venv"
+            | "__pycache__"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
     )
 }
 
 fn looks_binary_for_picker(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|ext| ext.to_str()).map(str::to_lowercase) else {
+    let Some(ext) = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_lowercase)
+    else {
         return false;
     };
     matches!(
@@ -255,10 +285,21 @@ fn looks_binary_for_picker(path: &Path) -> bool {
     )
 }
 
-fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected: usize) -> Result<()> {
+fn draw_file_picker_modal(
+    root: &Path,
+    filter: &str,
+    files: &[String],
+    selected: usize,
+) -> Result<()> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(4).saturating_div(5).clamp(50, width.saturating_sub(4));
-    let modal_height = height.saturating_mul(2).saturating_div(3).clamp(10, height.saturating_sub(4));
+    let modal_width = width
+        .saturating_mul(4)
+        .saturating_div(5)
+        .clamp(50, width.saturating_sub(4));
+    let modal_height = height
+        .saturating_mul(2)
+        .saturating_div(3)
+        .clamp(10, height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let list_rows = modal_height.saturating_sub(7) as usize;
@@ -267,8 +308,26 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
 
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title("Tag File With @", modal_width), black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &modal_title("Tag File With @", modal_width),
+        black(),
+        modal_border(),
+        true,
+    )?;
     write_at(
         &mut out,
         x,
@@ -284,7 +343,14 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         x,
         y + 3,
         modal_width,
-        &format!(" Filter : {}", if filter.is_empty() { "(type to filter)" } else { filter }),
+        &format!(
+            " Filter : {}",
+            if filter.is_empty() {
+                "(type to filter)"
+            } else {
+                filter
+            }
+        ),
         cyan(),
         modal_bg(),
         false,
@@ -309,7 +375,16 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
         let file_index = start + row_index;
         let row_y = y + 5 + row_index as u16;
         let Some(path) = files.get(file_index) else {
-            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
+            write_at(
+                &mut out,
+                x + 1,
+                row_y,
+                modal_width.saturating_sub(2),
+                "",
+                muted(),
+                modal_list_bg(),
+                false,
+            )?;
             continue;
         };
         let active = file_index == selected;
@@ -321,7 +396,11 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
             modal_width.saturating_sub(2),
             &format!("{marker} {}", clip_plain(path, inner.saturating_sub(2))),
             if active { black() } else { text() },
-            if active { modal_selection_bg() } else { modal_list_bg() },
+            if active {
+                modal_selection_bg()
+            } else {
+                modal_list_bg()
+            },
             active,
         )?;
     }
@@ -330,7 +409,16 @@ fn draw_file_picker_modal(root: &Path, filter: &str, files: &[String], selected:
     } else {
         format!(" {} match(es)", files.len())
     };
-    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y + modal_height - 1,
+        modal_width,
+        &footer,
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())

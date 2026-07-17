@@ -327,7 +327,13 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
         }
         "action.completed" => {
             if llm_type == "agent_call_result" {
-                return Some(item("RETURN", &target, &actor, "returned delegated result", ""));
+                return Some(item(
+                    "RETURN",
+                    &target,
+                    &actor,
+                    "returned delegated result",
+                    "",
+                ));
             }
             Some(item(
                 "TOOL",
@@ -345,7 +351,13 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
             summary,
         )),
         "action.failed" => Some(item("ERROR", &actor, "", "runtime action failed", summary)),
-        "context.prepared" => Some(item("CONTEXT", &actor, "Model", "prepared model context", summary)),
+        "context.prepared" => Some(item(
+            "CONTEXT",
+            &actor,
+            "Model",
+            "prepared model context",
+            summary,
+        )),
         "budget.warning" => Some(item("BUDGET", &actor, "Policy", "budget warning", summary)),
         "budget.exceeded" => Some(item("BUDGET", &actor, "Policy", "budget exceeded", summary)),
         "task.status" => Some(item(
@@ -355,7 +367,13 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
             "task state changed",
             summary,
         )),
-        "task.progress" => Some(item("TASK", "ProtoLink", &actor, "progress update", summary)),
+        "task.progress" => Some(item(
+            "TASK",
+            "ProtoLink",
+            &actor,
+            "progress update",
+            summary,
+        )),
         "task.error" => Some(item("ERROR", &actor, "", "task failed", summary)),
         "llm.stream" => parse_llm_run_event(&actor, &llm_type, payload, summary),
         _ => None,
@@ -365,7 +383,11 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
 fn is_trace_noise(event: &Value) -> bool {
     value_string(event, &["type"]) == "context.prepared"
         || matches!(
-            value_string(event.get("payload").unwrap_or(&Value::Null), &["llm_event_type"]).as_str(),
+            value_string(
+                event.get("payload").unwrap_or(&Value::Null),
+                &["llm_event_type"]
+            )
+            .as_str(),
             "context_prepared" | "llm_chunk" | "llm_context" | "llm_call_metrics"
         )
 }
@@ -451,15 +473,27 @@ trait EmptyString {
 
 impl EmptyString for String {
     fn if_empty(self, fallback: String) -> String {
-        if self.is_empty() { fallback } else { self }
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
     }
 
     fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
-        if self.is_empty() { fallback() } else { self }
+        if self.is_empty() {
+            fallback()
+        } else {
+            self
+        }
     }
 
     fn if_empty_else(self, fallback: impl FnOnce() -> String) -> String {
-        if self.is_empty() { fallback() } else { self }
+        if self.is_empty() {
+            fallback()
+        } else {
+            self
+        }
     }
 }
 
@@ -514,7 +548,8 @@ fn event_target(event: &Value) -> String {
 }
 
 fn event_parent_id(event: &Value) -> String {
-    value_string(event, &["parent_span_id"]).if_empty_else(|| value_string(event, &["parent_action_id"]))
+    value_string(event, &["parent_span_id"])
+        .if_empty_else(|| value_string(event, &["parent_action_id"]))
 }
 
 fn event_causal_ids(event: &Value) -> Vec<String> {
@@ -548,7 +583,11 @@ fn push_route_part(route: &mut Vec<String>, value: String) {
 
 fn nonempty(value: String) -> Option<String> {
     let value = value.trim().to_string();
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 fn value_string(value: &Value, path: &[&str]) -> String {
@@ -576,13 +615,9 @@ fn parse_llm_run_event(
             value_string(payload, &["action"]).if_empty(summary),
         )),
         "llm_final" => Some(item("DONE", actor, "CLI", "returned final answer", "")),
-        "llm_parse_error" | "llm_retry" => Some(item(
-            "MODEL",
-            actor,
-            "",
-            "retrying model action",
-            summary,
-        )),
+        "llm_parse_error" | "llm_retry" => {
+            Some(item("MODEL", actor, "", "retrying model action", summary))
+        }
         "llm_error" => Some(item("ERROR", actor, "", "model call failed", summary)),
         "context_prepared" | "llm_context" | "llm_call_metrics" | "llm_chunk" => None,
         _ => None,
@@ -602,20 +637,42 @@ fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
             "Architect",
             "Registry",
             "resolved available agents",
-            clean_sentence_tail(event.strip_prefix("Architect discovery sees:").unwrap_or("")),
+            clean_sentence_tail(
+                event
+                    .strip_prefix("Architect discovery sees:")
+                    .unwrap_or(""),
+            ),
         ));
     }
 
     if event.starts_with("Architect received the request") {
-        return Some(item("MODEL", "Architect", "", "loaded provider configuration", ""));
+        return Some(item(
+            "MODEL",
+            "Architect",
+            "",
+            "loaded provider configuration",
+            "",
+        ));
     }
 
     if event.starts_with("Explorer built a read-only context map") {
-        return Some(item("CONTEXT", "Explorer", "Workspace", "mapped project context", ""));
+        return Some(item(
+            "CONTEXT",
+            "Explorer",
+            "Workspace",
+            "mapped project context",
+            "",
+        ));
     }
 
     if event.starts_with("Coder tools are registered") {
-        return Some(item("RUNTIME", "Coder", "Approval", "registered approval-safe tools", ""));
+        return Some(item(
+            "RUNTIME",
+            "Coder",
+            "Approval",
+            "registered approval-safe tools",
+            "",
+        ));
     }
 
     if event.starts_with("Architect is processing") {
@@ -629,7 +686,10 @@ fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
         return Some(item("DONE", &actor, "CLI", "returned final answer", ""));
     }
 
-    if event.contains("Approval required") || event.starts_with("Approval ") || event.contains(": Approval ") {
+    if event.contains("Approval required")
+        || event.starts_with("Approval ")
+        || event.contains(": Approval ")
+    {
         let actor = agent_prefix(event).unwrap_or_else(|| "Coder".to_string());
         let action = if event.to_ascii_lowercase().contains("approved") {
             "approved runtime action"
@@ -643,7 +703,13 @@ fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
 
     if event.contains("Policy decision:") {
         let actor = agent_prefix(event).unwrap_or_else(|| "Runtime".to_string());
-        return Some(item("POLICY", &actor, "Policy", "evaluated runtime action", clean_sentence_tail(event)));
+        return Some(item(
+            "POLICY",
+            &actor,
+            "Policy",
+            "evaluated runtime action",
+            clean_sentence_tail(event),
+        ));
     }
 
     if let Some(actor) = agent_prefix(event) {
@@ -725,12 +791,24 @@ fn parse_timeline_event(event: &str) -> Option<TimelineItem> {
     }
     if event.contains("registered at") {
         let actor = event.split_whitespace().next().unwrap_or("Agent");
-        return Some(item("RUNTIME", &display_agent(actor), "Registry", "registered", ""));
+        return Some(item(
+            "RUNTIME",
+            &display_agent(actor),
+            "Registry",
+            "registered",
+            "",
+        ));
     }
     None
 }
 
-fn item(kind: &str, actor: &str, target: &str, action: &str, detail: impl Into<String>) -> TimelineItem {
+fn item(
+    kind: &str,
+    actor: &str,
+    target: &str,
+    action: &str,
+    detail: impl Into<String>,
+) -> TimelineItem {
     TimelineItem {
         kind: kind.to_string(),
         actor: display_agent(actor),
@@ -805,7 +883,13 @@ fn text_after<'a>(value: &'a str, marker: &str) -> Option<&'a str> {
 }
 
 fn clean_agent_target(value: &str) -> String {
-    display_agent(value.split(" (").next().unwrap_or(value).trim_end_matches('.'))
+    display_agent(
+        value
+            .split(" (")
+            .next()
+            .unwrap_or(value)
+            .trim_end_matches('.'),
+    )
 }
 
 fn clean_parenthetical(value: &str) -> String {
@@ -862,21 +946,15 @@ mod tests {
         ];
 
         let items = build_timeline(&events);
-        assert!(
-            items
-                .iter()
-                .any(|item| item.actor == "CLI" && item.target == "Architect")
-        );
-        assert!(
-            items
-                .iter()
-                .any(|item| item.actor == "Architect" && item.target == "Explorer")
-        );
-        assert!(
-            items
-                .iter()
-                .any(|item| item.actor == "Architect" && item.target == "Coder")
-        );
+        assert!(items
+            .iter()
+            .any(|item| item.actor == "CLI" && item.target == "Architect"));
+        assert!(items
+            .iter()
+            .any(|item| item.actor == "Architect" && item.target == "Explorer"));
+        assert!(items
+            .iter()
+            .any(|item| item.actor == "Architect" && item.target == "Coder"));
         assert!(format_timeline(&events, 10).contains("Architect -> Coder"));
     }
 
@@ -941,21 +1019,16 @@ mod tests {
         ];
 
         let items = build_timeline_from_run_events(&events, &[]);
-        assert!(
-            items
-                .iter()
-                .any(|item| item.actor == "Architect" && item.target == "Explorer")
-        );
-        assert!(
-            items
-                .iter()
-                .any(|item| item.actor == "Explorer" && item.target == "Read_file")
-        );
+        assert!(items
+            .iter()
+            .any(|item| item.actor == "Architect" && item.target == "Explorer"));
+        assert!(items
+            .iter()
+            .any(|item| item.actor == "Explorer" && item.target == "Read_file"));
         assert!(items.iter().any(|item| item.kind == "CONTEXT"));
         assert!(items.iter().any(|item| item.kind == "BUDGET"));
         assert!(items.iter().any(|item| item.kind == "APPROVAL"));
-        assert!(format_timeline_from_run_events(&events, &[], 10)
-            .contains("returned final answer"));
+        assert!(format_timeline_from_run_events(&events, &[], 10).contains("returned final answer"));
     }
 
     #[test]

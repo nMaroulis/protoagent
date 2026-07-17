@@ -12,6 +12,7 @@ pages that should usually move with them.
 | --- | --- |
 | `cli/src/main.rs` | `CLI / Commands`, `CLI / Models And Config`, `CLI / Context Loom In The CLI`, `Reference / Environment` |
 | `cli/Cargo.toml` | `Reference / Versioning`, `CLI / Command Reference` |
+| `cli/Cargo.lock` | `Reference / Versioning` when release dependency resolution changes. |
 | `cli/src/terminal_ui.rs` | `CLI / Commands`, `CLI / Fullscreen TUI`, `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/terminal_ui/render.rs` | `CLI / Fullscreen TUI` |
 | `cli/src/terminal_ui/project.rs` | `CLI / Projects And Sessions`, `CLI / Fullscreen TUI` |
@@ -35,12 +36,13 @@ pages that should usually move with them.
 | `core/protoagent_core/run_contracts.py` | `Core / Runtime`, `Core / Agent Deck`, `Core / Quality Evals` |
 | `core/protoagent_core/llm.py` | `Core / Config And Models`, `Reference / Environment` |
 | `core/protoagent_core/models.py` | `Core / Config And Models`, `CLI / Models And Config` |
-| `core/protoagent_core/config.py` | `Core / Config And Models`, `Getting Started / Provider Setup` |
+| `core/protoagent_core/config.py` | `Core / Config And Models`, `CLI / Models And Config`, `Getting Started / Provider Setup` |
 | `core/protoagent_core/prompt_profiles.py` | `Core / Agent Deck`, `CLI / Commands`, `CLI / Models And Config` |
 | `core/protoagent_core/quality_eval.py` | `Core / Quality Evals`, `CLI / Commands`, `Reference / Verification` |
 | `core/protoagent_core/tools.py` | `Core / Safety And Tools` |
 | `core/protoagent_core/help_agent.py` | `Core / Agent Deck`, `CLI / Commands` |
-| `core/protoagent_core/agents/*.py` | `Core / Agent Deck`, `Core / Safety And Tools` |
+| `core/protoagent_core/agents/scout.py` | `Core / Agent Deck`, `Core / Safety And Tools`, `Reference / Environment`, `CLI / Commands` |
+| Other `core/protoagent_core/agents/*.py` | `Core / Agent Deck`, `Core / Safety And Tools` |
 | `core/protoagent_core/context/*.py` | `Core / Context Loom Internals`, `CLI / Context Loom In The CLI` |
 
 ## Tooling And Contribution Workflow
@@ -49,6 +51,8 @@ pages that should usually move with them.
 | --- | --- |
 | `pyproject.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
 | `VERSIONING.md` | `Reference / Versioning` |
+| `CHANGELOG.md` | Link from README/docs navigation and update for each user-visible release. |
+| `LICENSE` | Package metadata and README license links. |
 | `rustfmt.toml` | `Contributing / Development Workflow`, `Reference / Verification` |
 | `CONTRIBUTING.md` | `Contributing / Development Workflow` |
 | `.github/workflows/python-quality.yml` | `Contributing / Development Workflow`, `Reference / Verification` |

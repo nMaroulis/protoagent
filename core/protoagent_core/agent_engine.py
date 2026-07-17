@@ -15,11 +15,13 @@ from .config import (
     LOCAL_PROVIDERS,
     MAX_CONTEXT_WINDOW,
     MIN_CONTEXT_WINDOW,
+    optional_agent_enabled,
     provider_config,
     set_active_model,
     set_agent_prompt_profile,
     set_api_key,
     set_context_window,
+    set_optional_agent_enabled,
     visible_config,
 )
 from .context import (
@@ -124,6 +126,32 @@ def configure_agent_prompt_profile(value: str | None = None) -> str:
     return _json(prompt_profile_status(config))
 
 
+def get_agent_settings() -> str:
+    """Return prompt, architecture, and optional-agent settings for the CLI."""
+    from .agents import agent_manifest
+
+    config = visible_config()
+    provider = str(config.get("active_provider", "ollama"))
+    active = config.get("providers", {}).get(provider, {})
+    profile = prompt_profile_status(config, provider=provider, model=str(active.get("model", "")))
+    scout_enabled = optional_agent_enabled("scout", config)
+    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
+    return _json(
+        {
+            "prompt_profile": profile,
+            "architecture": manifest["architecture"],
+            "agents": manifest["agents"],
+            "scout_enabled": scout_enabled,
+        }
+    )
+
+
+def configure_optional_agent(name: str, enabled: bool) -> str:
+    """Enable or disable a supported optional agent and return deck settings."""
+    set_optional_agent_enabled(name, enabled)
+    return get_agent_settings()
+
+
 def run_quality_eval(
     mode: str = "scaffold",
     profiles: str | None = None,
@@ -199,7 +227,7 @@ def compact_protolink_history(
 
 
 def reset_protolink_history(session_id: str) -> str:
-    """Clear the current ProtoLink session across Architect, Explorer, and Coder."""
+    """Clear the durable Architect conversation state for this project session."""
     from .history import reset_saved_histories
 
     result = reset_saved_histories(session_id)
@@ -265,7 +293,8 @@ def doctor(workspace: str | None = None) -> str:
         (provider for provider in inventory["providers"] if provider["id"] == active_provider),
         None,
     )
-    manifest = agent_manifest(profile)
+    scout_enabled = optional_agent_enabled("scout", config)
+    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
     return _json(
         {
             "python": platform.python_version(),
@@ -280,6 +309,7 @@ def doctor(workspace: str | None = None) -> str:
             if provider_inventory
             else "unknown",
             "prompt_profile": profile,
+            "scout_enabled": scout_enabled,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
         }
@@ -550,6 +580,8 @@ def _model_response(
         "elapsed_ms": int((time.time() - started) * 1000),
         "run_contract": run_contract,
         "completion_validation": completion,
+        "run_report": result.get("run_report", {}),
+        "transport_report": result.get("transport_report", {}),
     }
 
 

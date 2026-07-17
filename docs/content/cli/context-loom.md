@@ -12,10 +12,10 @@ source-cited view of what ProtoAgent thinks is relevant before or during a run.
 | --- | --- |
 | `/context` | Show index status for the active project. |
 | `/context QUERY` | Build a Context Pack preview without calling a model. |
-| `/index refresh` | Refresh or rebuild the local SQLite index. |
-| `/context window [16k|auto]` | Show, set, or reset the Ollama context window. |
+| `/index refresh` | Run an incremental refresh of the local SQLite index. |
+| `/context window [16k\|auto]` | Show, set, or reset the Ollama context window. |
 | `/context history` | Inspect model-facing ProtoLink conversation history. |
-| `/context compact [recent|tokens|summary] [limit]` | Compact saved histories. |
+| `/context compact [recent\|tokens\|summary] [limit]` | Compact saved histories. |
 | `/context reset` | Clear saved histories for the active project session. |
 | `/context on` | Use persistent project memory. |
 | `/context off` | Use task-local memory. |
@@ -59,8 +59,13 @@ The status output comes from `context_status_rows()` and includes:
 | `Indexed at` | Last index timestamp. |
 | `Duration` | Last index refresh duration. |
 | `Updated` | Files upserted during refresh. |
+| `Unchanged` | Files skipped because stored size and modification time still match. |
 | `Removed` | Stale files removed. |
-| `Skipped` | Files ignored or too large. |
+| `Skipped` | Candidate files skipped after the file cap or a stat/read/decode failure. |
+
+Automatic prompt preparation uses this same incremental refresh. Unchanged
+files are not reread, reparsed, or upserted on every task; only new/changed
+files are processed and stale rows removed.
 
 ## What A Pack Preview Shows
 

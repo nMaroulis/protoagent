@@ -107,6 +107,8 @@ The CLI presents the runtime as an agent deck:
    |
    +--> [EXPLORER] stateless read worker: pack, read_file, search, git status
    |
+   +-.-> [SCOUT] optional tool-only network worker: web_search, fetch_url
+   |
    +--> [CODER] stateless write worker: diff preview, create_new_file
    |
    v
@@ -118,4 +120,5 @@ The CLI presents the runtime as an agent deck:
 
 The CLI does not parse model prose to decide whether a write is allowed. Writes
 arrive as ProtoLink actions with capabilities, preview artifacts, and approval
-requests.
+requests. Scout is absent from the runtime when disabled; when enabled it has
+only `network.read`, no model state, and no workspace tools.

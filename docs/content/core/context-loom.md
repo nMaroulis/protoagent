@@ -50,6 +50,23 @@ Each `IndexedFile` stores:
 | `headings` | Markdown headings or language-specific headings. |
 | `content` | Compact non-empty content sample. |
 
+## Incremental Refresh
+
+An automatic refresh does not reread the entire repository on every prompt.
+For each candidate path, the indexer compares the current `size_bytes` and
+`mtime_ns` with the stored row:
+
+1. unchanged files are counted in `files_unchanged` and are not opened,
+   parsed, hashed, or upserted;
+2. new or changed files are read, compacted, parsed, hashed, and upserted;
+3. indexed paths that no longer exist are removed;
+4. candidates beyond the file cap, or candidates that fail stat/read/decode,
+   are counted as skipped.
+
+The size/mtime check is a performance shortcut, not an additional trust
+boundary. Remove the workspace's index database before refreshing if a full
+rebuild is required because filesystem metadata is known to be unreliable.
+
 ## Index Limits
 
 | Limit | Value |
@@ -75,7 +92,7 @@ Ignored directories come from `tools.DEFAULT_IGNORES`, including `.git`,
 
 `build_context_pack(query, workspace, tagged_paths=None, max_items=8, refresh=True)`:
 
-1. Refreshes the index by default.
+1. Incrementally refreshes the index by default.
 2. Reads all indexed entries.
 3. Reads `git status --short`.
 4. Extracts normalized query terms.

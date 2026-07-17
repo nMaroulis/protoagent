@@ -19,8 +19,15 @@ DEFAULT_AGENT_URLS = {
     "architect": "http://127.0.0.1:9110",
     "explorer": "http://127.0.0.1:9120",
     "coder": "http://127.0.0.1:9130",
+    "scout": "http://127.0.0.1:9140",
 }
 
+RUNTIME_SCOPES = (
+    "agent.delegate",
+    "workspace.read",
+    "workspace.write",
+    "network.read",
+)
 
 QUIET_LOGGER = QuietLogger(name="protoagent-quiet")
 
@@ -38,9 +45,7 @@ def create_runtime_auth() -> AgentRuntimeAuth:
     from protolink.security.auth import APIKeyAuth
 
     token = secrets.token_urlsafe(32)
-    authenticator = APIKeyAuth(
-        valid_keys={token: ["agent.delegate", "workspace.read", "workspace.write"]}
-    )
+    authenticator = APIKeyAuth(valid_keys={token: list(RUNTIME_SCOPES)})
     return AgentRuntimeAuth(authenticator=authenticator, credentials=token)
 
 
@@ -82,7 +87,7 @@ def create_configured_transport(
     authenticator=None,
     credentials: str | None = None,
 ) -> Transport | None:
-    """Create a concrete ProtoLink transport with its shared 0.6.5 contract."""
+    """Create a concrete ProtoLink transport with its shared runtime contract."""
     if transport is None or isinstance(transport, Transport):
         return transport
 

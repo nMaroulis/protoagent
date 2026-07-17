@@ -59,6 +59,11 @@ const sidebars = {
       label: 'Reference',
       collapsed: false,
       items: [
+        {
+          type: 'link',
+          label: 'Changelog',
+          href: 'https://github.com/nMaroulis/protoagent/blob/main/CHANGELOG.md',
+        },
         'reference/file-map',
         'reference/versioning',
         'reference/environment',

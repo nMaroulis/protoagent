@@ -21,6 +21,7 @@ from protoagent_core.runtime import (
     _monitor_cancellation,
     _preflight_cancellation_result,
     _run_budget,
+    _run_report_to_dict,
     _send_task_streaming,
     _transport_report,
 )
@@ -130,6 +131,31 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.max_input_tokens, 16000)
         self.assertEqual(budget.max_output_tokens, 2048)
         self.assertEqual(budget.metadata["source"], "protoagent-runtime")
+
+    def test_run_report_records_application_completion_status(self) -> None:
+        from protolink import RunRecorder
+
+        context = RunContext(session_id="session-test")
+        report = _run_report_to_dict(
+            RunRecorder(context=context),
+            context=context,
+            final_task={"id": "task-test", "state": "completed"},
+            provider="ollama",
+            model="test-model",
+            metadata={
+                "transport_task_status": "completed",
+                "application_status": "incomplete",
+                "completion_validation": {"outcome": "incomplete"},
+            },
+        )
+
+        self.assertEqual(report["final_task"]["state"], "completed")
+        self.assertEqual(report["metadata"]["transport_task_status"], "completed")
+        self.assertEqual(report["metadata"]["application_status"], "incomplete")
+        self.assertEqual(
+            report["metadata"]["completion_validation"]["outcome"],
+            "incomplete",
+        )
 
     def test_final_canceled_context_is_read_from_delivery(self) -> None:
         context = RunContext(session_id="session-test").cancel("Stopped by test")

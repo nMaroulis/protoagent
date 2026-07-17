@@ -1,14 +1,16 @@
 use std::collections::VecDeque;
 
 use crate::{
-    empty_as_unknown, load_inventory_with_validation, load_visible_config, CoreResponse, DoctorReport, ModelInventory,
-    progress::ContextUsage, INPUT_HISTORY_CAPACITY,
+    empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
+    load_visible_config, progress::ContextUsage, AgentSettings, CoreResponse, DoctorReport,
+    ModelInventory, INPUT_HISTORY_CAPACITY,
 };
 
 pub(super) struct TerminalApp {
     pub(super) turn: usize,
     pub(super) panel: PanelView,
     pub(super) status: StatusSnapshot,
+    pub(super) agent_settings: AgentSettings,
     pub(super) messages: Vec<TerminalMessage>,
     pub(super) input_history: VecDeque<String>,
     pub(super) last_query: String,
@@ -27,6 +29,7 @@ impl TerminalApp {
             turn: 0,
             panel: PanelView::Dashboard,
             status: StatusSnapshot::default(),
+            agent_settings: AgentSettings::default(),
             messages: Vec::new(),
             input_history: VecDeque::new(),
             last_query: String::new(),
@@ -68,12 +71,26 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh(&mut self, doctor: Option<&DoctorReport>) {
-        self.status = StatusSnapshot::load(doctor, self.panel == PanelView::Models);
+        self.status = StatusSnapshot::load(doctor, false);
     }
 
     pub(super) fn refresh_models(&mut self) {
         self.status = StatusSnapshot::load(None, true);
         self.models_loading = false;
+    }
+
+    pub(super) fn refresh_agent_settings(&mut self) -> anyhow::Result<()> {
+        let settings = load_agent_settings()?;
+        self.apply_agent_settings(settings);
+        Ok(())
+    }
+
+    pub(super) fn apply_agent_settings(&mut self, settings: AgentSettings) {
+        if !settings.prompt_profile.label.is_empty() || !settings.prompt_profile.resolved.is_empty()
+        {
+            self.status.prompt_profile = format_prompt_profile(&settings.prompt_profile);
+        }
+        self.agent_settings = settings;
     }
 
     pub(super) fn apply_model_inventory(&mut self, inventory: &ModelInventory) {
@@ -145,7 +162,9 @@ impl TerminalApp {
             details: Vec::new(),
         };
         if !response.file_target.is_empty() {
-            message.meta.push(format!("target {}", response.file_target));
+            message
+                .meta
+                .push(format!("target {}", response.file_target));
         }
         if !response.warning.is_empty() {
             message.meta.push(format!("warning {}", response.warning));
@@ -154,7 +173,21 @@ impl TerminalApp {
             message.meta.push(transport);
         }
         if !response.thought_process.is_empty() {
-            message.details.push(("Core notes".to_string(), response.thought_process.clone()));
+            message
+                .details
+                .push(("Core notes".to_string(), response.thought_process.clone()));
+        }
+        if !response.run_contract.is_null() {
+            if let Ok(contract) = serde_json::to_string_pretty(&response.run_contract) {
+                message.details.push(("RunContract".to_string(), contract));
+            }
+        }
+        if !response.completion_validation.is_null() {
+            if let Ok(validation) = serde_json::to_string_pretty(&response.completion_validation) {
+                message
+                    .details
+                    .push(("Completion validation".to_string(), validation));
+            }
         }
         if !response.run_events.is_empty() || !response.events.is_empty() {
             let trace = crate::timeline::format_run_trace(&response.run_events, &response.events);
@@ -164,12 +197,18 @@ impl TerminalApp {
                 12,
             );
             message.details.push(("Agent trace".to_string(), trace));
-            message.details.push(("Agent timeline".to_string(), timeline));
+            message
+                .details
+                .push(("Agent timeline".to_string(), timeline));
         }
         if !response.run_events.is_empty() {
-            message.meta.push(format!("{} normalized event(s)", response.run_events.len()));
+            message
+                .meta
+                .push(format!("{} normalized event(s)", response.run_events.len()));
             if let Ok(events) = serde_json::to_string_pretty(&response.run_events) {
-                message.details.push(("Normalized RunEvents".to_string(), events));
+                message
+                    .details
+                    .push(("Normalized RunEvents".to_string(), events));
             }
         }
         if !response.run_report.is_null() {
@@ -179,17 +218,25 @@ impl TerminalApp {
         }
         if !response.transport_report.is_null() {
             if let Ok(report) = serde_json::to_string_pretty(&response.transport_report) {
-                message.details.push(("ProtoLink transports".to_string(), report));
+                message
+                    .details
+                    .push(("ProtoLink transports".to_string(), report));
             }
         }
         if !response.diff.trim().is_empty() {
             self.last_diff_preview = response.diff.clone();
-            message.details.push(("Proposed diff".to_string(), response.diff.clone()));
+            message
+                .details
+                .push(("Proposed diff".to_string(), response.diff.clone()));
         }
         if !response.approval_requests.is_empty() {
-            message.meta.push(format!("{} approval(s)", response.approval_requests.len()));
+            message
+                .meta
+                .push(format!("{} approval(s)", response.approval_requests.len()));
             if let Ok(approvals) = serde_json::to_string_pretty(&response.approval_decisions) {
-                message.details.push(("Approval decisions".to_string(), approvals));
+                message
+                    .details
+                    .push(("Approval decisions".to_string(), approvals));
             }
         }
         self.messages.push(message);
@@ -227,7 +274,11 @@ trait EmptyFallback<'a> {
 
 impl<'a> EmptyFallback<'a> for &'a str {
     fn if_empty_then(self, fallback: &'a str) -> &'a str {
-        if self.is_empty() { fallback } else { self }
+        if self.is_empty() {
+            fallback
+        } else {
+            self
+        }
     }
 }
 
@@ -330,10 +381,24 @@ impl StatusSnapshot {
                     }
                 })
                 .unwrap_or_else(|| "not selected".to_string());
+            snapshot.model_summary = if snapshot.model == "not selected" {
+                "no active model selected; /models scans availability".to_string()
+            } else {
+                format!("active {} / {}", snapshot.provider, snapshot.model)
+            };
+            let configured = config
+                .providers
+                .values()
+                .filter(|provider| provider.api_key_set || !provider.model.is_empty())
+                .count();
+            snapshot.provider_summary =
+                format!("{configured} configured provider(s); /models scans live status");
         }
-        if let Ok(inventory) = load_inventory_with_validation(validate_api_keys) {
-            snapshot.model_summary = model_summary(&inventory);
-            snapshot.provider_summary = provider_summary(&inventory);
+        if validate_api_keys {
+            if let Ok(inventory) = load_inventory_with_validation(true) {
+                snapshot.model_summary = model_summary(&inventory);
+                snapshot.provider_summary = provider_summary(&inventory);
+            }
         }
         if let Some(report) = doctor {
             snapshot.runtime = doctor_summary(report);
@@ -363,13 +428,24 @@ impl StatusSnapshot {
 }
 
 fn model_summary(inventory: &ModelInventory) -> String {
-    let total: usize = inventory.providers.iter().map(|provider| provider.models.len()).sum();
+    let total: usize = inventory
+        .providers
+        .iter()
+        .map(|provider| provider.models.len())
+        .sum();
     let ready = inventory
         .providers
         .iter()
-        .filter(|provider| provider.configured || provider.status == "online" || provider.status == "detected")
+        .filter(|provider| {
+            provider.configured || provider.status == "online" || provider.status == "detected"
+        })
         .count();
-    format!("{} models across {} providers, {} ready", total, inventory.providers.len(), ready)
+    format!(
+        "{} models across {} providers, {} ready",
+        total,
+        inventory.providers.len(),
+        ready
+    )
 }
 
 fn provider_summary(inventory: &ModelInventory) -> String {
@@ -433,7 +509,7 @@ fn provider_chip(provider: &crate::ModelProvider) -> String {
 fn doctor_summary(report: &DoctorReport) -> String {
     let protolink = if report.protolink.installed && report.protolink.agent_ready {
         format!(
-            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}",
+            "ProtoLink {} ready: stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}",
             empty_as_unknown(&report.protolink.version),
             crate::readiness(report.protolink.streaming_ready),
             crate::readiness(report.protolink.metrics_ready),
@@ -445,6 +521,7 @@ fn doctor_summary(report: &DoctorReport) -> String {
             crate::readiness(report.protolink.logging_ready),
             crate::readiness(report.protolink.auth_ready),
             crate::readiness(report.protolink.transport_ready),
+            crate::readiness(report.protolink.web_tools_ready),
         )
     } else if report.protolink.installed {
         format!("ProtoLink blocked ({})", report.protolink.error)

@@ -25,26 +25,46 @@ def refresh_context_index(
     started = time.time()
     root = workspace_root(workspace)
     store = ContextStore(str(root))
+    existing = store.read_fingerprints()
     indexed: list[IndexedFile] = []
     live_paths: set[str] = set()
     skipped = 0
+    unchanged = 0
+    selected = 0
 
     for path in _walk_indexable_files(root):
-        if len(indexed) >= max_files:
+        if selected >= max_files:
             skipped += 1
             continue
+        selected += 1
         rel = to_relative(path, str(root))
-        live_paths.add(rel)
-        item = _index_file(path, rel)
+        try:
+            stat = path.stat()
+        except OSError:
+            skipped += 1
+            continue
+        if existing.get(rel) == (int(stat.st_size), int(stat.st_mtime_ns)):
+            live_paths.add(rel)
+            unchanged += 1
+            continue
+        item = _index_file(path, rel, stat=stat)
         if item is None:
             skipped += 1
             continue
+        live_paths.add(rel)
         indexed.append(item)
 
     updated = store.upsert_files(indexed)
     removed = store.delete_missing(live_paths)
     duration_ms = int((time.time() - started) * 1000)
-    store.mark_indexed(duration_ms, len(live_paths), updated, removed)
+    store.mark_indexed(
+        duration_ms,
+        len(live_paths),
+        updated,
+        removed,
+        unchanged,
+        skipped,
+    )
     status = store.status()
     status.update(
         {
@@ -52,6 +72,7 @@ def refresh_context_index(
             "files_seen": len(live_paths),
             "files_updated": updated,
             "files_removed": removed,
+            "files_unchanged": unchanged,
             "files_skipped": skipped,
             "duration_ms": duration_ms,
         }
@@ -63,7 +84,7 @@ def _walk_indexable_files(root: Path):
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if _include_dir(name)]
+        dirs[:] = sorted(name for name in dirs if _include_dir(name))
         for filename in sorted(files):
             if filename.startswith("."):
                 continue
@@ -77,9 +98,9 @@ def _include_dir(name: str) -> bool:
     return name not in DEFAULT_IGNORES and not name.startswith(".")
 
 
-def _index_file(path: Path, rel: str) -> IndexedFile | None:
+def _index_file(path: Path, rel: str, *, stat: os.stat_result | None = None) -> IndexedFile | None:
     try:
-        stat = path.stat()
+        stat = stat or path.stat()
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
@@ -197,13 +218,15 @@ def _markdown_headings(content: str) -> list[str]:
 
 
 def _compact_content(content: str) -> str:
-    lines = []
+    lines: list[str] = []
+    total_chars = 0
     for line in content.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         lines.append(stripped)
-        if sum(len(item) for item in lines) > MAX_INDEX_CONTENT_CHARS:
+        total_chars += len(stripped)
+        if total_chars > MAX_INDEX_CONTENT_CHARS:
             break
     return "\n".join(lines)[:MAX_INDEX_CONTENT_CHARS]
 

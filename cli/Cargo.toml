@@ -1,7 +1,13 @@
 [package]
 name = "proto-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.83"
+description = "Local-first coding-agent CLI and TUI powered by ProtoLink."
+license = "MIT"
+repository = "https://github.com/nMaroulis/protoagent"
+homepage = "https://nmaroulis.github.io/protoagent/"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1.36", features = ["full"] }

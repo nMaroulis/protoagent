@@ -22,7 +22,7 @@ const config = {
   markdown: {
     mermaid: true,
     hooks: {
-      onBrokenMarkdownLinks: 'warn',
+      onBrokenMarkdownLinks: 'throw',
     },
   },
   themes: ['@docusaurus/theme-mermaid'],
@@ -34,7 +34,7 @@ const config = {
           path: 'content',
           routeBasePath: 'docs',
           sidebarPath: require.resolve('./sidebars.js'),
-          editUrl: 'https://github.com/nMaroulis/protoagent/tree/main/docs/',
+          editUrl: 'https://github.com/nMaroulis/protoagent/edit/main/docs/',
           showLastUpdateAuthor: false,
           showLastUpdateTime: false,
         },
@@ -65,6 +65,11 @@ const config = {
           {to: '/docs/cli/overview', label: 'CLI', position: 'left'},
           {to: '/docs/core/overview', label: 'Core', position: 'left'},
           {to: '/docs/acp/overview', label: 'ACP', position: 'left'},
+          {
+            href: 'https://github.com/nMaroulis/protoagent/blob/main/CHANGELOG.md',
+            label: 'Changelog',
+            position: 'right',
+          },
           {
             href: 'https://github.com/nMaroulis/protoagent',
             label: 'GitHub',
@@ -97,6 +102,10 @@ const config = {
               {label: 'Environment', to: '/docs/reference/environment'},
               {label: 'Troubleshooting', to: '/docs/reference/troubleshooting'},
               {label: 'Maintenance', to: '/docs/contributing/maintenance'},
+              {
+                label: 'Changelog',
+                href: 'https://github.com/nMaroulis/protoagent/blob/main/CHANGELOG.md',
+              },
             ],
           },
         ],

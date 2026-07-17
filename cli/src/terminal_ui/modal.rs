@@ -11,8 +11,8 @@ use std::io::{stdout, Stdout, Write};
 use super::input::InputEditor;
 use super::state::TerminalApp;
 use super::theme::{
-    black, clip_plain, cyan, input_bg, modal_bg, modal_border, modal_list_bg, modal_selection_bg, modal_shadow_bg,
-    muted, size, text, write_at, yellow,
+    black, clip_plain, cyan, input_bg, modal_bg, modal_border, modal_list_bg, modal_selection_bg,
+    modal_shadow_bg, muted, size, text, write_at, yellow,
 };
 use super::TerminalSurface;
 
@@ -55,7 +55,9 @@ fn prompt_input_modal(
             KeyCode::Enter => return Ok(Some(editor.line())),
             KeyCode::Esc => return Ok(None),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => editor.insert(ch),
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                editor.insert(ch)
+            }
             KeyCode::Backspace => editor.backspace(),
             KeyCode::Delete => editor.delete(),
             KeyCode::Left => editor.move_left(),
@@ -125,7 +127,13 @@ pub(super) fn draw_modal_backdrop(out: &mut Stdout, _width: u16, _height: u16) -
     Ok(())
 }
 
-pub(super) fn draw_modal_shadow(out: &mut Stdout, x: u16, y: u16, width: u16, height: u16) -> Result<()> {
+pub(super) fn draw_modal_shadow(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) -> Result<()> {
     let (screen_width, screen_height) = size();
     let shadow_x = x.saturating_add(2);
     let shadow_y = y.saturating_add(1);
@@ -134,12 +142,27 @@ pub(super) fn draw_modal_shadow(out: &mut Stdout, x: u16, y: u16, width: u16, he
         return Ok(());
     }
     for row in shadow_y..shadow_y.saturating_add(height).min(screen_height) {
-        write_at(out, shadow_x, row, shadow_width, "", muted(), modal_shadow_bg(), false)?;
+        write_at(
+            out,
+            shadow_x,
+            row,
+            shadow_width,
+            "",
+            muted(),
+            modal_shadow_bg(),
+            false,
+        )?;
     }
     Ok(())
 }
 
-pub(super) fn draw_modal_sides(out: &mut Stdout, x: u16, y: u16, width: u16, height: u16) -> Result<()> {
+pub(super) fn draw_modal_sides(
+    out: &mut Stdout,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+) -> Result<()> {
     if width < 2 || height < 4 {
         return Ok(());
     }
@@ -167,14 +190,23 @@ pub(super) fn modal_title(title: &str, width: u16) -> String {
     if title_width + back_width >= width as usize {
         return clip_plain(&format!("{title} {back}"), width as usize);
     }
-    format!("{}{}{}", title, " ".repeat(width as usize - title_width - back_width), back)
+    format!(
+        "{}{}{}",
+        title,
+        " ".repeat(width as usize - title_width - back_width),
+        back
+    )
 }
 
 pub(super) fn draw_modal(title: &str, rows: &[String]) -> Result<()> {
     draw_status_modal(title, rows, StatusModalKind::Dismissible)
 }
 
-pub(super) fn draw_loading_modal_frame(title: &str, rows: &[String], spinner: &'static str) -> Result<()> {
+pub(super) fn draw_loading_modal_frame(
+    title: &str,
+    rows: &[String],
+    spinner: &'static str,
+) -> Result<()> {
     draw_status_modal(title, rows, StatusModalKind::Loading(spinner))
 }
 
@@ -198,22 +230,47 @@ enum StatusModalKind {
 
 fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Result<()> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(2).saturating_div(3).clamp(42, width.saturating_sub(4));
+    let modal_width = width
+        .saturating_mul(2)
+        .saturating_div(3)
+        .clamp(42, width.saturating_sub(4));
     let modal_height = (rows.len() as u16 + 4).clamp(7, height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let mut out = stdout();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
     let heading = match kind {
         StatusModalKind::Dismissible => modal_title(title, modal_width),
-        StatusModalKind::Loading(spinner) => {
-            clip_plain(&format!(" {title}  {spinner} LOADING"), modal_width as usize)
-        }
-        StatusModalKind::Exit => clip_plain(&format!(" {title}  | ESC AGAIN TO EXIT"), modal_width as usize),
+        StatusModalKind::Loading(spinner) => clip_plain(
+            &format!(" {title}  {spinner} LOADING"),
+            modal_width as usize,
+        ),
+        StatusModalKind::Exit => clip_plain(
+            &format!(" {title}  | ESC AGAIN TO EXIT"),
+            modal_width as usize,
+        ),
     };
-    write_at(&mut out, x, y + 1, modal_width, &heading, black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &heading,
+        black(),
+        modal_border(),
+        true,
+    )?;
     for idx in 0..modal_height.saturating_sub(4) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
         write_at(
@@ -249,7 +306,10 @@ pub(super) fn draw_input_modal(
     masked: bool,
 ) -> Result<()> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(3).saturating_div(4).clamp(48, width.saturating_sub(4));
+    let modal_width = width
+        .saturating_mul(3)
+        .saturating_div(4)
+        .clamp(48, width.saturating_sub(4));
     let modal_height = (rows.len() as u16 + 6).clamp(8, height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
@@ -257,8 +317,26 @@ pub(super) fn draw_input_modal(
     let mut out = stdout();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &modal_title(title, modal_width),
+        black(),
+        modal_border(),
+        true,
+    )?;
     for idx in 0..modal_height.saturating_sub(5) {
         let row = rows.get(idx as usize).map(String::as_str).unwrap_or("");
         write_at(
@@ -281,7 +359,16 @@ pub(super) fn draw_input_modal(
     } else {
         visible
     };
-    write_at(&mut out, x + 1, input_y, modal_width.saturating_sub(2), "", text(), input_bg(), false)?;
+    write_at(
+        &mut out,
+        x + 1,
+        input_y,
+        modal_width.saturating_sub(2),
+        "",
+        text(),
+        input_bg(),
+        false,
+    )?;
     queue!(
         out,
         MoveTo(x + 2, input_y),
@@ -320,13 +407,17 @@ fn draw_choice_picker_modal(
     selected: usize,
 ) -> Result<()> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(4).saturating_div(5).clamp(52, width.saturating_sub(4));
-    let modal_height = height.saturating_mul(2).saturating_div(3).clamp(11, height.saturating_sub(4));
+    let modal_width = width
+        .saturating_mul(4)
+        .saturating_div(5)
+        .clamp(52, width.saturating_sub(4));
+    let modal_height = height
+        .saturating_mul(2)
+        .saturating_div(3)
+        .clamp(11, height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
-    let info_rows = rows
-        .len()
-        .min(modal_height.saturating_sub(8) as usize);
+    let info_rows = rows.len().min(modal_height.saturating_sub(8) as usize);
     let list_start = y + 4 + info_rows as u16;
     let list_rows = modal_height
         .saturating_sub(info_rows as u16)
@@ -336,8 +427,26 @@ fn draw_choice_picker_modal(
 
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &modal_title(title, modal_width),
+        black(),
+        modal_border(),
+        true,
+    )?;
     for idx in 0..info_rows {
         let row = rows.get(idx).map(String::as_str).unwrap_or("");
         write_at(
@@ -357,7 +466,14 @@ fn draw_choice_picker_modal(
         x + 1,
         filter_y,
         modal_width.saturating_sub(2),
-        &format!(" Filter : {}", if filter.is_empty() { "(type to filter)" } else { filter }),
+        &format!(
+            " Filter : {}",
+            if filter.is_empty() {
+                "(type to filter)"
+            } else {
+                filter
+            }
+        ),
         cyan(),
         modal_bg(),
         false,
@@ -382,7 +498,16 @@ fn draw_choice_picker_modal(
         let choice_index = start + row_index;
         let row_y = list_start + row_index as u16;
         let Some((_, choice)) = choices.get(choice_index) else {
-            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
+            write_at(
+                &mut out,
+                x + 1,
+                row_y,
+                modal_width.saturating_sub(2),
+                "",
+                muted(),
+                modal_list_bg(),
+                false,
+            )?;
             continue;
         };
         let active = choice_index == selected;
@@ -394,7 +519,11 @@ fn draw_choice_picker_modal(
             modal_width.saturating_sub(2),
             &format!("{marker} {}", clip_plain(choice, inner.saturating_sub(2))),
             if active { black() } else { text() },
-            if active { modal_selection_bg() } else { modal_list_bg() },
+            if active {
+                modal_selection_bg()
+            } else {
+                modal_list_bg()
+            },
             active,
         )?;
     }
@@ -404,7 +533,16 @@ fn draw_choice_picker_modal(
     } else {
         format!(" {} match(es)", choices.len())
     };
-    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y + modal_height - 1,
+        modal_width,
+        &footer,
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(())

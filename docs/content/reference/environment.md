@@ -26,6 +26,8 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `EXPLORER_AGENT_URL` | generated | Legacy Explorer URL override. |
 | `PROTOAGENT_CODER_URL` | generated | Coder URL override. |
 | `CODER_AGENT_URL` | generated | Legacy Coder URL override. |
+| `PROTOAGENT_SCOUT_URL` | generated | Optional Scout URL override. |
+| `SCOUT_AGENT_URL` | generated | Legacy Scout URL override. |
 | `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |
 | `PROTOAGENT_STREAM` | `1` | Set to `0` to disable streaming consumption. |
 | `PROTOAGENT_AGENT_TIMEOUT` | `600` | AgentClient timeout seconds. |
@@ -72,6 +74,11 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `GEMINI_API_KEY` | Gemini key. |
 | `DEEPSEEK_API_KEY` | DeepSeek key. |
 | `OPENAI_COMPATIBLE_API_KEY` | Generic OpenAI-compatible key. |
+| `BRAVE_SEARCH_API_KEY` | Brave Search key read by ProtoLink's `web_search` only when optional Scout invokes the default Brave engine. |
+
+DuckDuckGo is keyless best-effort search, while English Wikipedia is keyless
+factual search. Enabling Scout registers network tools but does not itself issue
+a request.
 
 ## Common Debug Recipes
 

@@ -22,6 +22,31 @@ class RunContractTests(unittest.TestCase):
         self.assertFalse(contract.requires_coder)
         self.assertFalse(contract.requires_write)
 
+    def test_read_only_question_does_not_treat_symbol_verbs_as_write_intent(self) -> None:
+        for prompt in (
+            "Explain how create_agent_deck works",
+            "What does update_metadata do?",
+            "Review the tests and summarize their coverage",
+            "How can I improve runtime performance?",
+        ):
+            with self.subTest(prompt=prompt):
+                contract = infer_run_contract(prompt)
+                self.assertEqual(contract.task_kind, "repository-question")
+                self.assertFalse(contract.requires_write)
+
+    def test_read_only_prefix_with_followup_edit_keeps_write_contract(self) -> None:
+        for prompt in (
+            "Explain how create_agent_deck works and update the docs",
+            "Review this module. Fix the race condition.",
+            "Review this module, fix the race condition.",
+            "Find the bug; patch it.",
+            "Review this module please fix the race condition.",
+        ):
+            with self.subTest(prompt=prompt):
+                contract = infer_run_contract(prompt)
+                self.assertEqual(contract.task_kind, "workspace-change")
+                self.assertTrue(contract.requires_coder)
+
     def test_write_contract_fails_without_coder_or_artifact(self) -> None:
         contract = infer_run_contract("Update the CLI docs")
 

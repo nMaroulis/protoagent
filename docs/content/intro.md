@@ -5,17 +5,18 @@ description: A map of the ProtoAgent repository, its runtime philosophy, and the
 slug: /intro
 ---
 
-ProtoAgent is a local-first agent ecosystem for autonomous coding. The repo is
-organized around one core idea: keep the agent brain in the Python core, keep
-frontends thin, and let ProtoLink own the runtime contracts for agents, events,
-state, actions, and approvals.
+ProtoAgent is a local-first coding agent optimized for inspectable operation
+with smaller models. The repo is organized around one core idea: keep
+application logic in the Python core, keep frontends thin, and let ProtoLink own
+agent discovery, delegation, tools, state, events, actions, approvals,
+cancellation, transports, and reports.
 
 The current monorepo has three main product surfaces:
 
 | Surface | Path | Version | Status | Responsibility |
 | --- | --- | --- | --- | --- |
-| Rust CLI and TUI | `cli/` | `0.1.0` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
-| Python core | `core/protoagent_core/` | `0.1.0` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
+| Rust CLI and TUI | `cli/` | `0.2.0` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
+| Python core | `core/protoagent_core/` | `0.2.0` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
 | ACP server | `acp/` | `0.0.0-dev.0` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
 
 The rest of the repo supports those surfaces:
@@ -41,7 +42,7 @@ split into small, inspectable components:
 4. **Context is visible.** Context Loom builds a deterministic, source-cited
    evidence pack before the model reasons.
 5. **State is deliberate.** Architect keeps durable conversation memory, while
-   Explorer and Coder are task-local stateless workers.
+   Explorer, Coder, and optional Scout are task-local stateless workers.
 6. **Runs have contracts.** Write tasks must reach Coder, an approval/diff
    artifact, or an explicit blocker before runtime marks them complete.
 7. **Writes are approval-gated.** Coder prepares `RunAction` objects with
@@ -58,6 +59,7 @@ flowchart LR
   Runtime --> Architect["Architect stateful controller"]
   Architect --> Explorer["Explorer stateless read worker"]
   Architect --> Coder["Coder stateless write worker"]
+  Architect -. "when Scout is enabled" .-> Scout["Scout stateless web worker"]
   Coder --> Approval["Human approval"]
   Approval --> Guard["Completion guard"]
   Guard --> Workspace["Workspace files"]
@@ -77,7 +79,9 @@ updating one page, not rewriting a manual.
 | Context Loom scoring, index schema, or prompt format | `CLI / Context Loom` and `Core / Context Loom` |
 | Runtime transport, budgets, streaming, tracing, or cancellation | `Core / Runtime` and `Reference / Environment` |
 | Component version source or release marker | `Reference / Versioning` |
+| User-visible release behavior | Root `CHANGELOG.md` |
 | Agent prompts, tools, or policies | `Core / Agent Deck` and `Core / Safety and Tools` |
+| Optional agent or network capability | `Core / Agent Deck`, `Core / Safety and Tools`, `CLI / Commands`, and `Reference / Environment` |
 | Contributor tooling, linting, type-checking, or formatting | `Contributing / Development Workflow` and `Reference / Verification` |
 | ACP implementation | `ACP / Plan` |
 
@@ -99,12 +103,13 @@ Useful source entrypoints:
 | `cli/src/sessions.rs` | Rust UI session ledger. |
 | `core/protoagent_core/agent_engine.py` | PyO3-facing functions called by Rust. |
 | `core/protoagent_core/runtime.py` | ProtoLink runtime mesh startup and streaming execution. |
-| `core/protoagent_core/agents/` | Architect, Explorer, Coder, and deck assembly. |
+| `core/protoagent_core/agents/` | Architect, Explorer, Coder, optional Scout, and deck assembly. |
 | `core/protoagent_core/context/` | Context Loom index, SQLite store, pack builder, schemas. |
 | `core/protoagent_core/history.py` | ProtoLink state describe, compact, reset, and persistence helpers. |
 | `core/protoagent_core/tools.py` | Workspace-safe read, search, diff preview, and writes. |
 | `pyproject.toml` | Ruff and ty configuration for the Python surface. |
 | `core/pyproject.toml` | Python core package metadata and core release version. |
 | `VERSIONING.md` | Component version policy and source-of-truth map. |
+| `CHANGELOG.md` | Dated user-visible release notes. |
 | `rustfmt.toml` | Rust formatting configuration for the CLI crate. |
 | `CONTRIBUTING.md` | GitHub-facing contributor setup and pull request workflow. |

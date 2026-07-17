@@ -11,7 +11,7 @@ This page documents the current command surface in `cli/src/main.rs` and
 Run through Cargo while developing:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- <command>
+cargo run --locked --manifest-path cli/Cargo.toml -- <command>
 ```
 
 Installed examples use `proto-cli <command>`.
@@ -35,20 +35,21 @@ Installed examples use `proto-cli <command>`.
 | `project clear` | Clear the active project folder. |
 | `project choose` | Prompt for a project folder. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
-| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, and tool isolation. |
-| `agents profile [auto|small|medium|large|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
+| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Scout state, and tool isolation. |
+| `agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
 | `agents small`, `agents medium`, `agents large`, `agents api` | Shorthand for setting the deck prompt profile. |
-| `eval profiles [--plan|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
+| `agents scout [on\|off]` | Show, enable, or disable optional Scout. Changes apply to the next run. |
+| `eval profiles [--plan\|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
 | `eval tasks` | List built-in quality eval tasks. |
 | `context` | Show Context Loom status for the active project. |
 | `context QUERY` | Build a source-cited Context Pack without running a model. |
-| `context window [16k|auto]` | Show, set, or clear the Ollama context window override. |
+| `context window [16k\|auto]` | Show, set, or clear the Ollama context window override. |
 | `context history` | Inspect saved ProtoLink Architect conversation state. |
-| `context compact [recent|tokens|summary] [limit]` | Compact saved ProtoLink histories and trim the Rust session index. |
+| `context compact [recent\|tokens\|summary] [limit]` | Compact saved ProtoLink histories and trim the Rust session index. |
 | `context reset` | Clear ProtoLink histories for the project session and trim Rust UI turns to zero. |
 | `context on` | Enable persistent project conversation memory. |
 | `context off` | Use task-local ProtoLink sessions until memory is turned on again. |
-| `index refresh` | Refresh or rebuild the Context Loom SQLite index. |
+| `index refresh` | Run an incremental Context Loom SQLite index refresh. |
 | `sessions` | Show saved project sessions and recent turns. |
 | `help` | Show static CLI help. |
 | `help "question"` | Ask the isolated Guide agent about ProtoAgent usage. |
@@ -66,14 +67,15 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the runtime architecture panel; the confirmation shows the RunContract flow, worker state boundary, current prompt profile, and how to change it. |
-| `/agents profile [auto|small|medium|large|api]` | Show or set the deck prompt profile. |
+| `/agents` | Pin the runtime architecture panel; shows RunContract flow, worker state, prompt profile, and Scout ON/OFF. |
+| `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the deck prompt profile. |
 | `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
+| `/agents scout [on\|off]` | Show or change optional Scout for subsequent runs. |
 | `/context`, `/loom` | Show Context Loom status. |
 | `/context QUERY` | Preview a Context Pack. |
-| `/context window [16k|auto]` | Show or change context window settings. |
+| `/context window [16k\|auto]` | Show or change context window settings. |
 | `/context history` | Inspect saved ProtoLink histories. |
-| `/context compact [recent|tokens|summary] [limit]` | Compact saved model-facing histories. |
+| `/context compact [recent\|tokens\|summary] [limit]` | Compact saved model-facing histories. |
 | `/context reset` | Reset saved ProtoLink histories for the active project session. |
 | `/context on` | Enable persistent conversation memory. |
 | `/context off` | Use task-local memory. |

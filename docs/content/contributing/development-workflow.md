@@ -15,10 +15,10 @@ Install the Python and Rust tooling from the repository root:
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms]>=0.6.5" ruff ty
+python -m pip install "protolink[http,llms]>=0.6.6" ruff ty
 python -m pip install -e core
 rustup component add rustfmt clippy
-cargo build --manifest-path cli/Cargo.toml
+cargo build --locked --manifest-path cli/Cargo.toml
 ```
 
 The root `pyproject.toml` configures Ruff and ty. The root `rustfmt.toml`
@@ -60,9 +60,9 @@ type-checking gate.
 
 ```bash
 cargo fmt --manifest-path cli/Cargo.toml -- --check
-cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path cli/Cargo.toml
-cargo check --manifest-path cli/Cargo.toml
+cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path cli/Cargo.toml
+cargo check --locked --manifest-path cli/Cargo.toml
 ```
 
 If `cargo fmt` or `cargo clippy` is unavailable, install the components with:
@@ -83,16 +83,23 @@ behavior, or user-facing workflows change.
 
 ## Continuous Integration
 
-GitHub Actions runs the Python formatting, linting, and type-checking gate on
-every push and pull request through `.github/workflows/python-quality.yml`.
+GitHub Actions runs Python and Rust quality gates on pushes and pull requests
+through `.github/workflows/python-quality.yml` and
+`.github/workflows/cli-quality.yml`.
 
-That workflow installs `ruff`, `ty`, and the ProtoLink runtime extras, then runs:
+The Python workflow installs `ruff`, `ty`, and the ProtoLink runtime extras,
+then runs:
 
 ```bash
 ruff format --check .
 ruff check .
 ty check --extra-search-path core
+PYTHONPATH=core python -m unittest discover -s core/tests -q
 ```
+
+The CLI workflow installs the embedded core, checks Rust formatting, and runs
+the CLI test suite with the committed `cli/Cargo.lock` and `--locked`. Clippy
+and `cargo check` remain required local release gates listed above.
 
 ## Pull Requests
 

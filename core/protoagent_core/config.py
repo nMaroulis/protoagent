@@ -65,6 +65,12 @@ PROVIDER_LABELS = {
     "openai-compatible": "OpenAI compatible",
 }
 
+OPTIONAL_AGENT_DEFAULTS = {
+    "scout": {
+        "enabled": False,
+    },
+}
+
 
 def default_config() -> dict[str, Any]:
     """Create the baseline provider configuration."""
@@ -81,6 +87,7 @@ def default_config() -> dict[str, Any]:
         "version": CONFIG_VERSION,
         "active_provider": "ollama",
         "agent_prompt_profile": "auto",
+        "optional_agents": deepcopy(OPTIONAL_AGENT_DEFAULTS),
         "providers": providers,
     }
 
@@ -165,10 +172,42 @@ def set_context_window(provider: str, window_tokens: int | None) -> dict[str, An
 
 
 def set_agent_prompt_profile(profile: str | None) -> dict[str, Any]:
-    """Persist the prompt profile used by the Architect/Explorer/Coder deck."""
+    """Persist the prompt profile used by the coding-agent deck."""
     normalized = normalize_prompt_profile(profile)
     config = load_config()
     config["agent_prompt_profile"] = normalized
+    save_config(config)
+    return visible_config(config)
+
+
+def optional_agent_enabled(
+    name: str,
+    config: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether a supported optional agent is enabled."""
+    name = normalize_optional_agent(name)
+    config = config or load_config()
+    agents = config.get("optional_agents", {})
+    settings = agents.get(name, {}) if isinstance(agents, dict) else {}
+    return isinstance(settings, dict) and settings.get("enabled") is True
+
+
+def set_optional_agent_enabled(name: str, enabled: bool) -> dict[str, Any]:
+    """Persist one supported optional-agent toggle."""
+    name = normalize_optional_agent(name)
+    if not isinstance(enabled, bool):
+        raise ValueError("Optional agent enabled state must be true or false")
+
+    config = load_config()
+    agents = config.setdefault("optional_agents", {})
+    if not isinstance(agents, dict):
+        agents = {}
+        config["optional_agents"] = agents
+    settings = agents.setdefault(name, {})
+    if not isinstance(settings, dict):
+        settings = {}
+        agents[name] = settings
+    settings["enabled"] = enabled
     save_config(config)
     return visible_config(config)
 
@@ -224,6 +263,15 @@ def normalize_provider(provider: str) -> str:
         "openai-compatible-api": "openai-compatible",
     }
     return aliases.get(normalized, normalized)
+
+
+def normalize_optional_agent(name: str) -> str:
+    """Normalize and validate a configurable optional-agent name."""
+    normalized = name.strip().lower().replace("_", "-")
+    if normalized not in OPTIONAL_AGENT_DEFAULTS:
+        supported = ", ".join(sorted(OPTIONAL_AGENT_DEFAULTS))
+        raise ValueError(f"Optional agent must be one of: {supported}")
+    return normalized
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:

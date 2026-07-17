@@ -21,7 +21,9 @@ pub(super) fn approval_prompt(
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(true),
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => return Ok(false),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(false),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Ok(false)
+            }
             KeyCode::Char('v') | KeyCode::Char('V') | KeyCode::Char('d') | KeyCode::Char('D')
                 if !approval.diff.trim().is_empty() =>
             {

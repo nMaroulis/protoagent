@@ -4,11 +4,13 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use crate::{
-    agent_profile_text, call_process_prompt_with_progress, compact_context_history, component_version_text,
-    context_history_text, context_memory_text, context_pack_text, context_status_text, context_window_text,
-    empty_as_unknown, help_availability_text, help_question_text, load_doctor,
-    progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile}, refresh_context_text,
-    reset_context_history, set_context_memory_text, CoreResponse,
+    agent_profile_text, call_process_prompt_with_progress, compact_context_history,
+    component_version_text, context_history_text, context_memory_text, context_pack_text,
+    context_status_text, context_window_text, empty_as_unknown, format_scout_settings,
+    help_availability_text, help_question_text, load_doctor, parse_agents_command,
+    progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile},
+    refresh_context_text, reset_context_history, scout_settings, set_context_memory_text,
+    AgentsCommand, CoreResponse,
 };
 
 mod approval;
@@ -63,7 +65,11 @@ pub(crate) async fn interactive() -> Result<()> {
     Ok(())
 }
 
-async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, input: &str) -> Result<bool> {
+async fn handle_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    input: &str,
+) -> Result<bool> {
     let mut parts = input.split_whitespace();
     let command = parts.next().unwrap_or("");
     match command {
@@ -74,7 +80,12 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
             Ok(true)
         }
         "/dashboard" | "/dash" | "/status" => {
-            switch_panel(app, PanelView::Dashboard, command, "Dashboard panel pinned.");
+            switch_panel(
+                app,
+                PanelView::Dashboard,
+                command,
+                "Dashboard panel pinned.",
+            );
             Ok(true)
         }
         "/models" => {
@@ -145,7 +156,11 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
                     app.refresh(None);
                     app.push(Role::Command, command, &text);
                 }
-                Err(err) => app.push(Role::Error, command, &format!("Version check failed: {err}")),
+                Err(err) => app.push(
+                    Role::Error,
+                    command,
+                    &format!("Version check failed: {err}"),
+                ),
             }
             Ok(true)
         }
@@ -193,7 +208,11 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
                     show_diff_modal(terminal, app, "Diff Review", &diff)?;
                 }
             } else if app.last_response.is_some() {
-                app.push(Role::Command, "/diff", "No proposed diff is available from the last run.");
+                app.push(
+                    Role::Command,
+                    "/diff",
+                    "No proposed diff is available from the last run.",
+                );
             } else {
                 app.push(Role::Command, "/diff", "No response in this session yet.");
             }
@@ -202,7 +221,11 @@ async fn handle_command(app: &mut TerminalApp, terminal: &mut TerminalSurface, i
         "/trace" => {
             if let Some(response) = &app.last_response {
                 if response.run_events.is_empty() && response.events.is_empty() {
-                    app.push(Role::Command, "/trace", "No agent trace in the last response.");
+                    app.push(
+                        Role::Command,
+                        "/trace",
+                        "No agent trace in the last response.",
+                    );
                 } else {
                     app.push(
                         Role::Command,
@@ -305,72 +328,73 @@ fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &s
 }
 
 fn handle_agents_command(app: &mut TerminalApp, command: &str, arg: &str) -> Result<()> {
-    let mut parts = arg.split_whitespace();
-    let first = parts.next();
-    if first.is_none() || matches!(first, Some("status")) {
-        app.panel = PanelView::Agents;
-        app.refresh(None);
-        let body = agents_panel_pinned_text(app);
-        app.push(Role::Command, command, &body);
-        return Ok(());
-    }
-    let value = match first {
-        Some("profile" | "prompt" | "mode" | "reasoning") => parts.next().map(str::to_string),
-        Some(value) if is_prompt_profile_value(value) => Some(value.to_string()),
-        Some(_) => {
+    let args = arg.split_whitespace().collect::<Vec<_>>();
+    let parsed = match parse_agents_command(&args) {
+        Ok(parsed) => parsed,
+        Err(message) => {
             app.push(
                 Role::Error,
                 command,
-                "Usage: /agents profile [auto|small|medium|large|api]",
+                &message.replace("Usage: agents", "Usage: /agents"),
             );
             return Ok(());
         }
-        None => None,
     };
-    if parts.next().is_some() {
-        app.push(
-            Role::Error,
-            command,
-            "Usage: /agents profile [auto|small|medium|large|api]",
-        );
-        return Ok(());
-    }
-    match agent_profile_text(value) {
-        Ok(text) => {
+
+    match parsed {
+        AgentsCommand::Status => {
             app.panel = PanelView::Agents;
             app.refresh(None);
-            app.push(Role::Command, command, &text);
+            match app.refresh_agent_settings() {
+                Ok(()) => {
+                    let body = agents_panel_pinned_text(app);
+                    app.push(Role::Command, command, &body);
+                }
+                Err(err) => app.push(
+                    Role::Error,
+                    command,
+                    &format!("Could not load agent settings: {err}"),
+                ),
+            }
         }
-        Err(err) => app.push(Role::Error, command, &err.to_string()),
+        AgentsCommand::Profile(value) => match agent_profile_text(value) {
+            Ok(text) => {
+                app.panel = PanelView::Agents;
+                app.refresh(None);
+                app.push(Role::Command, command, &text);
+                if let Err(err) = app.refresh_agent_settings() {
+                    app.push(
+                        Role::Error,
+                        command,
+                        &format!("Prompt profile changed, but agent status refresh failed: {err}"),
+                    );
+                }
+            }
+            Err(err) => app.push(Role::Error, command, &err.to_string()),
+        },
+        AgentsCommand::Scout(enabled) => match scout_settings(enabled) {
+            Ok(settings) => {
+                let text = format_scout_settings(&settings).join("\n");
+                app.panel = PanelView::Agents;
+                app.refresh(None);
+                app.apply_agent_settings(settings);
+                app.push(Role::Command, command, &text);
+            }
+            Err(err) => app.push(Role::Error, command, &err.to_string()),
+        },
     }
     Ok(())
 }
 
 fn agents_panel_pinned_text(app: &TerminalApp) -> String {
+    let scout = if app.agent_settings.is_scout_enabled() {
+        "on"
+    } else {
+        "off"
+    };
     format!(
-        "Agents panel pinned. Runtime kernel uses a RunContract, stateful Architect, stateless Explorer/Coder workers, and ProtoLink policy gates. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
-        empty_as_unknown(&app.status.prompt_profile)
-    )
-}
-
-fn is_prompt_profile_value(value: &str) -> bool {
-    matches!(
-        value,
-        "auto"
-            | "automatic"
-            | "default"
-            | "small"
-            | "tiny"
-            | "medium"
-            | "mid"
-            | "balanced"
-            | "large"
-            | "big"
-            | "api"
-            | "api-level"
-            | "api-grade"
-            | "frontier"
-            | "cloud"
+        "Agents panel pinned. Runtime kernel uses a RunContract, stateful Architect, and stateless Explorer/Coder workers. Optional Scout is {scout}; changes apply to the next run. Toggle with /agents scout on|off. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
+        empty_as_unknown(&app.status.prompt_profile),
     )
 }
 
@@ -395,7 +419,11 @@ fn switch_model_panel(
     Ok(())
 }
 
-async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: &str) -> Result<()> {
+async fn run_task(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    query: &str,
+) -> Result<()> {
     let workspace = match crate::active_project_dir() {
         Some(path) => path.to_string_lossy().to_string(),
         None => {
@@ -515,7 +543,11 @@ async fn run_task(app: &mut TerminalApp, terminal: &mut TerminalSurface, query: 
         message.body = format!(
             "{} / {} | {} ms\n{} live event(s); /trace shows the full agent run",
             empty_as_unknown(&response.provider),
-            if response.model.is_empty() { "not selected" } else { response.model.as_str() },
+            if response.model.is_empty() {
+                "not selected"
+            } else {
+                response.model.as_str()
+            },
             response.elapsed_ms,
             progress_events.len().max(response.events.len())
         );
@@ -581,9 +613,17 @@ fn handle_session_command(
                 Ok(()) => {
                     app.panel = PanelView::Sessions;
                     app.refresh(None);
-                    app.push(Role::Command, command, &format!("Renamed current session to {name}."));
+                    app.push(
+                        Role::Command,
+                        command,
+                        &format!("Renamed current session to {name}."),
+                    );
                 }
-                Err(err) => app.push(Role::Error, command, &format!("Could not rename session: {err}")),
+                Err(err) => app.push(
+                    Role::Error,
+                    command,
+                    &format!("Could not rename session: {err}"),
+                ),
             }
         }
         return Ok(());
@@ -591,7 +631,11 @@ fn handle_session_command(
 
     app.panel = PanelView::Sessions;
     app.refresh(None);
-    app.push(Role::Command, command, &crate::sessions::session_panel_rows().join("\n"));
+    app.push(
+        Role::Command,
+        command,
+        &crate::sessions::session_panel_rows().join("\n"),
+    );
     Ok(())
 }
 
@@ -698,10 +742,16 @@ fn handle_context_command(
         }
         _ => {}
     }
-    let Some(workspace) = crate::active_project_dir().map(|path| path.to_string_lossy().to_string()) else {
+    let Some(workspace) =
+        crate::active_project_dir().map(|path| path.to_string_lossy().to_string())
+    else {
         app.panel = PanelView::Project;
         app.refresh(None);
-        app.push(Role::Error, command, "Choose a project with /project before using Context Loom.");
+        app.push(
+            Role::Error,
+            command,
+            "Choose a project with /project before using Context Loom.",
+        );
         return Ok(());
     };
     app.panel = PanelView::Context;
@@ -733,10 +783,16 @@ fn handle_index_command(
     command: &str,
     arg: &str,
 ) -> Result<()> {
-    let Some(workspace) = crate::active_project_dir().map(|path| path.to_string_lossy().to_string()) else {
+    let Some(workspace) =
+        crate::active_project_dir().map(|path| path.to_string_lossy().to_string())
+    else {
         app.panel = PanelView::Project;
         app.refresh(None);
-        app.push(Role::Error, command, "Choose a project with /project before refreshing Context Loom.");
+        app.push(
+            Role::Error,
+            command,
+            "Choose a project with /project before refreshing Context Loom.",
+        );
         return Ok(());
     };
     app.panel = PanelView::Context;
@@ -752,13 +808,21 @@ fn handle_index_command(
             app.refresh(None);
             app.push(Role::Command, command, &text);
         }
-        Err(err) => app.push(Role::Error, command, &format!("Index refresh failed: {err}")),
+        Err(err) => app.push(
+            Role::Error,
+            command,
+            &format!("Index refresh failed: {err}"),
+        ),
     }
     app.activity = "idle".to_string();
     Ok(())
 }
 
-fn choose_session(app: &mut TerminalApp, terminal: &mut TerminalSurface, command: &str) -> Result<()> {
+fn choose_session(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    command: &str,
+) -> Result<()> {
     let sessions = crate::sessions::recent_sessions();
     if sessions.is_empty() {
         app.panel = PanelView::Sessions;
@@ -798,7 +862,11 @@ fn choose_session(app: &mut TerminalApp, terminal: &mut TerminalSurface, command
                         ),
                     );
                 }
-                Err(err) => app.push(Role::Error, command, &format!("Could not resume session: {err}")),
+                Err(err) => app.push(
+                    Role::Error,
+                    command,
+                    &format!("Could not resume session: {err}"),
+                ),
             }
         }
         None => app.push(Role::Command, command, "Session selection cancelled."),

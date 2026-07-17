@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_VISIBLE_EVENTS: usize = 8;
 
@@ -57,7 +57,12 @@ impl ProgressFile {
         let approval_request_path = control_path(&path, "approval-request");
         let approval_decision_path = control_path(&path, "approval-decision");
         let cancel_path = control_path(&path, "cancel");
-        for candidate in [&path, &approval_request_path, &approval_decision_path, &cancel_path] {
+        for candidate in [
+            &path,
+            &approval_request_path,
+            &approval_decision_path,
+            &cancel_path,
+        ] {
             let _ = fs::remove_file(candidate);
         }
         Self {
@@ -98,9 +103,12 @@ impl ProgressFile {
             let event = if run_event.map(is_hidden_run_event).unwrap_or(false) {
                 None
             } else {
-                run_event
-                    .and_then(run_event_summary)
-                    .or_else(|| value.get("event").and_then(Value::as_str).map(str::to_string))
+                run_event.and_then(run_event_summary).or_else(|| {
+                    value
+                        .get("event")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
             };
             if let Some(event) = event
                 .map(|event| event.trim().to_string())
@@ -221,8 +229,8 @@ impl RuntimeApproval {
         let payload = action.get("payload").unwrap_or(&Value::Null);
         let arguments = payload.get("arguments").unwrap_or(&Value::Null);
         let metadata = action.get("metadata").unwrap_or(&Value::Null);
-        let target = value_string(metadata, &["path"])
-            .if_empty_then(|| value_string(arguments, &["path"]));
+        let target =
+            value_string(metadata, &["path"]).if_empty_then(|| value_string(arguments, &["path"]));
         let diff = action
             .get("artifacts")
             .and_then(Value::as_array)
@@ -274,11 +282,15 @@ trait EmptyString {
 
 impl EmptyString for String {
     fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
-        if self.is_empty() { fallback() } else { self }
+        if self.is_empty() {
+            fallback()
+        } else {
+            self
+        }
     }
 }
 
-fn control_path(path: &PathBuf, suffix: &str) -> PathBuf {
+fn control_path(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(format!("{}.{suffix}.json", path.to_string_lossy()))
 }
 
@@ -383,10 +395,21 @@ fn run_event_summary(value: &Value) -> Option<String> {
 
     let summary = value.get("summary").and_then(Value::as_str)?.trim();
     if summary.is_empty() {
-        return value.get("type").and_then(Value::as_str).map(str::to_string);
+        return value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string);
     }
-    let agent = value.get("agent_name").and_then(Value::as_str).unwrap_or("").trim();
-    if agent.is_empty() || summary.to_ascii_lowercase().starts_with(&agent.to_ascii_lowercase()) {
+    let agent = value
+        .get("agent_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if agent.is_empty()
+        || summary
+            .to_ascii_lowercase()
+            .starts_with(&agent.to_ascii_lowercase())
+    {
         Some(summary.to_string())
     } else {
         Some(format!("{agent}: {summary}"))
@@ -437,7 +460,10 @@ fn context_sample_from_run_event(value: &Value) -> Option<ContextSample> {
             used_tokens,
             window_tokens,
             used_percent,
-            estimated: manifest.get("estimated").and_then(Value::as_bool).unwrap_or(true),
+            estimated: manifest
+                .get("estimated")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
             agent_name: value_string(value, &["agent_name"])
                 .if_empty_then(|| value_string(manifest, &["agent_name"])),
             model: value_string(manifest, &["model"]),
@@ -458,7 +484,10 @@ fn context_sample_from_run_event(value: &Value) -> Option<ContextSample> {
         used_tokens,
         window_tokens: context.get("window_tokens").and_then(Value::as_u64),
         used_percent: context.get("used_percent").and_then(Value::as_f64),
-        estimated: context.get("estimated").and_then(Value::as_bool).unwrap_or(true),
+        estimated: context
+            .get("estimated")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         agent_name: value_string(payload, &["agent_name"]),
         model: value_string(metadata, &["model"]),
         task_id: value_string(payload, &["task_id"]),
@@ -508,7 +537,11 @@ pub(crate) fn format_live_progress(events: &[String]) -> String {
 
 pub(crate) fn progress_activity(events: &[String], tick: usize) -> String {
     let spinner = ["|", "/", "-", "\\"];
-    format!("{} {}", spinner[tick % spinner.len()], activity_summary(events).line())
+    format!(
+        "{} {}",
+        spinner[tick % spinner.len()],
+        activity_summary(events).line()
+    )
 }
 
 pub(crate) fn latest_progress_message(events: &[String]) -> String {
@@ -537,7 +570,12 @@ fn activity_summary(events: &[String]) -> ActivitySummary {
     };
 
     let route = route_from_event(latest)
-        .or_else(|| events.iter().rev().find_map(|event| route_from_event(event)))
+        .or_else(|| {
+            events
+                .iter()
+                .rev()
+                .find_map(|event| route_from_event(event))
+        })
         .unwrap_or_else(|| "Runtime".to_string());
     let active = active_agent(latest)
         .or_else(|| route.split(" -> ").last().map(str::to_string))
@@ -688,7 +726,8 @@ fn event_badge(event: &str) -> &'static str {
         "[TOOL]"
     } else if event.starts_with("Task state") || event.starts_with("Progress") {
         "[TASK]"
-    } else if event.starts_with("Architect") || agent_prefix(event).as_deref() == Some("Architect") {
+    } else if event.starts_with("Architect") || agent_prefix(event).as_deref() == Some("Architect")
+    {
         "[ARCH]"
     } else if event.starts_with("Explorer") || agent_prefix(event).as_deref() == Some("Explorer") {
         "[EXPL]"
@@ -724,7 +763,7 @@ fn display_agent(value: &str) -> String {
         "explorer" => "Explorer".to_string(),
         "coder" => "Coder".to_string(),
         "agent" => "Agent".to_string(),
-        other if other.is_empty() => "Agent".to_string(),
+        "" => "Agent".to_string(),
         _ => {
             let mut chars = value.trim().chars();
             match chars.next() {
@@ -777,7 +816,10 @@ fn clip_activity(value: &str) -> String {
     if value.chars().count() <= LIMIT {
         return value.to_string();
     }
-    let mut clipped = value.chars().take(LIMIT.saturating_sub(3)).collect::<String>();
+    let mut clipped = value
+        .chars()
+        .take(LIMIT.saturating_sub(3))
+        .collect::<String>();
     clipped.push_str("...");
     clipped
 }
@@ -831,7 +873,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(progress.read_new(), vec!["coder: Action started: replace_file"]);
+        assert_eq!(
+            progress.read_new(),
+            vec!["coder: Action started: replace_file"]
+        );
         progress.cleanup();
     }
 
@@ -1057,7 +1102,11 @@ mod tests {
                 }]
             }
         });
-        fs::write(progress.approval_request_path(), serde_json::to_vec(&request).unwrap()).unwrap();
+        fs::write(
+            progress.approval_request_path(),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
 
         let approval = progress.take_approval_request().unwrap();
         assert_eq!(approval.target, "src/lib.rs");
@@ -1066,10 +1115,8 @@ mod tests {
         progress.decide(&approval, true).unwrap();
         progress.request_cancel("test cancellation").unwrap();
 
-        let decision: Value = serde_json::from_slice(
-            &fs::read(progress.approval_decision_path()).unwrap(),
-        )
-        .unwrap();
+        let decision: Value =
+            serde_json::from_slice(&fs::read(progress.approval_decision_path()).unwrap()).unwrap();
         let cancellation: Value =
             serde_json::from_slice(&fs::read(progress.cancel_path()).unwrap()).unwrap();
         assert_eq!(decision["request_id"], "approval_123");

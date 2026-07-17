@@ -57,12 +57,46 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.5"
+pip install "protolink[http,llms]>=0.6.6"
 proto-cli check
 ```
 
 `check` should report streaming, metrics, compaction, context, state, reports,
-cancellation, and logging as ready.
+cancellation, logging, auth, transport, and web tools as ready. Web-tool
+readiness is separate from baseline `agent_ready` because Scout is optional.
+
+## Scout Is Off Or Search Fails
+
+Inspect the current agent settings:
+
+```bash
+proto-cli agents scout
+proto-cli check
+```
+
+Enable Scout for the next run:
+
+```bash
+proto-cli agents scout on
+```
+
+If `web_tools_ready` is unavailable, install ProtoLink 0.6.6 or newer. Brave is
+the default search engine and needs:
+
+```bash
+export BRAVE_SEARCH_API_KEY=...
+```
+
+DuckDuckGo is a keyless best-effort engine; English Wikipedia is keyless
+factual search. Architect can pass either to `web_search`. Wikipedia only supports
+`freshness="any"`. URL fetching intentionally rejects private/loopback hosts,
+nonstandard ports, unsafe redirects, binary content, and oversized responses.
+These rejections are safety behavior, not general network failures.
+
+Scout's direct delegated tools are policy- and cancellation-aware, but
+ProtoLink 0.6.6 does not yet count that direct path against
+`RunBudget.max_tool_calls`. Keep Scout disabled when external calls are not
+needed; ProtoAgent intentionally does not add a second local budget counter.
 
 ## Localhost Runtime Fails In A Sandbox
 
@@ -102,6 +136,9 @@ Then inspect:
 1. Whether the file is ignored, binary, too large, or outside the active project.
 2. Whether query terms match path, symbols, headings, imports, or content.
 3. Whether a git-changed file should get a relevance boost.
+4. Whether `Unchanged` is high: that is expected during an incremental refresh
+   and means those files were not reread because size and modification time
+   still matched.
 
 Source files:
 

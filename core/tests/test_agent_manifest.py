@@ -23,6 +23,9 @@ class AgentManifestTests(unittest.TestCase):
         self.assertEqual(agents["explorer"]["memory"], "task-local")
         self.assertEqual(agents["coder"]["state"], "stateless")
         self.assertEqual(agents["coder"]["memory"], "task-local")
+        self.assertEqual(agents["scout"]["state"], "stateless")
+        self.assertTrue(agents["scout"]["optional"])
+        self.assertFalse(agents["scout"]["enabled"])
 
 
 if __name__ == "__main__":

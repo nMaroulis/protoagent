@@ -284,10 +284,10 @@ def _walk_text_files(root: Path):
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
-        dirs[:] = [
+        dirs[:] = sorted(
             name for name in dirs if name not in DEFAULT_IGNORES and not name.startswith(".")
-        ]
-        for filename in files:
+        )
+        for filename in sorted(files):
             if filename.startswith("."):
                 continue
             path = Path(current) / filename

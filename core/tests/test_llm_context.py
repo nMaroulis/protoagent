@@ -78,6 +78,7 @@ class OllamaContextTests(unittest.TestCase):
         self.assertTrue(report["logging_ready"])
         self.assertTrue(report["auth_ready"])
         self.assertTrue(report["transport_ready"])
+        self.assertTrue(report["web_tools_ready"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")
         self.assertEqual(auth.authenticator.__class__.__module__, "protolink.security.auth")
@@ -136,6 +137,51 @@ class OllamaContextTests(unittest.TestCase):
 
         self.assertIn("ProtoLink's persistent per-agent history", prompt)
         self.assertNotIn("Previous turn", prompt)
+
+    def test_model_response_preserves_runtime_observability_reports(self) -> None:
+        runtime_result = {
+            "provider": "ollama",
+            "model": "gemma4:e4b",
+            "responder": "architect",
+            "answer": "Done.",
+            "status": "completed",
+            "events": [],
+            "run_events": [],
+            "run_report": {"run_id": "run-test", "events": [{"type": "task.completed"}]},
+            "transport_report": {"client": {"metrics": {"requests_started": 1}}},
+            "diffs": [],
+            "targets": [],
+            "approval_requests": [],
+            "approval_decisions": [],
+            "run_context": {"run_id": "run-test"},
+            "prompt_profile": {
+                "configured": "auto",
+                "resolved": "small",
+                "label": "Small local model",
+            },
+            "run_contract": {},
+            "completion_validation": {},
+        }
+        with (
+            patch(
+                "protoagent_core.runtime.run_selected_model",
+                return_value=runtime_result,
+            ),
+            patch("protoagent_core.history.persist_architect_turn"),
+            patch.object(agent_engine, "remember_valid_provider"),
+            patch.object(agent_engine, "build_context_map", return_value={"files": []}),
+        ):
+            response = agent_engine._model_response(
+                "update the project",
+                ".",
+                0.0,
+                {"items": [], "errors": []},
+                "session-test",
+                loom_context={},
+            )
+
+        self.assertEqual(response["run_report"], runtime_result["run_report"])
+        self.assertEqual(response["transport_report"], runtime_result["transport_report"])
 
 
 if __name__ == "__main__":

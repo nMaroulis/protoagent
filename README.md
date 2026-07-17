@@ -1,124 +1,142 @@
 # ProtoAgent
 
 <div align="center">
-  <img src="https://github.com/nMaroulis/protoagent/blob/main/misc/assets/banner.jpeg?raw=true" alt="ProtoAgent Logo" width="60%">
+  <img src="misc/assets/banner.jpeg" alt="ProtoAgent banner" width="60%">
 </div>
 
-**A local-first, experimental AI agent ecosystem engineered for speed, privacy, and absolute developer control.**
+ProtoAgent is a local-first coding agent built around a fast Rust terminal UI
+and a Python core powered by [ProtoLink](https://github.com/nMaroulis/protolink).
+Its runtime is designed to give smaller models narrow roles, bounded evidence,
+and deterministic completion checks instead of one large prompt with every
+tool attached.
 
-The core philosophy of ProtoAgent is simple: **Decouple the Brain from the Frontends.** Cloud subscriptions and bundled API plans are great for one-off chats, but when you start running complex, multi-agent autonomous loops, your quotas for Claude and Gemini go out pretty fast. Agentic coding requires hundreds of iterative steps, which means it fundamentally belongs on local compute. ProtoAgent is designed to give you that premium, autonomous coding assistant experience—entirely for free, running on your own hardware.
+Release `0.2.0` covers the active `proto-cli` and `protoagent-core`
+components. The ACP editor bridge remains a planned `0.0.0-dev.0` component.
+See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 
-Current component versions: `proto-cli` `0.1.0`, `protoagent-core` `0.1.0`, and planned `proto-acp` `0.0.0-dev.0`. See [VERSIONING.md](VERSIONING.md) for the source-of-truth files and bump policy.
+## Why ProtoAgent
 
----
+- **Small-model first:** `small`, `medium`, `large`, and `api` prompt profiles
+  tune delegation depth without changing the safety boundary.
+- **Visible context:** Context Loom incrementally indexes the workspace and
+  builds a bounded, source-cited Context Pack before inference.
+- **Narrow agent roles:** Architect coordinates; Explorer reads the repository;
+  Coder prepares policy-gated changes; optional Scout researches the public
+  web.
+- **ProtoLink as the engine:** ProtoLink owns agent discovery, delegation,
+  tools, state, events, approvals, cancellation, transports, and run reports.
+- **Runtime completion checks:** ProtoAgent derives an application-level
+  `RunContract` and does not treat unsupported prose as a completed write task.
+- **Operator-visible behavior:** the Rust CLI exposes provider, model, context,
+  agent, readiness, timeline, trace, diff, and session state.
 
-## 🧩 The Ecosystem Architecture
+## Architecture
 
-ProtoAgent isn't just a script; it's a unified, modular ecosystem. By keeping the heavy orchestration logic centralized, every time the core gets smarter, all of your development environments get the upgrade instantly.
+| Surface | Status | Responsibility |
+| --- | --- | --- |
+| `cli/` | Active, `0.2.0` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
+| `core/` | Active, `0.2.0` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
+| `acp/` | Planned, `0.0.0-dev.0` | Future editor-facing Agent Client Protocol adapter. |
 
-### 1. The Core Engine (The Brain)
+The default coding deck is intentionally asymmetric:
 
-**Powered by `protolink` • Python**
-If **LangChain** is the massive, heavy enterprise framework for cloud models, `protolink` is the lightning-fast, minimalist alternative engineered strictly building autonomous agents using a simple intuitive API, powered by the Agent-to-Agent (A2A) protocol.
+| Role | State | Authority |
+| --- | --- | --- |
+| **Architect** | Persistent project conversation | Plans, delegates, and produces the final response; no workspace tools. |
+| **Explorer** | Task-local | Reads and searches the selected workspace. |
+| **Coder** | Task-local | Prepares file changes; every write crosses the approval boundary. |
+| **Scout** | Tool-only, no memory, disabled by default | Exposes ProtoLink's bounded `web_search` and `fetch_url` tools with `network.read`. |
 
-* **Small-Model Optimized:** Cloud agents use massive system prompts filled with complex XML tags that instantly confuse smaller local models. ProtoAgent keeps a stateful Architect controller on top of stateless Explorer/Coder workers, so 7B/8B parameter models get narrow tasks, typed artifacts, and runtime completion checks instead of a giant prompt.
-* **Prompt Profiles:** The agent deck can run in `auto`, `small`, `medium`, `large`, or `api` prompt modes, so local 7B models get terse deterministic instructions while frontier API models get richer planning and verification behavior.
-* **Context Loom:** ProtoAgent builds a local, source-cited Context Pack from the active workspace before the agent deck runs. This gives smaller models a compact evidence map instead of a giant hidden repo dump.
-* **ProtoLink-native context control:** Every model is configured with a typed `LLMModelProfile`; live context events drive the Rust meter, while persistent Architect history is described, compacted, and reset through ProtoLink state APIs. Explorer and Coder stay task-local.
-* **ProtoLink-native transport operations:** Concrete 0.6.5 transports own payload/concurrency limits, health, lifecycle cleanup, and dependency-free metrics; the Rust CLI surfaces readiness and per-run counters without a parallel transport layer.
-* **Agnostic:** It doesn't care what UI you are using. It receives prompts and emits lifecycle-aware task events plus typed action payloads.
-
-Check out the Protoagent 📚 [**whitepaper**](https://github.com/nMaroulis/protoagent/whitepaper.md).
-
-📝 Check out this article on **Level Up Coding** on **Medium**, for lessons learned while building this project: [Building My Own Local “Claude Code”: What I Learned Demystifying Agentic Coding under the Hood](https://levelup.gitconnected.com/building-my-own-local-claude-code-what-i-learned-demystifying-agentic-coding-under-the-hood-8772874b91b8)
-
-### 2. The CLI (The Terminal Face)
-
-**Embedded via PyO3 • Rust**
-A blazing-fast, gorgeous terminal wrapper for developers who live in the shell.
-
-* **The Experience:** Think of this as a purely local, offline version of **Claude Code** or **Clive**.
-* **Zero Overhead:** Because it's written in Rust, it launches instantly. It intercepts the Python core's output to render smooth progress spinners and forces an interactive `[Y/n]` approval prompt before the agent is allowed to execute any bash commands or modify your files.
-
-
-> The following animation shows a demo of a simple Task handled by the ProtoAgent CLI.
-
-![cli_demo](https://raw.githubusercontent.com/nMaroulis/protoagent/refs/heads/main/misc/assets/cli/simple_task.gif)
-
-### 3. The ACP Server (The Editor Face)
-
-**Native Integration • Python/Rust**
-A specialized server that implements the Agent Client Protocol (ACP) to bring the ProtoAgent core directly into your IDE.
-
-* **The Experience:** Think of this as your local, ultra-reliable alternative to **Cline** or **Aider**.
-* **Universal Support:** Hook it seamlessly into **Zed**, PyCharm, JetBrains, or any editor that supports modern agent protocols. Your editor handles the chat UI; ProtoAgent handles the heavy multi-agent routing in the background and hands back clean, perfectly formatted file diffs.
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-* Rust toolchain (Cargo 1.80+)
-* Python 3.12+
-* A local LLM runner (Ollama, LM Studio, etc.)
-
-### 1. Install the Core Workspace
-
-Clone the monorepo and initialize the isolated Python environment. This ensures the Protolink engine has everything it needs to run the background routing.
+Scout is optional because external research changes the privacy and trust
+boundary. Enable it only when a task needs current public information:
 
 ```bash
-git clone https://github.com/yourusername/protoagent.git
+proto-cli agents scout on
+```
+
+Or inside the TUI:
+
+```text
+/agents scout on
+```
+
+The setting applies to the next run. When enabled, Scout is registered with the
+same ProtoLink mesh, so Architect can discover it and call its tools. Search and
+fetched text are treated as untrusted input; Scout has no workspace
+tools. Brave search uses `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless
+best-effort search, and English Wikipedia is keyless factual search.
+
+For the complete design, read the [whitepaper](whitepaper.md) and the
+[maintainer documentation](https://nmaroulis.github.io/protoagent/).
+
+## Install
+
+Requirements:
+
+- Python 3.12 or newer
+- Rust toolchain with Cargo 1.83 or newer
+- a supported local or API model provider
+
+Release staging note: ProtoLink 0.6.6 must be available from the selected
+package index before the ProtoAgent 0.2.0 install can resolve.
+
+```bash
+git clone https://github.com/nMaroulis/protoagent.git
 cd protoagent
 
-# Initialize the Brain
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.5"
-pip install -e core
+python -m pip install "protolink[http,llms]>=0.6.6"
+python -m pip install -e core
 
+cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
 
-### 2. Launch the Terminal Agent (CLI)
-
-To spin up the high-performance Rust interface (make sure your `.venv` is active so Rust can embed the Python logic!):
+Start the TUI from the repository root:
 
 ```bash
-cd cli
-cargo run
-
+cargo run --locked --manifest-path cli/Cargo.toml -- project set /path/to/project
+cargo run --locked --manifest-path cli/Cargo.toml -- start
 ```
 
-Check component versions from the repo root:
+Or run one task:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- version
+cargo run --locked --manifest-path cli/Cargo.toml -- run \
+  "explain the authentication flow and propose a safer change"
 ```
 
-### 3. Hook into Your Editor (Zed / JetBrains)
+Useful first checks:
 
-To pipe the local orchestration engine directly into your code editor via ACP, append the server path to your editor's configuration (e.g., `settings.json` in Zed):
-
-```json
-{
-  "lsp": {
-    "proto-acp": {
-      "binary": {
-        "path": "${workspace_root}/.venv/bin/python",
-        "arguments": ["${workspace_root}/acp/server.py"]
-      }
-    }
-  }
-}
-
+```bash
+cargo run --locked --manifest-path cli/Cargo.toml -- version
+cargo run --locked --manifest-path cli/Cargo.toml -- check
+cargo run --locked --manifest-path cli/Cargo.toml -- agents
 ```
 
----
+Provider setup, every CLI command, Context Loom behavior, and troubleshooting
+are covered in the [documentation](https://nmaroulis.github.io/protoagent/docs/intro).
 
-## 🛡️ Safety First: The Human-in-the-Loop Protocol
+## Safety And Privacy
 
-ProtoAgent strictly respects your system boundaries. Workspace writes are prepared as typed Protolink runtime actions before execution.
+Coder tools declare `workspace.write`. Before a write runs, ProtoLink policy
+emits a typed approval request with a `text/x-diff` preview, and the application
+returns a correlated approval decision. Esc or Ctrl-C requests cancellation
+through ProtoLink's task-control path.
 
-> **Immutable Rule:** Coder tools declare `workspace.write`. A `CapabilityPolicy` requires approval, the `RunAction` carries a `text/x-diff` preview artifact, and the Rust CLI returns a correlated `ApprovalDecision` before Protolink executes the write. During a running TUI task, Esc or Ctrl-C requests Protolink task cancellation.
+“Local-first” describes the default architecture, not a guarantee that every
+configuration is offline. Local providers can keep model traffic on the
+machine. API providers send model inputs to their configured endpoint, and
+enabling Scout sends search/fetch requests to public internet services. Durable
+ProtoLink trace output is opt-in through `PROTOAGENT_TRACE=1`.
 
-Local doesn't just mean free; it means total control.
+## Project Status
+
+The Rust CLI and Python core are the supported surfaces in `0.2.0`. The
+[ACP directory](acp/README.md) is a roadmap placeholder; it is not currently an
+installable editor server. Contributions should keep code, CLI help, readiness
+output, docs, tests, and the changelog aligned.
+
+## License
+
+ProtoAgent is available under the [MIT License](LICENSE).

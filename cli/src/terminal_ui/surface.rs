@@ -1,12 +1,14 @@
 use anyhow::Result;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
+    event::{
+        read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+    },
     execute, queue,
     style::ResetColor,
     terminal::{
-        disable_raw_mode, enable_raw_mode, Clear, ClearType, DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
-        LeaveAlternateScreen, SetTitle,
+        disable_raw_mode, enable_raw_mode, Clear, ClearType, DisableLineWrap, EnableLineWrap,
+        EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
     },
 };
 use std::io::{stdout, Write};
@@ -102,8 +104,12 @@ impl TerminalSurface {
                         }
                         needs_render = true;
                     }
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(None),
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() => {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(None)
+                    }
+                    KeyCode::Char('d')
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && editor.is_empty() =>
+                    {
                         return Ok(None);
                     }
                     KeyCode::PageUp => {
@@ -130,7 +136,11 @@ impl TerminalSurface {
                         if crate::active_project_dir().is_none() {
                             app.panel = PanelView::Project;
                             app.refresh(None);
-                            app.push(Role::Error, "@", "Choose a project with /project before tagging files.");
+                            app.push(
+                                Role::Error,
+                                "@",
+                                "Choose a project with /project before tagging files.",
+                            );
                             needs_render = true;
                         } else if let Some(path) = pick_project_file(self, app)? {
                             editor.insert_str(&format_file_tag(&path));

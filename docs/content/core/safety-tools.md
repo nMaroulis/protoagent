@@ -4,7 +4,8 @@ description: Workspace-safe tools, path boundaries, diff previews, and authoriza
 ---
 
 The core tools are deterministic helpers exposed to Explorer and Coder through
-ProtoLink tool registration.
+ProtoLink tool registration. Optional Scout uses ProtoLink's first-party
+network tools rather than a local duplicate.
 
 ## Workspace Boundary
 
@@ -28,7 +29,7 @@ Explorer uses these:
 | `list_directory(path=".")` | Skips ignored names and returns type/size metadata. |
 | `search_regex(pattern, path=".", file_filter=".*")` | Regex search, max 120 matches, skips binary/large files. |
 | `get_git_status()` | Runs `git status --short` with a short timeout. |
-| `build_context_map(max_files=80)` | Compact file list plus git status. |
+| `build_context_pack(query)` | Source-cited Context Loom evidence for a focused task. |
 
 Ignored directories:
 
@@ -37,6 +38,20 @@ Ignored directories:
 ```
 
 Common binary suffixes are skipped by search and indexing.
+
+## Network-Read Tools
+
+Scout is the only agent with network tools:
+
+| Tool | Boundary |
+| --- | --- |
+| `web_search` | Bounded normalized sources; Brave, keyless best-effort DuckDuckGo, or English Wikipedia. |
+| `fetch_url` | Public HTTP(S) URLs on standard ports only, with DNS and redirect checks plus text/size bounds. |
+
+Both tools declare `network.read`, return untrusted content, and have no
+workspace access. Scout is disabled by default, so the default deck neither
+registers these tools nor performs web requests. Enabling Scout registers the
+factories but still makes no request until Architect invokes a tool.
 
 ## Write Tools
 
@@ -75,6 +90,7 @@ Agent policies use deny-by-default behavior:
 | Architect | deny | delegation and state/history operations |
 | Explorer | deny | workspace reads only |
 | Coder | deny | workspace writes with approval only |
+| Scout | deny | network reads only, when enabled |
 | Guide | deny | no tools, no state, no delegation |
 
 This means adding a new tool requires both tool registration and policy review.
@@ -83,7 +99,9 @@ This means adding a new tool requires both tool registration and policy review.
 
 When adding a tool:
 
-1. Put deterministic filesystem logic in `tools.py`.
+1. Prefer the first-party ProtoLink tool when it provides the required
+   capability; put ProtoAgent-specific deterministic filesystem logic in
+   `tools.py`.
 2. Register the tool only on the agent that needs it.
 3. Assign the narrowest capability string.
 4. Update that agent's `CapabilityPolicy`.

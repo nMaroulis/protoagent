@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -41,10 +42,11 @@ class ContextStore:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         self._ensure_schema(conn)
+        conn.commit()
         return conn
 
     def status(self) -> dict[str, Any]:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             count = conn.execute("select count(*) from files").fetchone()[0]
             meta = {
                 row["key"]: row["value"] for row in conn.execute("select key, value from metadata")
@@ -56,22 +58,35 @@ class ContextStore:
             "files_indexed": count,
             "indexed_at": meta.get("indexed_at", ""),
             "last_duration_ms": int(meta.get("last_duration_ms", "0") or 0),
+            "files_seen": int(meta.get("files_seen", "0") or 0),
+            "files_updated": int(meta.get("files_updated", "0") or 0),
+            "files_removed": int(meta.get("files_removed", "0") or 0),
+            "files_unchanged": int(meta.get("files_unchanged", "0") or 0),
+            "files_skipped": int(meta.get("files_skipped", "0") or 0),
             "schema": int(meta.get("schema", "1") or 1),
         }
 
     def read_file(self, path: str) -> dict[str, Any] | None:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             row = conn.execute("select * from files where path = ?", (path,)).fetchone()
         return _row_to_entry(row) if row else None
 
     def read_all(self) -> list[dict[str, Any]]:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             rows = conn.execute("select * from files order by path").fetchall()
         return [_row_to_entry(row) for row in rows]
 
+    def read_fingerprints(self) -> dict[str, tuple[int, int]]:
+        """Return the cheap file metadata needed for incremental refreshes."""
+        with closing(self.connect()) as conn:
+            rows = conn.execute(
+                "select path, size_bytes, mtime_ns from files order by path"
+            ).fetchall()
+        return {str(row["path"]): (int(row["size_bytes"]), int(row["mtime_ns"])) for row in rows}
+
     def upsert_files(self, files: Iterable[IndexedFile]) -> int:
         count = 0
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             for item in files:
                 conn.execute(
                     """
@@ -105,14 +120,14 @@ class ContextStore:
         return count
 
     def delete_missing(self, live_paths: set[str]) -> int:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             rows = [row["path"] for row in conn.execute("select path from files")]
             stale = [path for path in rows if path not in live_paths]
             conn.executemany("delete from files where path = ?", ((path,) for path in stale))
         return len(stale)
 
     def update_metadata(self, values: dict[str, Any]) -> None:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             for key, value in values.items():
                 conn.execute(
                     "insert into metadata(key, value) values(?, ?) "
@@ -121,7 +136,13 @@ class ContextStore:
                 )
 
     def mark_indexed(
-        self, duration_ms: int, files_seen: int, files_updated: int, files_removed: int
+        self,
+        duration_ms: int,
+        files_seen: int,
+        files_updated: int,
+        files_removed: int,
+        files_unchanged: int = 0,
+        files_skipped: int = 0,
     ) -> None:
         self.update_metadata(
             {
@@ -131,6 +152,8 @@ class ContextStore:
                 "files_seen": files_seen,
                 "files_updated": files_updated,
                 "files_removed": files_removed,
+                "files_unchanged": files_unchanged,
+                "files_skipped": files_skipped,
             }
         )
 

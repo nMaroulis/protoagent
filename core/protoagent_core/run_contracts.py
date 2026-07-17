@@ -46,6 +46,14 @@ _READ_ONLY_PREFIX = re.compile(
     r"identify|find|show|summarize|review)\b",
     re.IGNORECASE,
 )
+_READ_ONLY_WRITE_CLAUSE = re.compile(
+    r"(?:\b(?:and|then|also|but)\b|[,:;.!?])\s+(?:please\s+)?(?:"
+    + "|".join(re.escape(hint) for hint in _WRITE_HINTS)
+    + r")\b|\bplease\s+(?:"
+    + "|".join(re.escape(hint) for hint in _WRITE_HINTS)
+    + r")\b",
+    re.IGNORECASE,
+)
 _GREETING = re.compile(r"^\s*(hi|hello|hey|thanks|thank you)\W*$", re.IGNORECASE)
 _BLOCKER_HINTS = (
     "blocked",
@@ -230,8 +238,12 @@ def validate_run_completion(
 
 def _has_write_intent(prompt: str) -> bool:
     text = prompt.lower()
-    if _READ_ONLY_PREFIX.match(text) and not any(hint in text for hint in _WRITE_HINTS):
-        return False
+    if _READ_ONLY_PREFIX.match(text):
+        # Read-only questions often mention implementation verbs inside symbol
+        # names or prose ("how does create_agent_deck work?"). Only turn such a
+        # question into a write contract when it contains a separate imperative
+        # clause such as "and update the docs" or "Review it. Fix the bug."
+        return bool(_READ_ONLY_WRITE_CLAUSE.search(text))
     tokens = set(re.findall(r"[a-z][a-z0-9_-]*", text))
     if tokens.intersection(_WRITE_HINTS):
         return True

@@ -67,9 +67,11 @@ Planned work:
 
 1. Inspect incoming tool schemas from the editor.
 2. Classify tools as read-only, write-capable, network, or external side effect.
-3. Route read-only tools to Explorer when safe.
-4. Route write-capable tools through the same approval boundary as workspace writes.
-5. Add visible docs for tool classification and limitations.
+3. Route workspace read-only tools to Explorer when safe.
+4. Route public network-read tools through Scout's optional `network.read`
+   boundary rather than expanding Explorer.
+5. Route write-capable tools through the same approval boundary as workspace writes.
+6. Add visible docs for tool classification and limitations.
 
 ## Phase 5: Editor Guides
 

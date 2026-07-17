@@ -1,6 +1,6 @@
 .hero {
   min-height: 74vh;
-  background-image: linear-gradient(90deg, var(--proto-hero-overlay-start), var(--proto-hero-overlay-end)), url('/img/banner.jpeg');
+  background-image: linear-gradient(90deg, var(--proto-hero-overlay-start), var(--proto-hero-overlay-end)), var(--proto-hero-image);
   background-position: center;
   background-size: cover;
   display: flex;

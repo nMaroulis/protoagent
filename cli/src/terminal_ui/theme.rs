@@ -25,6 +25,7 @@ pub(super) fn write_line(
     write_at(out, 0, y, width, text_value, fg, background, bold)
 }
 
+#[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 pub(super) fn write_at(
     out: &mut Stdout,
     x: u16,
@@ -45,7 +46,11 @@ pub(super) fn write_at(
         MoveTo(x, y),
         SetForegroundColor(fg),
         SetBackgroundColor(background),
-        SetAttribute(if bold { Attribute::Bold } else { Attribute::Reset }),
+        SetAttribute(if bold {
+            Attribute::Bold
+        } else {
+            Attribute::Reset
+        }),
         Print(value),
         SetAttribute(Attribute::Reset)
     )?;
@@ -71,15 +76,27 @@ pub(super) fn bg() -> Color {
 }
 
 pub(super) fn panel_bg() -> Color {
-    Color::Rgb { r: 14, g: 16, b: 24 }
+    Color::Rgb {
+        r: 14,
+        g: 16,
+        b: 24,
+    }
 }
 
 pub(super) fn surface_bg() -> Color {
-    Color::Rgb { r: 32, g: 38, b: 55 }
+    Color::Rgb {
+        r: 32,
+        g: 38,
+        b: 55,
+    }
 }
 
 pub(super) fn input_bg() -> Color {
-    Color::Rgb { r: 18, g: 21, b: 30 }
+    Color::Rgb {
+        r: 18,
+        g: 21,
+        b: 30,
+    }
 }
 
 pub(super) fn modal_shadow_bg() -> Color {
@@ -87,47 +104,91 @@ pub(super) fn modal_shadow_bg() -> Color {
 }
 
 pub(super) fn modal_bg() -> Color {
-    Color::Rgb { r: 18, g: 23, b: 35 }
+    Color::Rgb {
+        r: 18,
+        g: 23,
+        b: 35,
+    }
 }
 
 pub(super) fn modal_list_bg() -> Color {
-    Color::Rgb { r: 10, g: 14, b: 23 }
+    Color::Rgb {
+        r: 10,
+        g: 14,
+        b: 23,
+    }
 }
 
 pub(super) fn modal_selection_bg() -> Color {
-    Color::Rgb { r: 111, g: 229, b: 235 }
+    Color::Rgb {
+        r: 111,
+        g: 229,
+        b: 235,
+    }
 }
 
 pub(super) fn modal_border() -> Color {
-    Color::Rgb { r: 246, g: 207, b: 93 }
+    Color::Rgb {
+        r: 246,
+        g: 207,
+        b: 93,
+    }
 }
 
 pub(super) fn text() -> Color {
-    Color::Rgb { r: 238, g: 243, b: 248 }
+    Color::Rgb {
+        r: 238,
+        g: 243,
+        b: 248,
+    }
 }
 
 pub(super) fn muted() -> Color {
-    Color::Rgb { r: 154, g: 167, b: 184 }
+    Color::Rgb {
+        r: 154,
+        g: 167,
+        b: 184,
+    }
 }
 
 pub(super) fn cyan() -> Color {
-    Color::Rgb { r: 88, g: 220, b: 233 }
+    Color::Rgb {
+        r: 88,
+        g: 220,
+        b: 233,
+    }
 }
 
 pub(super) fn magenta() -> Color {
-    Color::Rgb { r: 224, g: 86, b: 216 }
+    Color::Rgb {
+        r: 224,
+        g: 86,
+        b: 216,
+    }
 }
 
 pub(super) fn yellow() -> Color {
-    Color::Rgb { r: 243, g: 198, b: 91 }
+    Color::Rgb {
+        r: 243,
+        g: 198,
+        b: 91,
+    }
 }
 
 pub(super) fn green() -> Color {
-    Color::Rgb { r: 116, g: 223, b: 159 }
+    Color::Rgb {
+        r: 116,
+        g: 223,
+        b: 159,
+    }
 }
 
 pub(super) fn red() -> Color {
-    Color::Rgb { r: 255, g: 122, b: 138 }
+    Color::Rgb {
+        r: 255,
+        g: 122,
+        b: 138,
+    }
 }
 
 pub(super) fn black() -> Color {

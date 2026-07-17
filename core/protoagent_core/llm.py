@@ -207,6 +207,20 @@ def validate_protolink() -> dict[str, Any]:
             and "authenticator" in http_transport_parameters
             and "credentials" in http_transport_parameters
         )
+        try:
+            from protolink.tools import fetch_url, web_search
+
+            web_tools = (web_search(), fetch_url())
+            web_tools_ready = (
+                [tool.name for tool in web_tools] == ["web_search", "fetch_url"]
+                and all(tuple(tool.capabilities or ()) == ("network.read",) for tool in web_tools)
+                and all(
+                    str(getattr(tool, "_protolink_builtin_id", "")) == tool.name
+                    for tool in web_tools
+                )
+            )
+        except Exception:
+            web_tools_ready = False
         agent_ready = all(
             (
                 streaming_ready,
@@ -236,6 +250,7 @@ def validate_protolink() -> dict[str, Any]:
             "logging_ready": logging_ready,
             "auth_ready": auth_ready,
             "transport_ready": transport_ready,
+            "web_tools_ready": web_tools_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
@@ -256,6 +271,7 @@ def validate_protolink() -> dict[str, Any]:
                 "logging_ready": False,
                 "auth_ready": False,
                 "transport_ready": False,
+                "web_tools_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -273,6 +289,7 @@ def validate_protolink() -> dict[str, Any]:
                 "logging_ready": False,
                 "auth_ready": False,
                 "transport_ready": False,
+                "web_tools_ready": False,
                 "error": str(exc),
             }
 

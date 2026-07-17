@@ -8,6 +8,7 @@ from unittest.mock import patch
 from protoagent_core import config as config_module
 from protoagent_core.config import set_agent_prompt_profile, visible_config
 from protoagent_core.prompt_profiles import (
+    PROMPT_PROFILES,
     compose_system_prompt,
     infer_prompt_profile,
     prompt_profile_status,
@@ -15,6 +16,10 @@ from protoagent_core.prompt_profiles import (
 
 
 class PromptProfileTests(unittest.TestCase):
+    def test_every_resolved_profile_has_a_scout_overlay(self) -> None:
+        for profile in PROMPT_PROFILES.values():
+            self.assertIn("web_search", profile.role_prompt("scout"))
+
     def test_auto_inference_uses_model_and_provider_capability_hints(self) -> None:
         self.assertEqual(infer_prompt_profile("ollama", "qwen2.5-coder:7b"), "small")
         self.assertEqual(infer_prompt_profile("lmstudio", "qwen3-coder:14b"), "medium")

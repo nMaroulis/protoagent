@@ -27,7 +27,8 @@ struct DiffRenderLine {
 pub(super) fn diff_review_summary(diff: &str) -> String {
     let review = parse_diff(diff);
     if review.files.is_empty() {
-        return "No structured diff could be parsed. Use /diff raw to inspect the raw payload.".to_string();
+        return "No structured diff could be parsed. Use /diff raw to inspect the raw payload."
+            .to_string();
     }
 
     let mut rows = vec![format!(
@@ -63,7 +64,9 @@ pub(super) fn show_diff_modal(
             continue;
         };
         match key.code {
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
+                return Ok(())
+            }
             KeyCode::Up => scroll = scroll.saturating_sub(1),
             KeyCode::Down => scroll = (scroll + 1).min(max_scroll),
             KeyCode::PageUp => scroll = scroll.saturating_sub(12),
@@ -77,7 +80,10 @@ pub(super) fn show_diff_modal(
 
 pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(4).saturating_div(5).clamp(54, width.saturating_sub(4));
+    let modal_width = width
+        .saturating_mul(4)
+        .saturating_div(5)
+        .clamp(54, width.saturating_sub(4));
     let modal_height = 14u16.min(height.saturating_sub(4)).max(11);
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
@@ -85,7 +91,16 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
 
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
     write_at(
         &mut out,
         x,
@@ -174,7 +189,10 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         modal_width,
         &format!(
             " Intent    : {}",
-            clip_plain(&approval.description, modal_width.saturating_sub(14) as usize)
+            clip_plain(
+                &approval.description,
+                modal_width.saturating_sub(14) as usize
+            )
         ),
         muted(),
         modal_bg(),
@@ -183,12 +201,36 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
 
     let button_y = y + modal_height.saturating_sub(3);
     let mut button_x = x + 2;
-    draw_button(&mut out, button_x, button_y, 14, "[Y] APPLY", black(), green())?;
+    draw_button(
+        &mut out,
+        button_x,
+        button_y,
+        14,
+        "[Y] APPLY",
+        black(),
+        green(),
+    )?;
     button_x += 16;
     if approval.diff.trim().is_empty() {
-        draw_button(&mut out, button_x, button_y, 18, "[V] NO DIFF", muted(), surface_bg())?;
+        draw_button(
+            &mut out,
+            button_x,
+            button_y,
+            18,
+            "[V] NO DIFF",
+            muted(),
+            surface_bg(),
+        )?;
     } else {
-        draw_button(&mut out, button_x, button_y, 18, "[V] REVIEW DIFF", black(), yellow())?;
+        draw_button(
+            &mut out,
+            button_x,
+            button_y,
+            18,
+            "[V] REVIEW DIFF",
+            black(),
+            yellow(),
+        )?;
     }
     button_x += 20;
     draw_button(&mut out, button_x, button_y, 13, "[N] DENY", black(), red())?;
@@ -210,8 +252,14 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
 
 fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<usize> {
     let (width, height) = size();
-    let modal_width = width.saturating_mul(9).saturating_div(10).clamp(60, width.saturating_sub(2));
-    let modal_height = height.saturating_mul(4).saturating_div(5).clamp(14, height.saturating_sub(2));
+    let modal_width = width
+        .saturating_mul(9)
+        .saturating_div(10)
+        .clamp(60, width.saturating_sub(2));
+    let modal_height = height
+        .saturating_mul(4)
+        .saturating_div(5)
+        .clamp(14, height.saturating_sub(2));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let body_top = y + 5;
@@ -224,8 +272,26 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     let mut out = stdout();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
-    write_at(&mut out, x, y, modal_width, &"=".repeat(modal_width as usize), modal_border(), modal_bg(), true)?;
-    write_at(&mut out, x, y + 1, modal_width, &modal_title(title, modal_width), black(), modal_border(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y,
+        modal_width,
+        &"=".repeat(modal_width as usize),
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
+    write_at(
+        &mut out,
+        x,
+        y + 1,
+        modal_width,
+        &modal_title(title, modal_width),
+        black(),
+        modal_border(),
+        true,
+    )?;
     write_at(
         &mut out,
         x,
@@ -267,7 +333,16 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     for row_index in 0..body_rows {
         let row_y = body_top + row_index as u16;
         let Some(line) = lines.get(start + row_index) else {
-            write_at(&mut out, x + 1, row_y, modal_width.saturating_sub(2), "", muted(), modal_list_bg(), false)?;
+            write_at(
+                &mut out,
+                x + 1,
+                row_y,
+                modal_width.saturating_sub(2),
+                "",
+                muted(),
+                modal_list_bg(),
+                false,
+            )?;
             continue;
         };
         write_at(
@@ -285,9 +360,23 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     let footer = if lines.is_empty() {
         " No diff lines".to_string()
     } else {
-        format!(" line {}-{} of {}", start + 1, (start + body_rows).min(lines.len()), lines.len())
+        format!(
+            " line {}-{} of {}",
+            start + 1,
+            (start + body_rows).min(lines.len()),
+            lines.len()
+        )
     };
-    write_at(&mut out, x, y + modal_height - 1, modal_width, &footer, modal_border(), modal_bg(), true)?;
+    write_at(
+        &mut out,
+        x,
+        y + modal_height - 1,
+        modal_width,
+        &footer,
+        modal_border(),
+        modal_bg(),
+        true,
+    )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
     out.flush()?;
     Ok(max_scroll)
@@ -364,41 +453,81 @@ fn draw_button(
 }
 
 fn diff_file_fg() -> Color {
-    Color::Rgb { r: 164, g: 239, b: 246 }
+    Color::Rgb {
+        r: 164,
+        g: 239,
+        b: 246,
+    }
 }
 
 fn diff_file_bg() -> Color {
-    Color::Rgb { r: 10, g: 34, b: 48 }
+    Color::Rgb {
+        r: 10,
+        g: 34,
+        b: 48,
+    }
 }
 
 fn diff_add_fg() -> Color {
-    Color::Rgb { r: 185, g: 244, b: 205 }
+    Color::Rgb {
+        r: 185,
+        g: 244,
+        b: 205,
+    }
 }
 
 fn diff_add_bg() -> Color {
-    Color::Rgb { r: 12, g: 43, b: 32 }
+    Color::Rgb {
+        r: 12,
+        g: 43,
+        b: 32,
+    }
 }
 
 fn diff_remove_fg() -> Color {
-    Color::Rgb { r: 255, g: 185, b: 195 }
+    Color::Rgb {
+        r: 255,
+        g: 185,
+        b: 195,
+    }
 }
 
 fn diff_remove_bg() -> Color {
-    Color::Rgb { r: 52, g: 22, b: 33 }
+    Color::Rgb {
+        r: 52,
+        g: 22,
+        b: 33,
+    }
 }
 
 fn diff_hunk_fg() -> Color {
-    Color::Rgb { r: 255, g: 228, b: 156 }
+    Color::Rgb {
+        r: 255,
+        g: 228,
+        b: 156,
+    }
 }
 
 fn diff_hunk_bg() -> Color {
-    Color::Rgb { r: 45, g: 38, b: 22 }
+    Color::Rgb {
+        r: 45,
+        g: 38,
+        b: 22,
+    }
 }
 
 fn diff_meta_fg() -> Color {
-    Color::Rgb { r: 135, g: 148, b: 166 }
+    Color::Rgb {
+        r: 135,
+        g: 148,
+        b: 166,
+    }
 }
 
 fn diff_meta_bg() -> Color {
-    Color::Rgb { r: 13, g: 18, b: 29 }
+    Color::Rgb {
+        r: 13,
+        g: 18,
+        b: 29,
+    }
 }

@@ -9,14 +9,14 @@ from typing import Any
 
 from protolink import Agent, CapabilityPolicy, Task
 
-from .config import CONFIG_DIR, visible_config
+from .config import CONFIG_DIR, optional_agent_enabled, visible_config
 from .llm import create_llm_from_config
 from .prompt_profiles import prompt_profile_status
 
 GUIDE_SYSTEM_PROMPT = """You are Guide, ProtoAgent's isolated interactive help agent.
 
 You answer questions about using ProtoAgent itself. You are not part of the
-Architect/Explorer/Coder coding mesh. You have no tools, no registry, no
+coding-agent mesh. You have no tools, no registry, no
 delegation, no project memory, and no access to the user's workspace. Answer
 only from this manual. If the manual does not cover a detail, say so clearly.
 
@@ -39,7 +39,8 @@ Manual:
 - `@path` in a prompt tags a project file or directory into the current task.
 - `/context` shows Context Loom status. `/context <query>` previews a focused,
   source-cited Context Pack without running the coding agents.
-- `/index refresh` rebuilds the Context Loom index.
+- `/index refresh` runs an incremental Context Loom refresh and reports
+  updated, unchanged, removed, and skipped files.
 - `/context window 16k` sets the Ollama `num_ctx` window. `/context window auto`
   clears the override. This is currently app-controlled for Ollama.
 - `/context history` inspects saved ProtoLink Architect conversation memory.
@@ -51,10 +52,18 @@ Manual:
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  RunContract, stateful Architect, stateless Explorer/Coder workers, policy
-  gate, completion guard, and current prompt profile.
+  RunContract, stateful Architect, stateless Explorer/Coder workers, optional
+  Scout, policy gate, completion guard, and current prompt profile.
+- `/agents scout on` enables the optional stateless Scout web-research worker;
+  `/agents scout off` disables it. Scout is off by default. From the shell, use
+  `proto-cli agents scout on|off`.
+- Scout exposes ProtoLink 0.6.6's first-party `web_search` and `fetch_url`
+  tools under the explicit `network.read` policy. Brave search is the default
+  and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
+  while English Wikipedia is keyless factual search. Web results are external,
+  untrusted evidence.
 - `/agents profile [auto|small|medium|large|api]` shows or changes the prompt
-  profile used by Architect, Explorer, and Coder. Shorthands such as
+  profile used by the agent deck. Shorthands such as
   `/agents small` and `/agents api` also work. From the shell, use
   `proto-cli agents profile [mode]`.
 - Prompt profiles tune reasoning depth and delegation style for the selected
@@ -78,7 +87,7 @@ Manual:
 - Rust UI session summaries are in `~/.protoagent/sessions.json`.
 - ProtoLink Architect conversation state is in
   `~/.protoagent/conversations.sqlite`. Explorer and Coder are task-local
-  stateless workers.
+  stateless workers. Optional Scout has no model or durable memory.
 - Context Loom indexes are under `~/.protoagent/indexes`.
 - Short-lived live progress/control JSONL files are written in the OS temp
   directory while a task is running and are cleaned up after the run.
@@ -92,7 +101,8 @@ Manual:
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
   and builds context as a stateless worker; Coder prepares approval-gated file
-  changes as a stateless worker. Guide is separate and only answers help
+  changes as a stateless worker; optional Scout exposes bounded public-web
+  tools without another model loop. Guide is separate and only answers help
   questions.
 """
 
@@ -125,6 +135,9 @@ def _settings_context(config: dict[str, Any]) -> str:
         "- Prompt profile: "
         f"{profile.get('configured', 'auto')} configured, "
         f"{profile.get('resolved', 'auto')} resolved ({profile_label})"
+    )
+    lines.append(
+        f"- Optional Scout: {'enabled' if optional_agent_enabled('scout', config) else 'disabled'}"
     )
     label = str(active.get("label") or "")
     if label and label != provider:

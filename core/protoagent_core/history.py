@@ -13,7 +13,7 @@ from protolink.state.conversation import ConversationState
 from .agents.common import QUIET_LOGGER, conversation_storage, with_workspace_contract
 
 STATEFUL_AGENT_NAMES = ("architect",)
-STATELESS_WORKER_NAMES = ("explorer", "coder")
+STATELESS_WORKER_NAMES = ("explorer", "coder", "scout")
 AGENT_NAMES = STATEFUL_AGENT_NAMES
 DEFAULT_HISTORY_BUDGET_RATIO = 0.7
 
@@ -22,7 +22,7 @@ async def compact_agent_histories_for_run(
     agents: Iterable[Any],
     session_id: str | None,
 ) -> list[dict[str, Any]]:
-    """Compact each running agent's persisted conversation through ProtoLink."""
+    """Compact persisted conversation state for each stateful running agent."""
     if not session_id:
         return []
 
@@ -64,7 +64,7 @@ def compact_saved_histories(
     strategy: str = "tokens",
     limit: int | None = None,
 ) -> dict[str, Any]:
-    """Compact every agent's durable session through ProtoLink state APIs."""
+    """Compact durable Architect state through ProtoLink state APIs."""
     return asyncio.run(
         _compact_saved_histories(
             session_id,
@@ -77,7 +77,7 @@ def compact_saved_histories(
 
 
 def reset_saved_histories(session_id: str) -> dict[str, Any]:
-    """Clear one durable ProtoLink session across the full agent deck."""
+    """Clear one durable ProtoLink Architect session."""
     return asyncio.run(_reset_saved_histories(session_id))
 
 
@@ -404,9 +404,14 @@ def _content_text(value: Any) -> str:
 
 
 def _architect_system_prompt(workspace: str | None) -> str:
-    from .agents.architect import ARCHITECT_SYSTEM_PROMPT
+    from .agents.architect import architect_system_prompt
+    from .config import optional_agent_enabled
 
-    return with_workspace_contract(ARCHITECT_SYSTEM_PROMPT, workspace, "Architect")
+    return with_workspace_contract(
+        architect_system_prompt(scout_enabled=optional_agent_enabled("scout")),
+        workspace,
+        "Architect",
+    )
 
 
 def _history_budget_ratio() -> float:

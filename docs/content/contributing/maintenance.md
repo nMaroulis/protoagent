@@ -18,10 +18,12 @@ runtime contracts, or architecture boundaries change.
 | New runtime env var | `Reference / Environment` |
 | New component version or bump policy | `Reference / Versioning`, affected component README, `VERSIONING.md` |
 | New agent, tool, or capability | `Core / Agent Deck`, `Core / Safety And Tools` |
+| New optional/network capability | Also update `CLI / Commands`, `Reference / Environment`, trust-boundary copy, and readiness output |
 | New Context Loom signal or schema field | `Core / Context Loom Internals`, `CLI / Context Loom In The CLI` |
 | New memory behavior | `Core / State And Memory`, `CLI / Projects And Sessions` |
 | New lint, type-check, formatter, or contributor workflow | `Contributing / Development Workflow`, `Reference / Verification` |
 | ACP implementation | `ACP / Overview`, `ACP / Plan`, `Reference / File Map` |
+| User-visible release | Root/component READMEs, `VERSIONING.md`, root `CHANGELOG.md`, and docs package metadata |
 
 ## Writing Style
 
@@ -76,6 +78,6 @@ npm run build
 If you changed commands or runtime behavior, also run the relevant code checks:
 
 ```bash
-cargo test --manifest-path cli/Cargo.toml
+cargo test --locked --manifest-path cli/Cargo.toml
 PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
 ```

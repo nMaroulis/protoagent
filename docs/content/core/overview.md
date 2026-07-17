@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.1.0`. It is declared in
+The active core package version is `0.2.0`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:
@@ -15,11 +15,12 @@ The core is responsible for:
 2. Model discovery and API key validation.
 3. LLM construction through ProtoLink.
 4. Context Loom indexing and prompt injection.
-5. Agent deck assembly.
+5. Agent deck assembly, including opt-in Scout registration.
 6. ProtoLink runtime startup, streaming, budgets, run reports, and tracing.
 7. Typed approval and cancellation bridge.
 8. ProtoLink conversation state inspection, compaction, reset, and persistence.
 9. Workspace-safe read/search/diff/write helpers.
+10. Optional ProtoLink web-search/fetch wiring with an explicit network boundary.
 
 ## Package Map
 
@@ -32,11 +33,11 @@ The core is responsible for:
 | `history.py` | ProtoLink-owned conversation state controls. |
 | `llm.py` | Provider to ProtoLink LLM wiring and readiness checks. |
 | `models.py` | Local/API model discovery and API key validation. |
-| `config.py` | Provider config, API keys, context window settings. |
+| `config.py` | Provider config, API keys, context window, prompt profile, and optional-agent settings. |
 | `tools.py` | Workspace-safe deterministic tools. |
 | `help_agent.py` | Isolated Guide agent for `/help QUESTION`. |
 | `context/` | Context Loom indexer, SQLite store, packer, schemas. |
-| `agents/` | Architect, Explorer, Coder factories and deck assembly. |
+| `agents/` | Architect, Explorer, Coder, optional Scout factories, and deck assembly. |
 
 ## Core Contract With Rust
 
@@ -61,7 +62,7 @@ ProtoLink objects used by the core include:
 
 | ProtoLink object | How ProtoAgent uses it |
 | --- | --- |
-| `Agent` | Architect, Explorer, Coder, Guide, and state-control facades. |
+| `Agent` | Architect, Explorer, Coder, optional Scout, Guide, and state-control facades. |
 | `Registry` | Agent discovery for Architect delegation. |
 | `AgentClient` | Send tasks, stream task events, cancel tasks. |
 | `Task` | User requests and final responses. |
@@ -76,7 +77,13 @@ ProtoLink objects used by the core include:
 | `ApprovalDecision` | Human decision from the Rust app. |
 | `TaskCancellationRequest` | Live cancellation from the TUI. |
 | `ConversationState` | Durable Architect memory and state-control facades. |
-| `RunContract` | ProtoAgent task contract attached to `RunContext.metadata`. |
+| `Tool` | First-party agent tools, including Scout's bounded `web_search` and `fetch_url`. |
+
+`RunContract` is a ProtoAgent application contract defined in
+`run_contracts.py`; it is serialized into `RunContext.metadata`. It is not a
+ProtoLink public object. This separation is deliberate: ProtoLink enforces
+generic runtime behavior while ProtoAgent decides what counts as a completed
+coding task.
 
 ## Primary Flow
 
@@ -89,7 +96,10 @@ flowchart TD
   D -->|no| F["runtime.run_selected_model"]
   F --> G["create RunContract, RunContext, and RunBudget"]
   G --> H["start Registry and agent deck"]
-  H --> I["send task stream to Architect"]
+  H --> HS{"Scout enabled?"}
+  HS -->|yes| SR["register Scout + ProtoLink web tools"]
+  HS -->|no| I["send task stream to Architect"]
+  SR --> I
   I --> J["record RunEvents and approvals"]
   J --> K["validate completion contract"]
   K --> L["return CoreResponse JSON"]
@@ -104,6 +114,7 @@ The core tests focus on runtime contracts rather than only prompt text:
 | `core/tests/test_runtime_integration.py` | Policies, approvals, cancellation, streaming, run budgets, event/report behavior. |
 | `core/tests/test_history_integration.py` | ProtoLink conversation state describe, compact, reset, and top-level turn persistence. |
 | `core/tests/test_run_contracts.py` | Task contract inference and completion validation. |
+| `core/tests/test_context_indexer.py` | Incremental index refresh and unchanged-file accounting. |
 | `core/tests/test_agent_manifest.py` | Runtime architecture manifest exposed to CLI diagnostics. |
 | `core/tests/test_llm_context.py` | Ollama context window, metrics profile, runtime prompt budget, context continuity ownership. |
 | `core/tests/test_help_agent.py` | Guide isolation, no tools/storage, current settings snapshot. |

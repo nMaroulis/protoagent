@@ -11,8 +11,13 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from .agents import create_agent_deck
-from .agents.common import AgentRuntimeAuth, create_configured_transport, create_runtime_auth
-from .config import load_config, normalize_provider, provider_config
+from .agents.common import (
+    RUNTIME_SCOPES,
+    AgentRuntimeAuth,
+    create_configured_transport,
+    create_runtime_auth,
+)
+from .config import load_config, normalize_provider, optional_agent_enabled, provider_config
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
 from .prompt_profiles import prompt_profile_status
@@ -33,8 +38,8 @@ def run_selected_model(
     """Run the selected model through the ProtoLink Architect agent.
 
     The CLI enters the core by sending a Task to Architect through ProtoLink's
-    AgentClient. Architect owns orchestration and resolves Explorer/Coder by
-    querying the Registry, just like the upstream coding-agent example.
+    AgentClient. Architect owns orchestration and resolves the core workers,
+    plus optional Scout when enabled, by querying the Registry.
     """
     config = load_config()
     provider = normalize_provider(config.get("active_provider", "ollama"))
@@ -56,6 +61,7 @@ def run_selected_model(
                 bridge,
                 profile,
                 user_prompt=user_prompt,
+                scout_enabled=optional_agent_enabled("scout", config),
             )
         )
     finally:
@@ -71,6 +77,7 @@ async def _run_agent_deck(
     bridge: RuntimeBridge,
     prompt_profile: dict[str, Any],
     user_prompt: str | None = None,
+    scout_enabled: bool = False,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
     from protolink import DEFAULT_REDACTION_POLICY, RunBudget, RunContext, RunRecorder, Task
@@ -88,11 +95,7 @@ async def _run_agent_deck(
     context = RunContext(
         session_id=session_id,
         workspace_uri=Path(project).as_uri(),
-        permissions={
-            "agent.delegate": "allow",
-            "workspace.read": "allow",
-            "workspace.write": "allow",
-        },
+        permissions={scope: "allow" for scope in RUNTIME_SCOPES},
         budget=_run_budget(provider, model, RunBudget),
         metadata={
             "application": "protoagent",
@@ -128,6 +131,7 @@ async def _run_agent_deck(
         f"{prompt_profile['label']} "
         f"(configured {prompt_profile['configured']}, resolved {prompt_profile['resolved']})."
     )
+    emit(f"Optional Scout web research: {'enabled' if scout_enabled else 'disabled'}.")
     emit(
         f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'})."
     )
@@ -174,11 +178,13 @@ async def _run_agent_deck(
                 "explorer": urls["explorer"],
                 "coder": urls["coder"],
                 "architect": urls["architect"],
+                "scout": urls["scout"],
             },
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
             telemetry=telemetry,
             prompt_profile=str(prompt_profile["resolved"]),
+            scout_enabled=scout_enabled,
             auth=auth,
         )
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
@@ -193,13 +199,13 @@ async def _run_agent_deck(
         if canceled := canceled_before_execution():
             return canceled
 
-        for name in ("explorer", "coder", "architect"):
-            deck[name].start(background=True)
-            started_agents.append(deck[name])
-            transport_health = deck[name].transport.health()
+        for name, agent in deck.items():
+            agent.start(background=True)
+            started_agents.append(agent)
+            transport_health = agent.transport.health()
             if not transport_health.get("ready"):
                 raise RuntimeError(f"ProtoLink {name} transport did not become ready")
-            emit(f"{name.title()} registered at {deck[name].card.url}; transport ready.")
+            emit(f"{name.title()} registered at {agent.card.url}; transport ready.")
             if canceled := canceled_before_execution():
                 return canceled
 
@@ -250,16 +256,9 @@ async def _run_agent_deck(
             delivery = await _send_task_once(client, deck["architect"].card.url, task)
 
         status = str(delivery.get("status") or "completed")
+        transport_task_status = status
         raw_answer = delivery.get("content")
         final_context = _context_from_delivery(delivery) or context
-        run_report = _run_report_to_dict(
-            recorder,
-            context=final_context,
-            final_task=delivery.get("task"),
-            provider=provider,
-            model=model,
-            redaction_policy=DEFAULT_REDACTION_POLICY,
-        )
         emit("Architect returned a final task response.")
 
         answer = _content_to_text(raw_answer)
@@ -297,6 +296,20 @@ async def _run_agent_deck(
         elif completion.outcome == "satisfied":
             emit("Run contract satisfied by Coder delegation or write artifact.")
 
+        run_report = _run_report_to_dict(
+            recorder,
+            context=final_context,
+            final_task=delivery.get("task"),
+            provider=provider,
+            model=model,
+            metadata={
+                "transport_task_status": transport_task_status,
+                "application_status": status,
+                "run_contract": contract.to_dict(),
+                "completion_validation": completion.to_dict(),
+            },
+            redaction_policy=DEFAULT_REDACTION_POLICY,
+        )
         transport_report = _transport_report(client, deck, registry_transport)
         client_metrics = transport_report.get("client", {}).get("metrics", {})
         emit(
@@ -353,6 +366,7 @@ def _runtime_urls() -> dict[str, str]:
         or _local_url(host),
         "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
         "coder": _env_url("PROTOAGENT_CODER_URL", "CODER_AGENT_URL") or _local_url(host),
+        "scout": _env_url("PROTOAGENT_SCOUT_URL", "SCOUT_AGENT_URL") or _local_url(host),
     }
 
 
@@ -649,18 +663,21 @@ def _run_report_to_dict(
     final_task: dict[str, Any] | None,
     provider: str,
     model: str,
+    metadata: dict[str, Any] | None = None,
     redaction_policy=None,
 ) -> dict[str, Any]:
     """Build ProtoLink's durable application-facing run report."""
+    report_metadata = {
+        "application": "protoagent",
+        "interface": "rust-cli",
+        "provider": provider,
+        "model": model,
+    }
+    report_metadata.update(metadata or {})
     report = recorder.to_report(
         context=context,
         final_task=final_task,
-        metadata={
-            "application": "protoagent",
-            "interface": "rust-cli",
-            "provider": provider,
-            "model": model,
-        },
+        metadata=report_metadata,
     )
     return report.to_dict(redaction_policy=redaction_policy)
 
@@ -805,6 +822,10 @@ def _preflight_cancellation_result(
             final_task=task.to_dict(),
             provider=provider,
             model=model,
+            metadata={
+                "transport_task_status": "canceled",
+                "application_status": "canceled",
+            },
             redaction_policy=DEFAULT_REDACTION_POLICY,
         ),
         "diffs": [],

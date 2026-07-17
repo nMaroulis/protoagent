@@ -36,6 +36,7 @@ The config contains:
 | `version` | Config version. |
 | `active_provider` | Canonical provider id. Defaults to `ollama`. |
 | `agent_prompt_profile` | Prompt profile for the agent deck: `auto`, `small`, `medium`, `large`, or `api`. |
+| `optional_agents.scout.enabled` | Whether tool-only Scout is registered for future runs. Defaults to `false`. |
 | `providers` | Per-provider labels, base URLs, model ids, API keys, optional context windows. |
 
 `load_config()` deep-merges saved config over defaults so new providers appear
@@ -77,6 +78,28 @@ proto-cli agents profile large
 `auto` is the default. API providers resolve to `api`; local model names with
 7B/8B hints resolve to `small`; 14B/20B/27B hints resolve to `medium`; 30B+
 and `large` hints resolve to `large`.
+
+## Optional Scout
+
+Scout is configured independently from the prompt profile because it changes
+the network trust boundary, not model reasoning depth:
+
+```text
+/agents scout
+/agents scout on
+/agents scout off
+```
+
+```bash
+proto-cli agents scout
+proto-cli agents scout on
+proto-cli agents scout off
+```
+
+Scout is off by default and changes apply to the next run. When enabled it is a
+tool-only ProtoLink agent with `web_search` and `fetch_url`; it does not select
+or call another LLM. Brave search reads `BRAVE_SEARCH_API_KEY` when invoked.
+The key is not stored in ProtoAgent's provider configuration.
 
 ## Key Sources
 
@@ -143,6 +166,7 @@ Flow:
 | `/models` | Pinned TUI inventory panel. |
 | `/config` | Pinned TUI config panel. |
 | `/agents profile` | Current configured and resolved prompt profile. |
+| `/agents scout` | Current optional Scout state and tool inventory. |
 | `/check` | Runtime plus active provider status. |
 
 ## Context Window Control

@@ -50,7 +50,7 @@ fn find_single_backtick(text: &str, start: usize) -> Option<usize> {
 }
 
 fn is_single_backtick(text: &str, idx: usize) -> bool {
-    if text[idx..].chars().next() != Some('`') {
+    if !text[idx..].starts_with('`') {
         return false;
     }
     let previous = text[..idx].chars().next_back();

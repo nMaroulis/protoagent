@@ -103,7 +103,7 @@ pub(crate) fn record_turn(prompt: &str, response: &CoreResponse) -> Result<()> {
     session.history.push(SessionTurn {
         at: now,
         prompt: prompt.to_string(),
-        answer_preview: preview_text(&response.answer.if_empty(&response.headline)),
+        answer_preview: preview_text(response.answer.if_empty(&response.headline)),
         status: response.status.clone(),
         provider: response.provider.clone(),
         model: response.model.clone(),
@@ -119,7 +119,9 @@ pub(crate) fn record_turn(prompt: &str, response: &CoreResponse) -> Result<()> {
         session.history.drain(0..overflow);
     }
 
-    store.sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    store
+        .sessions
+        .sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     store.sessions.truncate(MAX_SESSIONS);
     save_store(&store)
 }
@@ -135,7 +137,10 @@ pub(crate) fn load_store() -> SessionStore {
 pub(crate) fn active_session() -> Option<SessionRecord> {
     let workspace = crate::active_project_dir()?.to_string_lossy().to_string();
     let id = crate::project_session_id(&workspace);
-    load_store().sessions.into_iter().find(|session| session.id == id)
+    load_store()
+        .sessions
+        .into_iter()
+        .find(|session| session.id == id)
 }
 
 pub(crate) fn recent_sessions() -> Vec<SessionRecord> {
@@ -195,7 +200,8 @@ pub(crate) fn compact_current_history(keep_recent: usize) -> Result<HistoryCompa
 
 pub(crate) fn session_panel_rows() -> Vec<String> {
     let store = load_store();
-    let active = crate::active_project_dir().map(|path| crate::project_session_id(&path.to_string_lossy()));
+    let active =
+        crate::active_project_dir().map(|path| crate::project_session_id(&path.to_string_lossy()));
     let mut rows = Vec::new();
     if let Some(session) = active_session() {
         rows.push(format!(
@@ -207,14 +213,18 @@ pub(crate) fn session_panel_rows() -> Vec<String> {
         rows.push(format!("Session id: {}", short_id(&session.id)));
         rows.push(format!("Workspace: {}", session.workspace));
     } else if let Some(project) = crate::active_project_dir() {
-        rows.push(format!("Current: {} | no recorded turns yet", project.to_string_lossy()));
+        rows.push(format!(
+            "Current: {} | no recorded turns yet",
+            project.to_string_lossy()
+        ));
     } else {
         rows.push("Current: no project selected".to_string());
     }
 
     rows.push(format!("Store: {}", sessions_path().to_string_lossy()));
     rows.push(
-        "Commands: /sessions choose | /session rename NAME | /context compact | /timeline".to_string(),
+        "Commands: /sessions choose | /session rename NAME | /context compact | /timeline"
+            .to_string(),
     );
 
     if store.sessions.is_empty() {
@@ -224,7 +234,11 @@ pub(crate) fn session_panel_rows() -> Vec<String> {
 
     rows.push("Recent sessions:".to_string());
     for (idx, session) in store.sessions.iter().take(8).enumerate() {
-        let marker = if active.as_deref() == Some(session.id.as_str()) { "*" } else { " " };
+        let marker = if active.as_deref() == Some(session.id.as_str()) {
+            "*"
+        } else {
+            " "
+        };
         rows.push(format!(
             "{} {:>2}. {} | {} turn(s) | {} | {}",
             marker,
@@ -242,7 +256,11 @@ pub(crate) fn session_detail(session: &SessionRecord) -> String {
     let mut rows = vec![
         format!("Session: {} ({})", session.name, short_id(&session.id)),
         format!("Workspace: {}", session.workspace),
-        format!("Turns: {} | updated {}", session.turns, relative_time(session.updated_at)),
+        format!(
+            "Turns: {} | updated {}",
+            session.turns,
+            relative_time(session.updated_at)
+        ),
     ];
     for turn in session.history.iter().rev().take(6) {
         rows.push(format!(
@@ -285,7 +303,10 @@ fn preview_text(value: &str) -> String {
     if value.chars().count() <= PREVIEW_CHARS {
         return value.to_string();
     }
-    let mut preview = value.chars().take(PREVIEW_CHARS.saturating_sub(3)).collect::<String>();
+    let mut preview = value
+        .chars()
+        .take(PREVIEW_CHARS.saturating_sub(3))
+        .collect::<String>();
     preview.push_str("...");
     preview
 }
@@ -321,7 +342,13 @@ fn relative_time(timestamp: u64) -> String {
 }
 
 fn short_id(id: &str) -> String {
-    id.chars().rev().take(8).collect::<String>().chars().rev().collect()
+    id.chars()
+        .rev()
+        .take(8)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 trait EmptyFallback {
@@ -330,13 +357,21 @@ trait EmptyFallback {
 
 impl EmptyFallback for String {
     fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str {
-        if self.trim().is_empty() { fallback } else { self.as_str() }
+        if self.trim().is_empty() {
+            fallback
+        } else {
+            self.as_str()
+        }
     }
 }
 
 impl EmptyFallback for str {
     fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str {
-        if self.trim().is_empty() { fallback } else { self }
+        if self.trim().is_empty() {
+            fallback
+        } else {
+            self
+        }
     }
 }
 
@@ -366,7 +401,13 @@ mod tests {
         let mut history = vec![turn("one"), turn("two"), turn("three"), turn("four")];
 
         assert_eq!(trim_history(&mut history, 2), 2);
-        assert_eq!(history.iter().map(|turn| turn.prompt.as_str()).collect::<Vec<_>>(), ["three", "four"]);
+        assert_eq!(
+            history
+                .iter()
+                .map(|turn| turn.prompt.as_str())
+                .collect::<Vec<_>>(),
+            ["three", "four"]
+        );
     }
 
     #[test]

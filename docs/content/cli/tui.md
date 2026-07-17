@@ -26,7 +26,7 @@ The pinned panel is a compact status dashboard at the top of the screen.
 | Dashboard | Project, model inventory summary, agent roles, last query, UI mode. |
 | Project | Active project, state, `/project` commands, file-tagging hint, project config path. |
 | Models | Active provider/model, inventory status, provider chips, setup commands, config path. |
-| Agents | Architect, Context Loom, Explorer, Coder, approval boundary. |
+| Agents | Architect, Context Loom, Explorer, Coder, optional Scout ON/OFF, and approval boundary. |
 | Context | Context Loom, context window, memory commands, pack preview, index refresh. |
 | Sessions | Current session, store path, recent sessions. |
 | Timeline | Latest structured agent path. |
@@ -39,6 +39,15 @@ The command bar exposes quick panel commands:
 
 ```text
 /dashboard /project /models /agents /context /sessions /timeline /check /config /version /help
+```
+
+The Agents panel reads the same Python manifest used by the shell command. Its
+Scout row shows whether the optional `web_search`/`fetch_url` worker is
+registered for the next run and gives the inverse toggle command:
+
+```text
+/agents scout on
+/agents scout off
 ```
 
 ## Input Editor

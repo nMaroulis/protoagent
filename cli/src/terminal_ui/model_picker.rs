@@ -7,11 +7,16 @@ use crate::{
     call_add_api_key, call_set_model, load_inventory_with_validation, ModelInfo, ModelProvider,
 };
 
-use super::modal::{draw_loading_modal_frame, pick_choice_modal, prompt_line_modal, prompt_secret_modal};
+use super::modal::{
+    draw_loading_modal_frame, pick_choice_modal, prompt_line_modal, prompt_secret_modal,
+};
 use super::state::{PanelView, Role, TerminalApp};
 use super::TerminalSurface;
 
-pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut TerminalSurface) -> Result<()> {
+pub(super) fn handle_model_command(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+) -> Result<()> {
     app.panel = PanelView::Models;
     let Some(inventory) = load_inventory_with_feedback(
         app,
@@ -19,12 +24,17 @@ pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut Termina
         "/model",
         "Loading Providers",
         "Discovering local models and configured providers.",
-    )? else {
+    )?
+    else {
         return Ok(());
     };
     if inventory.providers.is_empty() {
         app.activity = "idle".to_string();
-        app.push(Role::Error, "/model", "No providers were found in the model inventory.");
+        app.push(
+            Role::Error,
+            "/model",
+            "No providers were found in the model inventory.",
+        );
         return Ok(());
     }
     app.activity = "choosing model".to_string();
@@ -60,7 +70,8 @@ pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut Termina
         return Ok(());
     };
 
-    let Some(provider) = ensure_api_key_for_provider(terminal, app, inventory.providers[provider_index].clone())?
+    let Some(provider) =
+        ensure_api_key_for_provider(terminal, app, inventory.providers[provider_index].clone())?
     else {
         cancel_model_selection(app);
         return Ok(());
@@ -70,7 +81,8 @@ pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut Termina
     } else {
         ""
     };
-    let Some(model) = choose_model_value(terminal, app, &provider, active_model_for_provider)? else {
+    let Some(model) = choose_model_value(terminal, app, &provider, active_model_for_provider)?
+    else {
         cancel_model_selection(app);
         return Ok(());
     };
@@ -124,7 +136,11 @@ pub(super) fn handle_model_command(app: &mut TerminalApp, terminal: &mut Termina
         }
         Err(err) => {
             app.activity = "idle".to_string();
-            app.push(Role::Error, "/model", &format!("Could not save model: {err:?}"));
+            app.push(
+                Role::Error,
+                "/model",
+                &format!("Could not save model: {err:?}"),
+            );
         }
     }
     Ok(())
@@ -142,7 +158,8 @@ pub(super) fn handle_key_command(
         "/key",
         "Loading Providers",
         "Checking API providers and saved key status.",
-    )? else {
+    )?
+    else {
         return Ok(());
     };
     app.activity = "setting api key".to_string();
@@ -163,7 +180,11 @@ pub(super) fn handle_key_command(
             Some(provider) => provider.clone(),
             None => {
                 app.activity = "idle".to_string();
-                app.push(Role::Error, "/key", &format!("{id} is not an API-key provider."));
+                app.push(
+                    Role::Error,
+                    "/key",
+                    &format!("{id} is not an API-key provider."),
+                );
                 return Ok(());
             }
         },
@@ -202,7 +223,11 @@ pub(super) fn handle_key_command(
     app.push(
         Role::Command,
         "/key",
-        &format!("Stored key for {}. {}", updated.name, key_status_sentence(&updated)),
+        &format!(
+            "Stored key for {}. {}",
+            updated.name,
+            key_status_sentence(&updated)
+        ),
     );
     Ok(())
 }
@@ -241,7 +266,10 @@ fn ensure_api_key_for_provider(
     app.push(
         Role::Command,
         "/model",
-        &format!("API key ready for {}. Continuing to model selection.", updated.name),
+        &format!(
+            "API key ready for {}. Continuing to model selection.",
+            updated.name
+        ),
     );
     Ok(Some(updated))
 }
@@ -277,7 +305,8 @@ fn prompt_and_store_api_key(
         "/key",
         "Validating Key",
         "Checking provider access with the stored key.",
-    )? else {
+    )?
+    else {
         return Ok(None);
     };
     let updated = inventory
@@ -319,7 +348,9 @@ pub(super) fn load_inventory_with_feedback(
                 tick = tick.wrapping_add(1);
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break Err(anyhow!("Model inventory worker exited before returning a result"));
+                break Err(anyhow!(
+                    "Model inventory worker exited before returning a result"
+                ));
             }
         }
     };
@@ -332,7 +363,11 @@ pub(super) fn load_inventory_with_feedback(
         Err(err) => {
             app.models_loading = false;
             app.activity = "idle".to_string();
-            app.push(Role::Error, command, &format!("Could not load model inventory: {err}"));
+            app.push(
+                Role::Error,
+                command,
+                &format!("Could not load model inventory: {err}"),
+            );
             Ok(None)
         }
     }
@@ -411,7 +446,11 @@ fn provider_needs_base_url(provider: &ModelProvider) -> bool {
 }
 
 fn provider_choice_label(provider: &ModelProvider) -> String {
-    let configured = if provider.configured { "[READY]" } else { "[SETUP]" };
+    let configured = if provider.configured {
+        "[READY]"
+    } else {
+        "[SETUP]"
+    };
     let hint = if provider.hint.is_empty() {
         String::new()
     } else {
@@ -464,7 +503,11 @@ fn provider_key_line(provider: &ModelProvider) -> String {
     if provider.env_key.is_empty() {
         format!("{} via {source}", provider_key_badge(provider))
     } else {
-        format!("{} via {source} (env: {})", provider_key_badge(provider), provider.env_key)
+        format!(
+            "{} via {source} (env: {})",
+            provider_key_badge(provider),
+            provider.env_key
+        )
     }
 }
 

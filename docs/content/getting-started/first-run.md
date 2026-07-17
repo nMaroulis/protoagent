@@ -10,13 +10,13 @@ indexes, and approval-gated writes.
 ## 1. Choose A Project
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- project set ~/projects/my-app
+cargo run --locked --manifest-path cli/Cargo.toml -- project set ~/projects/my-app
 ```
 
 Equivalent TUI flow:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- start
+cargo run --locked --manifest-path cli/Cargo.toml -- start
 ```
 
 Then run:
@@ -31,7 +31,7 @@ The active project is stored in `~/.protoagent/project.json` unless
 ## 2. Pick A Provider And Model
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- model
+cargo run --locked --manifest-path cli/Cargo.toml -- model
 ```
 
 This opens an interactive provider and model picker. It reads the inventory from
@@ -46,7 +46,7 @@ Inside the TUI:
 ## 3. Check Runtime Wiring
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- check
+cargo run --locked --manifest-path cli/Cargo.toml -- check
 ```
 
 The check report verifies:
@@ -59,12 +59,13 @@ The check report verifies:
 | Metrics and context events | `LLM.configure_metrics` and `LLMModelProfile` |
 | State APIs | `describe_state`, `compact_state`, `reset_state` |
 | Cancellation | `TaskCancellationRequest`, `Agent.cancel_task`, `AgentClient.cancel_task` |
+| First-party web tools | `protolink.tools.web_search`, `fetch_url`, and `web_tools_ready` |
 | Agent manifest | `agents.deck.agent_manifest()` |
 
 ## 4. Run A One-Shot Task
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- run "Explain the auth flow and identify the riskiest file"
+cargo run --locked --manifest-path cli/Cargo.toml -- run "Explain the auth flow and identify the riskiest file"
 ```
 
 This path uses the same Python core and ProtoLink runtime as the TUI, but prints
@@ -73,7 +74,7 @@ the final answer, trace, timeline, and proposed diff directly to stdout.
 ## 5. Run In The Fullscreen TUI
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- start
+cargo run --locked --manifest-path cli/Cargo.toml -- start
 ```
 
 Then type a normal request:
@@ -97,12 +98,26 @@ Use Context Loom as a preview tool:
 This builds a source-cited Context Pack without calling the model. Plain user
 tasks still receive automatic Context Loom injection in the background.
 
-## 7. Debug A Failed Run
+## 7. Optionally Enable Scout
+
+Scout is off by default. Enable it only for tasks that need public web research:
+
+```text
+/agents scout on
+```
+
+The setting applies to the next run. Scout is tool-only, has no workspace
+access, and exposes ProtoLink's `web_search` and `fetch_url` under
+`network.read`. The default Brave engine requires `BRAVE_SEARCH_API_KEY`;
+DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless
+factual search.
+
+## 8. Debug A Failed Run
 
 For a copy-pasteable artifact:
 
 ```bash
-PROTOAGENT_TRACE=1 cargo run --manifest-path cli/Cargo.toml -- run "your failing task" 2>&1 | tee /tmp/protoagent-debug.txt
+PROTOAGENT_TRACE=1 cargo run --locked --manifest-path cli/Cargo.toml -- run "your failing task" 2>&1 | tee /tmp/protoagent-debug.txt
 tail -n 80 "${PROTOAGENT_CONFIG_DIR:-$HOME/.protoagent}/traces.jsonl"
 ```
 

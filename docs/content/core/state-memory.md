@@ -25,9 +25,11 @@ Only the stateful Architect uses durable model-facing conversation storage:
 | Architect | durable conversation memory | `protoagent-architect` |
 | Explorer | task-local stateless worker | none |
 | Coder | task-local stateless worker | none |
+| Scout | optional tool-only worker; no LLM state | none |
 
-ProtoLink may allocate in-memory state for worker execution, but that state is
-discarded with the task and is not part of `conversations.sqlite`.
+ProtoLink may allocate in-memory state for Explorer/Coder execution, but that
+state is discarded with the task and is not part of `conversations.sqlite`.
+Scout is created with no LLM, no storage, and empty state.
 
 The session id is usually derived from the active project path:
 

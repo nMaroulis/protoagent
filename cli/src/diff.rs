@@ -147,7 +147,10 @@ pub(crate) fn parse_diff(diff: &str) -> DiffReview {
             }
             DiffLineKind::Context => {
                 let (old_line, new_line) = if raw_line.starts_with(' ') {
-                    (take_line_number(&mut old_cursor), take_line_number(&mut new_cursor))
+                    (
+                        take_line_number(&mut old_cursor),
+                        take_line_number(&mut new_cursor),
+                    )
                 } else {
                     (None, None)
                 };
@@ -352,10 +355,7 @@ index 1111111..2222222 100644
             .collect::<Vec<_>>();
         assert_eq!(additions[0].new_line, Some(11));
         assert_eq!(additions[1].new_line, Some(13));
-        assert_eq!(
-            format_guttered_line(additions[0], 3),
-            "     11 | +new b"
-        );
+        assert_eq!(format_guttered_line(additions[0], 3), "     11 | +new b");
     }
 
     #[test]

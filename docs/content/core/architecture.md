@@ -18,6 +18,9 @@ thin but important adaptation layer around the rest of the Python core.
 | `answer_help_question(question)` | `help QUESTION`, `/help QUESTION` | Guide answer JSON. |
 | `get_context_settings()` | `/context window` | Active provider context-window settings. |
 | `configure_context_window(value)` | `/context window 16k` | Updated context-window settings. |
+| `get_agent_settings()` | `agents`, `/agents` | Prompt profile, architecture manifest, agent list, and Scout state. |
+| `configure_agent_prompt_profile(value)` | `agents profile`, `/agents profile` | Updated prompt-profile settings. |
+| `configure_optional_agent(name, enabled)` | `agents scout`, `/agents scout` | Updated optional-agent settings and manifest. |
 | `compact_protolink_history(session_id, strategy, limit)` | `/context compact` | ProtoLink state compaction report JSON. |
 | `reset_protolink_history(session_id)` | `/context reset` | ProtoLink state reset report JSON. |
 | `describe_protolink_history(session_id)` | `/context history` | ProtoLink state summary JSON. |
@@ -110,6 +113,7 @@ numbers. Paths are resolved by `safe_path()`.
 | `approval_decisions` | Serialized decisions. |
 | `run_context` | Final serialized `RunContext`. |
 | `run_report` | Redacted ProtoLink `RunReport`. |
+| `transport_report` | ProtoLink transport capabilities, health/configuration, and per-run metrics. |
 | `run_contract` | Inferred worker/artifact requirements for the original prompt. |
 | `completion_validation` | Runtime validation result comparing the trace to the contract. |
 | `provider` | Provider id. |

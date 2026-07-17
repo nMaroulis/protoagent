@@ -1,16 +1,33 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "protoagent-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared Python runtime core for ProtoAgent frontends."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "protolink[http,llms]>=0.6.5",
+license = "MIT"
+authors = [
+    { name = "Nikolaos Maroulis" },
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "protolink[http,llms]>=0.6.6",
+]
+
+[project.urls]
+Homepage = "https://nmaroulis.github.io/protoagent/"
+Documentation = "https://nmaroulis.github.io/protoagent/docs/intro"
+Repository = "https://github.com/nMaroulis/protoagent"
+Issues = "https://github.com/nMaroulis/protoagent/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

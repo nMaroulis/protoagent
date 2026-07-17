@@ -35,6 +35,8 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_history_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_llm_context
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_help_agent
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_quality_eval
+PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_scout
+PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_context_indexer
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 ```
 
@@ -42,9 +44,9 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 
 ```bash
 cargo fmt --manifest-path cli/Cargo.toml -- --check
-cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path cli/Cargo.toml
-cargo check --manifest-path cli/Cargo.toml
+cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path cli/Cargo.toml
+cargo check --locked --manifest-path cli/Cargo.toml
 ```
 
 If formatting or Clippy are missing from a local Rust toolchain, install them
@@ -57,25 +59,25 @@ rustup component add rustfmt clippy
 Runtime diagnostics:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- check
+cargo run --locked --manifest-path cli/Cargo.toml -- check
 ```
 
 Component version inventory:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- version
+cargo run --locked --manifest-path cli/Cargo.toml -- version
 ```
 
 No-model smoke test:
 
 ```bash
-PROTOAGENT_SCAFFOLD=1 cargo run --manifest-path cli/Cargo.toml -- run "show diagnostics"
+PROTOAGENT_SCAFFOLD=1 cargo run --locked --manifest-path cli/Cargo.toml -- run "show diagnostics"
 ```
 
 Prompt-profile eval smoke:
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- eval profiles --limit 3
+cargo run --locked --manifest-path cli/Cargo.toml -- eval profiles --limit 3
 ```
 
 Use `--live` only when a model is configured. Live evals auto-deny workspace
@@ -102,7 +104,7 @@ The generated build output is ignored at `docs/build/`.
 For shareable failing-run evidence:
 
 ```bash
-PROTOAGENT_TRACE=1 cargo run --manifest-path cli/Cargo.toml -- run "your failing task" 2>&1 | tee /tmp/protoagent-debug.txt
+PROTOAGENT_TRACE=1 cargo run --locked --manifest-path cli/Cargo.toml -- run "your failing task" 2>&1 | tee /tmp/protoagent-debug.txt
 tail -n 80 "${PROTOAGENT_CONFIG_DIR:-$HOME/.protoagent}/traces.jsonl"
 ```
 

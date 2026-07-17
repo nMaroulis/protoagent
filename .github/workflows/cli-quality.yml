@@ -1,0 +1,41 @@
+name: CLI quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format-and-test:
+    name: Rust format and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install embedded core
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "protolink[http,llms]>=0.6.6" -e core
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path cli/Cargo.toml -- --check
+
+      - name: Lint Rust
+        run: cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust CLI tests
+        run: cargo test --locked --manifest-path cli/Cargo.toml

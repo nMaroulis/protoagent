@@ -24,7 +24,7 @@ the Rust UI.
 ## Select A Model
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- model
+cargo run --locked --manifest-path cli/Cargo.toml -- model
 ```
 
 The picker:
@@ -43,7 +43,7 @@ Inside the TUI, use:
 ## Store An API Key
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- key openai
+cargo run --locked --manifest-path cli/Cargo.toml -- key openai
 ```
 
 Inside the TUI:
@@ -74,3 +74,18 @@ API key validation is intentionally cached for a short time. A successful key
 validation is reused for about ten minutes, while uncertain or failed validation
 can be retried quickly. Live model runs call `remember_valid_provider()` so the
 UI can reflect a recently successful provider/model pair.
+
+## Scout Search Credential
+
+Scout's search key is separate from model-provider configuration. If optional
+Scout should use the default Brave engine:
+
+```bash
+export BRAVE_SEARCH_API_KEY=...
+proto-cli agents scout on
+```
+
+ProtoLink reads the key only when `web_search` invokes Brave. DuckDuckGo is
+keyless best-effort search; English Wikipedia is keyless factual search.
+Enabling Scout does not change the selected LLM provider and does not itself
+make a network request.

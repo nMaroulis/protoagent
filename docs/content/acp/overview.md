@@ -51,6 +51,7 @@ The ACP server should not reimplement the agent runtime. It should reuse:
 | `runtime.py` | Same ProtoLink execution path. |
 | `history.py` | Same model-facing conversation state. |
 | `tools.py` | Same workspace path safety and diff behavior. |
+| `agents/scout.py` | Same optional tool-only network boundary when an editor explicitly enables Scout. |
 
 The editor surface will need a different approval UX, but the authorization
 boundary should remain ProtoLink `RunAction` and `ApprovalDecision`.

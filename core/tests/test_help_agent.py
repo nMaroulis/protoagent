@@ -48,9 +48,12 @@ class GuideHelpAgentTests(unittest.TestCase):
         self.assertEqual(result["model"], "mock-gpt")
         self.assertIn("/model", result["answer"])
         self.assertIn("/agents profile [auto|small|medium|large|api]", seen_prompt["system"])
+        self.assertIn("/agents scout on", seen_prompt["system"])
+        self.assertIn("BRAVE_SEARCH_API_KEY", seen_prompt["system"])
         self.assertIn("Active provider: mock", seen_prompt["user"])
         self.assertIn("Active model: mock-gpt", seen_prompt["user"])
         self.assertIn("Prompt profile: auto configured, medium resolved", seen_prompt["user"])
+        self.assertIn("Optional Scout: disabled", seen_prompt["user"])
         self.assertIn("Persistent context memory: on (default)", seen_prompt["user"])
         self.assertIn("User help question:\nhow do I change models?", seen_prompt["user"])
 

@@ -1,202 +1,149 @@
 # Proto-CLI
 
-**The blazing-fast terminal interface for the ProtoAgent ecosystem. Built in Rust, powered by Python.**
+Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
+fullscreen TUI, project and model controls, approvals, cancellation, traces,
+and session state while embedding the Python core through PyO3.
 
-**Proto-CLI** is a hackable, autonomous AI coding assistant designed specifically for terminal developers utilizing local inference (Ollama, LM Studio).
+Current CLI version: `0.2.0`, sourced from `cli/Cargo.toml`.
 
-Instead of forcing you to choose between a fast terminal experience and intelligent multi-agent routing, Proto-CLI gives you both. By utilizing a hybrid architecture via PyO3, it wraps the powerful Python-based orchestration engine into a standalone, lightning-fast Rust binary.
+Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
+Python environment must contain `protoagent-core` and ProtoLink. Building the
+CLI requires Rust/Cargo 1.83 or newer.
 
-Current CLI version: `0.1.0`, sourced from `cli/Cargo.toml`.
+## Install
 
----
-
-## 🏗️ Monorepo Context
-
-This project is the terminal frontend of the **ProtoAgent Ecosystem**.
-
-```text
-📂 protoagent/           <-- You are in the monorepo root
- ┣ 📂 core/              <-- The 'protolink' AI multi-agent orchestration logic (🐍 Python)
- ┣ 📂 cli/               <-- YOU ARE HERE: The standalone terminal UI (🦀 Rust)
- ┗ 📂 acp/               <-- The ACP server for Zed/JetBrains integration (🐍 Python)
-
-```
-
-### ✨ Key Features
-
-* **🦀 Zero-Overhead UI:** Written purely in Rust. Enjoy snappy rendering, smooth spinners, and instant boot times without the bloat of standard Python CLI libraries.
-* **🐍 Python Hackability:** All the actual AI logic (prompts, tool routing, run contracts, and workers) lives next door in the `core/` directory. If you want to tweak how Architect, Explorer, or Coder behave, you edit simple Python scripts while keeping your fast Rust terminal.
-* **🔒 100% Local Privacy:** Native, first-class support for OpenAI-compatible local endpoints (`http://localhost:11434/v1`). Your code never leaves your machine.
-* **🛡️ Human-in-the-Loop:** Automatically halts and renders a clean diff, requiring an explicit `[Y/n]` approval before executing shell commands or writing files to disk.
-
----
-
-## 🚀 Installation & Build
-
-Because Proto-CLI embeds the `protolink` Python engine, you need to ensure the Python virtual environment is active so Rust can bind to it during the build process.
-
-### 1. Setup the Core Engine
-
-If you haven't already, initialize the Python environment in the monorepo root:
+From the monorepo root:
 
 ```bash
-cd ..
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.5"
-pip install -e core
-
+python -m pip install "protolink[http,llms]>=0.6.6"
+python -m pip install -e core
+cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
 
-### 2. Build the CLI
+The built binary is `cli/target/release/proto-cli`.
 
-Navigate back to the `cli` directory and build the Rust project via Cargo:
+## Use
+
+Select a workspace, then start the TUI:
 
 ```bash
-cd cli
-cargo build --release
-
+proto-cli project set ~/projects/my-app
+proto-cli start
 ```
 
-You can now link the compiled binary to your path:
+Run a single task without opening the TUI:
 
 ```bash
-ln -s $(pwd)/target/release/proto-cli /usr/local/bin/protoagent
-
+proto-cli run "Explain the authentication flow and propose a safer diff"
 ```
 
-*(Note: Pre-compiled binaries requiring zero setup will be available on the Releases page soon).*
-
----
-
-## 💻 Usage
-
-Choose the project folder first. ProtoAgent remembers the last opened project
-and reopens it on the next start.
-
-```bash
-# Choose the folder the agent should work inside
-protoagent project set ~/projects/my-app
-
-# Start an interactive autonomous session
-protoagent start
-
-# Explicit terminal UI alias
-protoagent tui
-
-# Or pass a direct task
-protoagent run "Refactor the authentication logic in src/auth.rs to use JWTs"
-
-```
-
-Inside the TUI, type a normal sentence to run a task. Use `@` in the input to
-open the project file picker and insert a tagged file reference, for example:
+Use `@` in the TUI editor to attach bounded read-only file context:
 
 ```text
 explain @src/auth.rs and suggest a safer JWT flow
 ```
 
-Tagged files are loaded as bounded read-only context before the agent pipeline
-runs.
+## Agent Controls
 
-Workspace writes pause inside Protolink's policy boundary and open a typed
-approval modal with the action's diff artifact. Press Esc or Ctrl-C while a
-task is running to request live task cancellation.
-
-### TUI Commands
-
-`protoagent start` opens the fullscreen Rust terminal UI. The TUI takes over the
-terminal with a fixed status panel, a dedicated chat viewport, and a bottom input
-editor. Scrolling is handled inside the chat, not by shell scrollback.
-
-Inside the TUI you can use slash commands:
-
-* `/clear` - Clears the chat transcript.
-* `/dashboard` - Shows the dashboard status panel.
-* `/project` - Choose the active project folder.
-* `/project PATH` - Open a project folder directly.
-* `/project clear` - Clear the active project folder.
-* `/models` - Shows model/provider status.
-* `/config` - Shows redacted provider config status.
-* `/check` - Refreshes Python, protolink, and active provider status.
-* `/version` - Shows CLI, Python core, and planned ACP component versions.
-* `/agents` - Shows the runtime kernel, RunContract, stateful Architect, stateless Explorer/Coder workers, and policy gate.
-* `/agents profile [auto|small|medium|large|api]` - Shows or sets the prompt profile used by the agent deck.
-* `/context` - Shows Context Loom index status for the active project.
-* `/context QUERY` - Builds a source-cited Context Pack without running a model.
-* `/context window 16k` - Sets the Ollama request window and ProtoLink `LLMModelProfile` together.
-* `/context compact [recent|tokens|summary] [limit]` - Compacts the active Architect ProtoLink session.
-* `/context reset` - Clears active Architect memory and the Rust session index.
-* `/index refresh` - Refreshes the local Context Loom SQLite index.
-* `/last` - Replays the last agent response.
-* `/run` - Runs a task from a slash command.
-* `/help`  - Shows available commands in the fixed panel.
-
-### Direct Commands
+The default runtime has a stateful Architect and task-local Explorer/Coder
+workers. Scout is an optional task-local web research worker and is off by
+default.
 
 ```bash
-cargo run --manifest-path cli/Cargo.toml -- start
-cargo run --manifest-path cli/Cargo.toml -- tui
-cargo run --manifest-path cli/Cargo.toml -- cli
-cargo run --manifest-path cli/Cargo.toml -- project
-cargo run --manifest-path cli/Cargo.toml -- project set ~/projects/my-app
-cargo run --manifest-path cli/Cargo.toml -- project clear
-cargo run --manifest-path cli/Cargo.toml -- run "Refactor the auth module"
-cargo run --manifest-path cli/Cargo.toml -- dashboard
-cargo run --manifest-path cli/Cargo.toml -- models
-cargo run --manifest-path cli/Cargo.toml -- model
-cargo run --manifest-path cli/Cargo.toml -- key openai
-cargo run --manifest-path cli/Cargo.toml -- config
-cargo run --manifest-path cli/Cargo.toml -- version
-cargo run --manifest-path cli/Cargo.toml -- check
-cargo run --manifest-path cli/Cargo.toml -- agents
-cargo run --manifest-path cli/Cargo.toml -- agents profile api
-cargo run --manifest-path cli/Cargo.toml -- eval profiles --limit 3
-cargo run --manifest-path cli/Cargo.toml -- context
-cargo run --manifest-path cli/Cargo.toml -- context "runtime streaming task handling"
-cargo run --manifest-path cli/Cargo.toml -- index refresh
+proto-cli agents
+proto-cli agents profile small
+proto-cli agents scout on
+proto-cli agents scout off
 ```
 
-Interactive mode is the fullscreen TUI by default. The top area is a fixed
-status panel, the middle viewport is the chat transcript, and the bottom bar is
-the input editor. `/project`, `/models`, `/agents`, `/context`, `/check`,
-`/config`, `/help`, and `/dashboard` switch the fixed status panel instead of
-printing status blocks into the chat. `/version` opens the component version
-panel and also writes the current inventory into the transcript.
+The same controls are available in the TUI:
 
----
+```text
+/agents
+/agents profile small
+/agents scout on
+/agents scout off
+```
 
-## 🧠 Configuration (Ollama / LM Studio)
+Agent-setting changes apply to the next run. When Scout is enabled, the Python
+core registers ProtoLink's `web_search` and `fetch_url` tools with
+`network.read`; Scout has no workspace-write capability.
 
-By default, ProtoAgent routes all inference to your local Ollama instance. To point it to a different model or LM Studio, generate a config file:
+## TUI Commands
+
+| Command | Purpose |
+| --- | --- |
+| `/help` or `/help QUESTION` | Show command help or ask the isolated Guide agent a usage question. |
+| `/dashboard` | Pin the runtime dashboard. |
+| `/project [PATH\|clear]` | Inspect, select, or clear the active workspace. |
+| `/models`, `/model`, `/key` | Inspect providers and configure a model or API key. |
+| `/config` | Show redacted configuration. |
+| `/check` | Refresh Python, ProtoLink, web-tool, transport, auth, and provider readiness. |
+| `/version` | Show CLI, core, and planned ACP versions. |
+| `/agents` | Show the agent manifest, prompt profile, and optional Scout state. |
+| `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile. |
+| `/agents scout [on\|off]` | Enable or disable Scout for subsequent runs. |
+| `/context [QUERY]` | Show Context Loom status or build a source-cited Context Pack. |
+| `/context on`, `/context off` | Enable or disable persistent project conversation memory. |
+| `/context history` | Inspect ProtoLink-owned Architect memory. |
+| `/context compact [recent\|tokens\|summary] [limit]` | Compact saved history. |
+| `/context reset` | Clear project conversation history and trim the Rust session index. |
+| `/context window 16k` | Set the Ollama request window and ProtoLink model profile together. |
+| `/index refresh` | Refresh the incremental Context Loom index. |
+| `/trace`, `/timeline`, `/diff` | Inspect the latest normalized run trace, event sequence, or diff preview. |
+| `/last` | Replay the last agent response. |
+| `/run TASK` | Run a task from a slash command. |
+| `/clear` | Clear the visible transcript. |
+
+`/project`, `/models`, `/agents`, `/context`, `/check`, `/config`, `/help`, and
+`/dashboard` update the fixed status panel instead of appending large status
+blocks to the chat.
+
+## Direct Commands
 
 ```bash
-protoagent config init
-
+proto-cli start
+proto-cli tui
+proto-cli project
+proto-cli project set ~/projects/my-app
+proto-cli project clear
+proto-cli run "Refactor the auth module"
+proto-cli dashboard
+proto-cli models
+proto-cli model
+proto-cli key openai
+proto-cli config
+proto-cli version
+proto-cli check
+proto-cli agents
+proto-cli agents profile api
+proto-cli agents scout on
+proto-cli eval profiles --limit 3
+proto-cli context
+proto-cli context "runtime streaming task handling"
+proto-cli index refresh
 ```
 
-Edit `~/.protoagent/config.json`:
+When running from the repository without installing the binary, prefix the
+arguments with:
 
-```json
-{
-  "provider": "ollama",
-  "api_base": "http://localhost:11434/v1",
-  "default_model": "qwen2.5-coder:7b",
-  "max_context_tokens": 32000
-}
-
+```bash
+cargo run --locked --manifest-path cli/Cargo.toml --
 ```
 
----
+## Safety And Network Boundaries
 
-## 🤝 Contributing to the CLI
+Workspace writes pause at ProtoLink's policy boundary and open an approval modal
+containing the action's diff artifact. Esc or Ctrl-C during a run requests live
+task cancellation.
 
-We welcome Rustaceans 🦀 to help us optimize this frontend!
+Privacy depends on configuration. A local provider with Scout disabled can
+keep model and research traffic local. API providers send model inputs to their
+configured endpoints. Enabling Scout permits outbound public search and URL
+fetches; returned content is untrusted and does not grant write authority.
 
-Areas we are actively looking to improve:
-
-* Enhancing the `clap` terminal argument parsing.
-* Surfacing ProtoLink SSE task events as live Rust UI updates instead of post-run trace summaries.
-* Refining the styled diff reviewer used by `[Y/n]` file write approvals.
-
-To contribute to the underlying agent logic or prompts, head over to the [`core/`](https://www.google.com/search?q=../core/README.md) directory.
+The Python orchestration logic is documented in the
+[core README](../core/README.md). The full command and TUI manual is in the
+[documentation site](https://nmaroulis.github.io/protoagent/docs/cli/overview).

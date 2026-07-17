@@ -6,10 +6,10 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CLI_VERSION_FALLBACK = "0.1.0"
+_CLI_VERSION_FALLBACK = "0.2.0"
 _CLI_MANIFEST = _REPO_ROOT / "cli" / "Cargo.toml"
 _ACP_VERSION_FILE = _REPO_ROOT / "acp" / "VERSION"
 _ACP_VERSION_FALLBACK = "0.0.0-dev.0"

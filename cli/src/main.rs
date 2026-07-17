@@ -6,10 +6,10 @@ use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{hash_map::DefaultHasher, HashMap};
-use std::{env, fs};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{env, fs};
 
 mod diff;
 mod inline_style;
@@ -52,6 +52,10 @@ struct CoreResponse {
     run_report: Value,
     #[serde(default)]
     transport_report: Value,
+    #[serde(default)]
+    run_contract: Value,
+    #[serde(default)]
+    completion_validation: Value,
     #[serde(default)]
     provider: String,
     #[serde(default)]
@@ -155,7 +159,6 @@ struct DoctorReport {
     #[serde(default)]
     prompt_profile: PromptProfileStatus,
     #[serde(default)]
-    architecture: ArchitectureManifest,
     agents: Vec<AgentManifest>,
 }
 
@@ -202,10 +205,12 @@ struct ProtolinkStatus {
     #[serde(default)]
     transport_ready: bool,
     #[serde(default)]
+    web_tools_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct AgentManifest {
     name: String,
     role: String,
@@ -221,10 +226,15 @@ struct AgentManifest {
     prompt_profile: String,
     #[serde(default)]
     prompt_profile_label: String,
+    #[serde(default = "enabled_by_default")]
+    enabled: bool,
+    #[serde(default)]
+    optional: bool,
+    #[serde(default)]
     tools: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct ArchitectureManifest {
     #[serde(default)]
     kernel: String,
@@ -238,6 +248,38 @@ struct ArchitectureManifest {
     contract: String,
     #[serde(default)]
     flow: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AgentSettings {
+    #[serde(default)]
+    prompt_profile: PromptProfileStatus,
+    #[serde(default)]
+    architecture: ArchitectureManifest,
+    #[serde(default)]
+    agents: Vec<AgentManifest>,
+    #[serde(default)]
+    scout_enabled: bool,
+}
+
+impl AgentSettings {
+    fn is_scout_enabled(&self) -> bool {
+        self.agents
+            .iter()
+            .find(|agent| agent.name.eq_ignore_ascii_case("scout"))
+            .map(|agent| agent.enabled)
+            .unwrap_or(self.scout_enabled)
+    }
+
+    fn agent(&self, name: &str) -> Option<&AgentManifest> {
+        self.agents
+            .iter()
+            .find(|agent| agent.name.eq_ignore_ascii_case(name))
+    }
+}
+
+fn enabled_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -314,9 +356,7 @@ async fn main() -> Result<()> {
             print_header()?;
             show_check()
         }
-        Some("dashboard") | Some("dash") | Some("status") => {
-            show_dashboard()
-        }
+        Some("dashboard") | Some("dash") | Some("status") => show_dashboard(),
         Some("agents") => {
             print_header()?;
             handle_agents_command(&args[1..])
@@ -384,7 +424,10 @@ fn print_cli_help() {
     println!("  proto-cli project clear      Clear active project folder");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show runtime kernel, contract, and workers");
-    println!("  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api");
+    println!(
+        "  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api"
+    );
+    println!("  proto-cli agents scout       Show or set optional Scout: on|off");
     println!("  proto-cli eval profiles      Run prompt-profile evals; use --live for model calls");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
@@ -507,7 +550,10 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     progress_file.cleanup();
     let json = match json_result {
         Ok(json) => {
-            pb.finish_with_message(format!("completed with {} trace event(s)", progress_events.len()));
+            pb.finish_with_message(format!(
+                "completed with {} trace event(s)",
+                progress_events.len()
+            ));
             json
         }
         Err(err) => {
@@ -518,7 +564,10 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
 
     let response: CoreResponse = serde_json::from_str(&json)?;
     if let Err(err) = sessions::record_turn(query, &response) {
-        eprintln!("{}", style(format!("session history warning: {err}")).yellow());
+        eprintln!(
+            "{}",
+            style(format!("session history warning: {err}")).yellow()
+        );
     }
     render_response(&response)?;
 
@@ -534,7 +583,11 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     let mut summary = vec![
         format!("Status      : {}", response.status),
         format!("Responder   : {}", response_actor(response)),
-        format!("Provider    : {} / {}", empty_as_unknown(&response.provider), model),
+        format!(
+            "Provider    : {} / {}",
+            empty_as_unknown(&response.provider),
+            model
+        ),
         format!("Elapsed     : {} ms", response.elapsed_ms),
     ];
     if !response.headline.is_empty() {
@@ -544,7 +597,10 @@ fn render_response(response: &CoreResponse) -> Result<()> {
         summary.push(format!("Warning     : {}", response.warning));
     }
     if !response.run_events.is_empty() {
-        summary.push(format!("Run events  : {} normalized", response.run_events.len()));
+        summary.push(format!(
+            "Run events  : {} normalized",
+            response.run_events.len()
+        ));
     }
     if !response.approval_requests.is_empty() {
         summary.push(format!(
@@ -572,7 +628,11 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     }
 
     if !response.file_target.is_empty() {
-        print_panel("TARGET", &[response.file_target.clone()], PanelTone::Cyan);
+        print_panel(
+            "TARGET",
+            std::slice::from_ref(&response.file_target),
+            PanelTone::Cyan,
+        );
     }
 
     if !response.thought_process.is_empty() {
@@ -591,7 +651,10 @@ fn render_run_banner(query: &str) {
     println!();
     println!("{}", style(repeat_char('=', terminal_width())).magenta());
     println!("{}", style("RUN CHANNEL OPEN").bold().magenta());
-    println!("{}", style(truncate_plain(query, terminal_width().saturating_sub(4))).cyan());
+    println!(
+        "{}",
+        style(truncate_plain(query, terminal_width().saturating_sub(4))).cyan()
+    );
     println!("{}", style(repeat_char('-', terminal_width())).dim());
 }
 
@@ -614,11 +677,20 @@ fn render_agent_timeline(run_events: &[Value], events: &[String]) {
 fn render_diff(diff_text: &str) {
     let review = diff::parse_diff(diff_text);
     println!("{}", style("PROPOSED DIFF").bold().underlined().cyan());
-    print!("  {}", style(format!("{} file(s)", review.files.len())).bold());
-    print!("  {}", style(format!("+{}", review.additions)).green().bold());
+    print!(
+        "  {}",
+        style(format!("{} file(s)", review.files.len())).bold()
+    );
+    print!(
+        "  {}",
+        style(format!("+{}", review.additions)).green().bold()
+    );
     print!(" ");
     print!("{}", style(format!("-{}", review.removals)).red().bold());
-    println!("  {}", style(format!("{} hunk(s)", review.hunks)).yellow().bold());
+    println!(
+        "  {}",
+        style(format!("{} hunk(s)", review.hunks)).yellow().bold()
+    );
 
     if review.files.is_empty() {
         println!("{}", style("  No structured diff lines found.").dim());
@@ -663,7 +735,10 @@ fn render_runtime_approval(approval: &RuntimeApproval) {
         "Protolink paused this action before execution.".to_string(),
         format!("Run        : {}", empty_as_unknown(&approval.run_id)),
         format!("Action     : {}", empty_as_unknown(&approval.action_name)),
-        format!("Capability : {}", empty_as_unknown(&approval.capabilities())),
+        format!(
+            "Capability : {}",
+            empty_as_unknown(&approval.capabilities())
+        ),
         format!("Target     : {}", empty_as_unknown(&approval.target)),
     ];
     if !approval.description.is_empty() {
@@ -688,7 +763,14 @@ fn show_dashboard() -> Result<()> {
                 .map(|data| data.model.as_str())
                 .unwrap_or("");
             rows.push(format!("Provider  : {}", provider));
-            rows.push(format!("Model     : {}", if model.is_empty() { "not selected" } else { model }));
+            rows.push(format!(
+                "Model     : {}",
+                if model.is_empty() {
+                    "not selected"
+                } else {
+                    model
+                }
+            ));
             rows.push(format!(
                 "Prompt   : {}",
                 if config.agent_prompt_profile.is_empty() {
@@ -703,20 +785,31 @@ fn show_dashboard() -> Result<()> {
     }
     match &inventory {
         Ok(inventory) => {
-            let total_models: usize = inventory.providers.iter().map(|provider| provider.models.len()).sum();
+            let total_models: usize = inventory
+                .providers
+                .iter()
+                .map(|provider| provider.models.len())
+                .sum();
             let online = inventory
                 .providers
                 .iter()
                 .filter(|provider| provider.status == "online" || provider.status == "configured")
                 .count();
-            rows.push(format!("Models    : {} visible across {} providers", total_models, inventory.providers.len()));
+            rows.push(format!(
+                "Models    : {} visible across {} providers",
+                total_models,
+                inventory.providers.len()
+            ));
             rows.push(format!("Ready     : {} provider(s)", online));
         }
         Err(err) => rows.push(format!("Models    : unavailable ({err})")),
     }
     print_panel("COCKPIT", &rows, PanelTone::Magenta);
 
-    print_agent_graph();
+    let scout_enabled = load_agent_settings()
+        .map(|settings| settings.is_scout_enabled())
+        .unwrap_or(false);
+    print_agent_graph(scout_enabled);
 
     if let Ok(inventory) = inventory {
         render_provider_strip(&inventory);
@@ -729,6 +822,7 @@ fn show_dashboard() -> Result<()> {
         "Use @ inside a task to tag project files".to_string(),
         "/agents shows runtime kernel, RunContract, and worker state".to_string(),
         "/agents profile controls small/medium/large/API prompt modes".to_string(),
+        "/agents scout on|off toggles optional web research for the next run".to_string(),
         "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch RunContract -> Architect -> workers".to_string(),
@@ -809,7 +903,11 @@ fn choose_project_from_prompt() -> Result<()> {
         .with_initial_value(&initial)
         .prompt()?;
     if entered.trim().is_empty() {
-        print_panel("PROJECT", &["Selection cancelled.".to_string()], PanelTone::Yellow);
+        print_panel(
+            "PROJECT",
+            &["Selection cancelled.".to_string()],
+            PanelTone::Yellow,
+        );
         return Ok(());
     }
     let selected = set_active_project(&entered)?;
@@ -862,8 +960,17 @@ fn render_provider_strip(inventory: &ModelInventory) {
         .iter()
         .map(|provider| (provider_priority(provider), provider))
         .collect::<Vec<_>>();
-    providers.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.name.cmp(&right.1.name)));
-    print_provider_strip(&providers.into_iter().map(|(_, provider)| provider).collect::<Vec<_>>());
+    providers.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.name.cmp(&right.1.name))
+    });
+    print_provider_strip(
+        &providers
+            .into_iter()
+            .map(|(_, provider)| provider)
+            .collect::<Vec<_>>(),
+    );
 }
 
 fn print_provider_strip(providers: &[&ModelProvider]) {
@@ -878,7 +985,11 @@ fn print_provider_strip(providers: &[&ModelProvider]) {
     }
     for provider in providers {
         let marker = provider_marker(provider);
-        let rest = format!("{:<22} {:>2} model(s)", provider.name, provider.models.len());
+        let rest = format!(
+            "{:<22} {:>2} model(s)",
+            provider.name,
+            provider.models.len()
+        );
         let marker_width = marker.chars().count();
         let available = inner.saturating_sub(marker_width + 1);
         let rest = truncate_plain(&rest, available);
@@ -889,7 +1000,12 @@ fn print_provider_strip(providers: &[&ModelProvider]) {
         print!(" {}{}", rest, " ".repeat(padding));
         println!(" |");
     }
-    println!("{}", style(&format!("+{}+", repeat_char('-', width.saturating_sub(2)))).dim().bold());
+    println!(
+        "{}",
+        style(&format!("+{}+", repeat_char('-', width.saturating_sub(2))))
+            .dim()
+            .bold()
+    );
     println!();
 }
 
@@ -915,7 +1031,10 @@ fn provider_marker(provider: &ModelProvider) -> &'static str {
     }
 }
 
-fn provider_marker_style<'a>(marker: &'a str, provider: &ModelProvider) -> console::StyledObject<&'a str> {
+fn provider_marker_style<'a>(
+    marker: &'a str,
+    provider: &ModelProvider,
+) -> console::StyledObject<&'a str> {
     if marker == "K✓" || marker == "L✓" {
         style(marker).green().bold()
     } else if marker == "K✗" || marker == "L✗" {
@@ -1016,7 +1135,10 @@ fn ensure_cli_provider_key(provider: &mut ModelProvider) -> Result<()> {
         *provider = updated;
     }
     if provider.key_status == "invalid" {
-        return Err(anyhow!("API key for {} was rejected by the provider", provider.name));
+        return Err(anyhow!(
+            "API key for {} was rejected by the provider",
+            provider.name
+        ));
     }
     Ok(())
 }
@@ -1025,7 +1147,15 @@ fn render_provider_card(provider: &ModelProvider) {
     let mut rows = vec![
         format!("Badges : {}", provider_badges(provider)),
         format!("Kind   : {}", provider.kind),
-        format!("Status : {} ({})", provider.status, if provider.configured { "ready" } else { "setup" }),
+        format!(
+            "Status : {} ({})",
+            provider.status,
+            if provider.configured {
+                "ready"
+            } else {
+                "setup"
+            }
+        ),
     ];
     if provider.kind == "api" || provider.api_key_set || !provider.key_status.is_empty() {
         rows.push(format!("Key    : {}", provider_key_line(provider)));
@@ -1111,7 +1241,11 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
     };
     ensure_cli_provider_key(&mut provider)?;
 
-    let mut model_choices: Vec<String> = provider.models.iter().map(|model| model.id.clone()).collect();
+    let mut model_choices: Vec<String> = provider
+        .models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect();
     model_choices.push("Custom model id or path".to_string());
     let selected_model = Select::new("Choose model", model_choices).prompt()?;
     let model = if selected_model == "Custom model id or path" {
@@ -1159,8 +1293,12 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
         .map_err(|err| anyhow!("Python config error: {err:?}"))?;
     let rows = match load_inventory_with_validation(true)
         .ok()
-        .and_then(|inventory| inventory.providers.into_iter().find(|item| item.id == provider))
-    {
+        .and_then(|inventory| {
+            inventory
+                .providers
+                .into_iter()
+                .find(|item| item.id == provider)
+        }) {
         Some(provider) => vec![
             format!("Provider: {}", provider.name),
             format!("Key     : {}", provider_key_line(&provider)),
@@ -1288,7 +1426,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1300,9 +1438,13 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.logging_ready),
                         readiness(report.protolink.auth_ready),
                         readiness(report.protolink.transport_ready),
+                        readiness(report.protolink.web_tools_ready),
                     )
                 } else if report.protolink.installed {
-                    format!("installed, agent runtime blocked ({})", report.protolink.error)
+                    format!(
+                        "installed, agent runtime blocked ({})",
+                        report.protolink.error
+                    )
                 } else {
                     format!("missing ({})", report.protolink.error)
                 }
@@ -1317,7 +1459,10 @@ fn show_check() -> Result<()> {
                 },
                 report.active_provider_status
             ),
-            format!("Prompt    : {}", format_prompt_profile(&report.prompt_profile)),
+            format!(
+                "Prompt    : {}",
+                format_prompt_profile(&report.prompt_profile)
+            ),
         ],
         PanelTone::Magenta,
     );
@@ -1330,25 +1475,61 @@ fn show_check() -> Result<()> {
         );
     }
 
-    let rows: Vec<String> = report
-        .agents
-        .iter()
-        .map(format_agent_manifest)
-        .collect();
+    let rows: Vec<String> = report.agents.iter().map(format_agent_manifest).collect();
     print_panel("AGENTS", &rows, PanelTone::Cyan);
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AgentsCommand {
+    Status,
+    Profile(Option<String>),
+    Scout(Option<bool>),
+}
+
+fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, String> {
+    match args {
+        [] | ["status"] => Ok(AgentsCommand::Status),
+        [command] if matches!(*command, "profile" | "prompt" | "mode" | "reasoning") => {
+            Ok(AgentsCommand::Profile(None))
+        }
+        [command, value] if matches!(*command, "profile" | "prompt" | "mode" | "reasoning") => {
+            Ok(AgentsCommand::Profile(Some((*value).to_string())))
+        }
+        [value] if is_prompt_profile_value(value) => {
+            Ok(AgentsCommand::Profile(Some((*value).to_string())))
+        }
+        ["scout"] => Ok(AgentsCommand::Scout(None)),
+        ["scout", value] => {
+            parse_scout_toggle(value).map(|enabled| AgentsCommand::Scout(Some(enabled)))
+        }
+        ["enable", "scout"] => Ok(AgentsCommand::Scout(Some(true))),
+        ["disable", "scout"] => Ok(AgentsCommand::Scout(Some(false))),
+        _ => Err(
+            "Usage: agents [status | profile [auto|small|medium|large|api] | scout [on|off]]"
+                .to_string(),
+        ),
+    }
+}
+
+fn parse_scout_toggle(value: &str) -> std::result::Result<bool, String> {
+    match value {
+        "on" | "enable" | "enabled" | "true" => Ok(true),
+        "off" | "disable" | "disabled" | "false" => Ok(false),
+        _ => Err("Scout state must be `on` or `off`.".to_string()),
+    }
+}
+
 fn handle_agents_command(args: &[String]) -> Result<()> {
-    match args.first().map(String::as_str) {
-        None | Some("status") => show_agents(),
-        Some("profile") | Some("prompt") | Some("mode") | Some("reasoning") => {
-            if args.len() > 2 {
-                return Err(anyhow!(
-                    "Usage: proto-cli agents profile [auto|small|medium|large|api]"
-                ));
-            }
-            let value = args.get(1).cloned();
+    let values = args.iter().map(String::as_str).collect::<Vec<_>>();
+    match parse_agents_command(&values).map_err(|message| {
+        anyhow!(
+            "{}",
+            message.replace("Usage: agents", "Usage: proto-cli agents")
+        )
+    })? {
+        AgentsCommand::Status => show_agents(),
+        AgentsCommand::Profile(value) => {
             let text = agent_profile_text(value)?;
             print_panel(
                 "AGENT PROMPT PROFILE",
@@ -1357,45 +1538,42 @@ fn handle_agents_command(args: &[String]) -> Result<()> {
             );
             Ok(())
         }
-        Some(value) if is_prompt_profile_value(value) => {
-            let text = agent_profile_text(Some((*value).to_string()))?;
-            print_panel(
-                "AGENT PROMPT PROFILE",
-                &text.lines().map(str::to_string).collect::<Vec<_>>(),
-                PanelTone::Cyan,
-            );
+        AgentsCommand::Scout(enabled) => {
+            let settings = scout_settings(enabled)?;
+            print_panel("SCOUT", &format_scout_settings(&settings), PanelTone::Cyan);
             Ok(())
         }
-        Some(other) => Err(anyhow!(
-            "Unknown agents command: {other}. Use `proto-cli agents profile [auto|small|medium|large|api]`."
-        )),
     }
 }
 
 fn readiness(ready: bool) -> &'static str {
-    if ready { "ready" } else { "unavailable" }
+    if ready {
+        "ready"
+    } else {
+        "unavailable"
+    }
 }
 
 fn show_agents() -> Result<()> {
-    print_agent_graph();
-    if let Ok(report) = load_doctor() {
-        print_panel(
-            "RUNTIME ARCHITECTURE",
-            &format_architecture_manifest(&report.architecture),
-            PanelTone::Magenta,
-        );
-        print_panel(
-            "PROMPT PROFILE",
-            &[format_prompt_profile(&report.prompt_profile)],
-            PanelTone::Magenta,
-        );
-        let rows: Vec<String> = report
-            .agents
-            .iter()
-            .map(format_agent_manifest)
-            .collect();
-        print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
-    }
+    let settings = load_agent_settings()?;
+    print_agent_graph(settings.is_scout_enabled());
+    print_panel(
+        "RUNTIME ARCHITECTURE",
+        &format_architecture_manifest(&settings.architecture),
+        PanelTone::Magenta,
+    );
+    print_panel(
+        "PROMPT PROFILE",
+        &[format_prompt_profile(&settings.prompt_profile)],
+        PanelTone::Magenta,
+    );
+    print_panel(
+        "OPTIONAL WORKERS",
+        &format_scout_settings(&settings),
+        PanelTone::Magenta,
+    );
+    let rows: Vec<String> = settings.agents.iter().map(format_agent_manifest).collect();
+    print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
     Ok(())
 }
 
@@ -1413,10 +1591,17 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
     } else {
         agent.prompt_profile_label.clone()
     };
+    let availability = match (agent.optional, agent.enabled) {
+        (true, true) => "optional/on",
+        (true, false) => "optional/off",
+        (false, true) => "enabled",
+        (false, false) => "disabled",
+    };
     format!(
-        "{} ({}) | state: {} | memory: {} | persistence: {} | prompt: {} | tools: {} | contract: {}",
+        "{} ({}) | status: {} | state: {} | memory: {} | persistence: {} | prompt: {} | tools: {} | contract: {}",
         agent.name,
         agent.role,
+        availability,
         state,
         memory,
         persistence,
@@ -1426,16 +1611,66 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
     )
 }
 
+fn load_agent_settings() -> Result<AgentSettings> {
+    let raw = call_no_args("get_agent_settings")
+        .map_err(|err| anyhow!("Python agent settings error: {err:?}"))?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+fn scout_settings(enabled: Option<bool>) -> Result<AgentSettings> {
+    match enabled {
+        Some(enabled) => {
+            let raw = call_configure_optional_agent("scout".to_string(), enabled)
+                .map_err(|err| anyhow!("Python Scout configuration error: {err:?}"))?;
+            Ok(serde_json::from_str(&raw)?)
+        }
+        None => load_agent_settings(),
+    }
+}
+
+fn format_scout_settings(settings: &AgentSettings) -> Vec<String> {
+    let enabled = settings.is_scout_enabled();
+    let scout = settings.agent("scout");
+    let role = scout
+        .map(|agent| empty_as_unknown(&agent.role))
+        .unwrap_or("optional stateless network worker");
+    let tools = scout
+        .map(|agent| {
+            if agent.tools.is_empty() {
+                "web_search, fetch_url".to_string()
+            } else {
+                agent.tools.join(", ")
+            }
+        })
+        .unwrap_or_else(|| "web_search, fetch_url".to_string());
+    vec![
+        format!("Status   : {}", if enabled { "on" } else { "off" }),
+        format!("Role     : {role}"),
+        format!("Tools    : {tools}"),
+        "Timing   : Changes apply to the next run.".to_string(),
+        "Commands : /agents scout on|off | proto-cli agents scout on|off".to_string(),
+    ]
+}
+
 fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<String> {
     let mut rows = vec![
         format!("Kernel     : {}", empty_as_unknown(&architecture.kernel)),
-        format!("Controller : {}", empty_as_unknown(&architecture.controller)),
+        format!(
+            "Controller : {}",
+            empty_as_unknown(&architecture.controller)
+        ),
     ];
     if !architecture.stateful.is_empty() {
-        rows.push(format!("Stateful   : {}", architecture.stateful.join(" | ")));
+        rows.push(format!(
+            "Stateful   : {}",
+            architecture.stateful.join(" | ")
+        ));
     }
     if !architecture.stateless.is_empty() {
-        rows.push(format!("Stateless  : {}", architecture.stateless.join(" | ")));
+        rows.push(format!(
+            "Stateless  : {}",
+            architecture.stateless.join(" | ")
+        ));
     }
     if !architecture.contract.is_empty() {
         rows.push(format!("Contract   : {}", architecture.contract));
@@ -1509,7 +1744,10 @@ fn is_prompt_profile_value(value: &str) -> bool {
 
 #[cfg(test)]
 mod agent_command_tests {
-    use super::{is_prompt_profile_value, parse_eval_options, transport_metrics_summary};
+    use super::{
+        is_prompt_profile_value, parse_agents_command, parse_eval_options,
+        transport_metrics_summary, AgentSettings, AgentsCommand, CoreResponse,
+    };
     use serde_json::json;
 
     #[test]
@@ -1518,6 +1756,61 @@ mod agent_command_tests {
         assert!(is_prompt_profile_value("api-grade"));
         assert!(is_prompt_profile_value("balanced"));
         assert!(!is_prompt_profile_value("mystery"));
+    }
+
+    #[test]
+    fn parses_agent_status_profile_and_scout_commands() {
+        assert_eq!(parse_agents_command(&[]).unwrap(), AgentsCommand::Status);
+        assert_eq!(
+            parse_agents_command(&["profile", "small"]).unwrap(),
+            AgentsCommand::Profile(Some("small".to_string()))
+        );
+        assert_eq!(
+            parse_agents_command(&["scout"]).unwrap(),
+            AgentsCommand::Scout(None)
+        );
+        assert_eq!(
+            parse_agents_command(&["scout", "on"]).unwrap(),
+            AgentsCommand::Scout(Some(true))
+        );
+        assert_eq!(
+            parse_agents_command(&["disable", "scout"]).unwrap(),
+            AgentsCommand::Scout(Some(false))
+        );
+        assert!(parse_agents_command(&["status", "extra"]).is_err());
+        assert!(parse_agents_command(&["scout", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn derives_scout_state_from_the_agent_manifest() {
+        let settings: AgentSettings = serde_json::from_value(json!({
+            "scout_enabled": true,
+            "agents": [
+                {
+                    "name": "scout",
+                    "role": "optional stateless network worker",
+                    "enabled": false,
+                    "optional": true,
+                    "tools": ["web_search", "fetch_url"]
+                }
+            ]
+        }))
+        .unwrap();
+
+        assert!(!settings.is_scout_enabled());
+    }
+
+    #[test]
+    fn core_response_keeps_contract_and_completion_validation() {
+        let response: CoreResponse = serde_json::from_value(json!({
+            "status": "incomplete",
+            "run_contract": {"task_kind": "workspace-change"},
+            "completion_validation": {"status": "incomplete", "valid": false}
+        }))
+        .unwrap();
+
+        assert_eq!(response.run_contract["task_kind"], "workspace-change");
+        assert_eq!(response.completion_validation["valid"], false);
     }
 
     #[test]
@@ -1576,8 +1869,14 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
         None => ("profiles", args),
         Some("profiles") | Some("profile") => ("profiles", &args[1..]),
         Some("tasks") | Some("list") => ("tasks", &args[1..]),
-        Some(value) if value.starts_with('-') || is_prompt_profile_value(value) => ("profiles", args),
-        Some(other) => return Err(anyhow!("Unknown eval command: {other}. Use `proto-cli eval profiles`.")),
+        Some(value) if value.starts_with('-') || is_prompt_profile_value(value) => {
+            ("profiles", args)
+        }
+        Some(other) => {
+            return Err(anyhow!(
+                "Unknown eval command: {other}. Use `proto-cli eval profiles`."
+            ))
+        }
     };
 
     let options = parse_eval_options(rest)?;
@@ -1600,14 +1899,8 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
     };
     let profiles = join_optional(&options.profiles);
     let tasks = join_optional(&options.tasks);
-    let raw = call_run_quality_eval(
-        mode,
-        profiles,
-        tasks,
-        options.limit,
-        workspace_dir_string(),
-    )
-    .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
+    let raw = call_run_quality_eval(mode, profiles, tasks, options.limit, workspace_dir_string())
+        .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
     if options.json {
         println!("{raw}");
         return Ok(());
@@ -1830,7 +2123,10 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
     }
     .map_err(|err| anyhow!("Python context configuration error: {err:?}"))?;
     let settings: Value = serde_json::from_str(&raw)?;
-    let provider = settings.get("provider").and_then(Value::as_str).unwrap_or("unknown");
+    let provider = settings
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let model = settings.get("model").and_then(Value::as_str).unwrap_or("");
     let selection = if model.trim().is_empty() {
         provider.to_string()
@@ -1846,8 +2142,14 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
             "Provider: {selection}\nWindow: provider managed; ProtoAgent cannot change it"
         ));
     }
-    let window = settings.get("window_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let source = settings.get("source").and_then(Value::as_str).unwrap_or("unknown");
+    let window = settings
+        .get("window_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let source = settings
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     Ok(format!(
         "Provider: {selection}\nWindow: {} tokens ({source})\nCommands: /context window 16k | /context window auto",
         format_token_count(window)
@@ -1918,20 +2220,34 @@ pub(crate) fn context_history_text() -> Result<String> {
 
     if let Some(agents) = report.get("agents").and_then(Value::as_array) {
         for agent in agents {
-            let name = title_case_agent(agent.get("agent").and_then(Value::as_str).unwrap_or("agent"));
+            let name = title_case_agent(
+                agent
+                    .get("agent")
+                    .and_then(Value::as_str)
+                    .unwrap_or("agent"),
+            );
             if !agent.get("found").and_then(Value::as_bool).unwrap_or(false) {
                 rows.push(format!("{name}: no saved model-facing history."));
                 continue;
             }
-            let messages = agent.get("message_count").and_then(Value::as_u64).unwrap_or(0);
-            let tokens = agent.get("estimated_tokens").and_then(Value::as_u64).unwrap_or(0);
+            let messages = agent
+                .get("message_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let tokens = agent
+                .get("estimated_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             rows.push(format!(
                 "{name}: {messages} message(s), about {} tokens.",
                 format_token_count(tokens)
             ));
             if let Some(recent) = agent.get("recent").and_then(Value::as_array) {
                 for message in recent {
-                    let role = message.get("role").and_then(Value::as_str).unwrap_or("unknown");
+                    let role = message
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
                     let preview = message.get("preview").and_then(Value::as_str).unwrap_or("");
                     if !preview.trim().is_empty() {
                         rows.push(format!("  {role}: {}", truncate_plain(preview, 96)));
@@ -1985,18 +2301,16 @@ fn parse_compaction_request(values: &[&str]) -> Result<(&'static str, Option<usi
 #[cfg(test)]
 mod context_command_tests {
     use super::{
-        context_memory_enabled, context_session_id, parse_compaction_request,
+        context_memory_enabled, context_session_id, context_status_rows, parse_compaction_request,
         set_context_memory_enabled,
     };
-    use std::{env, fs};
+    use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{env, fs};
 
     #[test]
     fn defaults_to_protolink_token_compaction() {
-        assert_eq!(
-            parse_compaction_request(&[]).unwrap(),
-            ("tokens", None, 2)
-        );
+        assert_eq!(parse_compaction_request(&[]).unwrap(), ("tokens", None, 2));
     }
 
     #[test]
@@ -2010,6 +2324,13 @@ mod context_command_tests {
             ("recent", Some(13), 3)
         );
         assert!(parse_compaction_request(&["mystery"]).is_err());
+    }
+
+    #[test]
+    fn context_status_surfaces_incremental_unchanged_files() {
+        let rows = context_status_rows(&json!({"files_unchanged": 17}));
+
+        assert!(rows.iter().any(|row| row == "Unchanged  : 17"));
     }
 
     #[test]
@@ -2062,7 +2383,9 @@ fn handle_index_command(args: &[String]) -> Result<()> {
             Ok(())
         }
         None | Some("status") => show_context_status(),
-        Some(other) => Err(anyhow!("Unknown index command: {other}. Use `proto-cli index refresh`.")),
+        Some(other) => Err(anyhow!(
+            "Unknown index command: {other}. Use `proto-cli index refresh`."
+        )),
     }
 }
 
@@ -2100,14 +2423,22 @@ fn show_context_pack(query: &str) -> Result<()> {
 }
 
 fn show_sessions() -> Result<()> {
-    print_panel("SESSIONS", &sessions::session_panel_rows(), PanelTone::Magenta);
+    print_panel(
+        "SESSIONS",
+        &sessions::session_panel_rows(),
+        PanelTone::Magenta,
+    );
     for session in sessions::recent_sessions().into_iter().take(5) {
-        print_panel(&session.name, &wrap_lines(&sessions::session_detail(&session), panel_inner_width()), PanelTone::Dim);
+        print_panel(
+            &session.name,
+            &wrap_lines(&sessions::session_detail(&session), panel_inner_width()),
+            PanelTone::Dim,
+        );
     }
     Ok(())
 }
 
-fn print_agent_graph() {
+fn print_agent_graph(scout_enabled: bool) {
     let rows = vec![
         "[USER]".to_string(),
         "   |".to_string(),
@@ -2121,6 +2452,11 @@ fn print_agent_graph() {
         "[ARCHITECT] stateful controller and user-facing answer".to_string(),
         "   |".to_string(),
         "   +--> [EXPLORER] stateless read worker: pack, read, search, git status".to_string(),
+        "   |".to_string(),
+        format!(
+            "   +--> [SCOUT] optional network worker: {} (web_search, fetch_url)",
+            if scout_enabled { "on" } else { "off" }
+        ),
         "   |".to_string(),
         "   +--> [CODER] stateless write worker: diff preview, new file".to_string(),
         "   |".to_string(),
@@ -2149,12 +2485,14 @@ fn load_visible_config() -> Result<VisibleConfig> {
 }
 
 fn load_doctor() -> Result<DoctorReport> {
-    let json = call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
+    let json = call_doctor(workspace_dir_string())
+        .map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 pub(crate) fn context_status_text(workspace: String) -> Result<String> {
-    let raw = call_context_status(workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let raw = call_context_status(workspace)
+        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = vec![context_memory_text()];
     rows.extend(context_status_rows(&value));
@@ -2162,13 +2500,15 @@ pub(crate) fn context_status_text(workspace: String) -> Result<String> {
 }
 
 pub(crate) fn refresh_context_text(workspace: String) -> Result<String> {
-    let raw = call_refresh_context(workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let raw = call_refresh_context(workspace)
+        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     Ok(context_status_rows(&value).join("\n"))
 }
 
 pub(crate) fn context_pack_text(query: String, workspace: String) -> Result<String> {
-    let raw = call_context_pack(query, workspace).map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+    let raw = call_context_pack(query, workspace)
+        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = context_pack_rows(&value);
     if let Some(items) = value.get("items").and_then(Value::as_array) {
@@ -2186,12 +2526,16 @@ fn context_status_rows(value: &Value) -> Vec<String> {
         format!("Workspace  : {}", value_str(value, "workspace")),
         format!("Index      : {}", value_str(value, "index_path")),
         format!("Files      : {}", value_u64(value, "files_indexed")),
-        format!("Indexed at : {}", empty_as_unknown(&value_str(value, "indexed_at"))),
+        format!(
+            "Indexed at : {}",
+            empty_as_unknown(&value_str(value, "indexed_at"))
+        ),
         format!(
             "Duration   : {} ms",
             value_u64_any(value, &["duration_ms", "last_duration_ms"])
         ),
         format!("Updated    : {}", value_u64(value, "files_updated")),
+        format!("Unchanged  : {}", value_u64(value, "files_unchanged")),
         format!("Removed    : {}", value_u64(value, "files_removed")),
         format!("Skipped    : {}", value_u64(value, "files_skipped")),
     ]
@@ -2220,7 +2564,14 @@ fn context_pack_rows(value: &Value) -> Vec<String> {
         format!("Query      : {}", value_str(value, "query")),
         format!("Workspace  : {}", value_str(value, "workspace")),
         format!("Items      : {}", item_count),
-        format!("Terms      : {}", if terms.is_empty() { "none" } else { terms.as_str() }),
+        format!(
+            "Terms      : {}",
+            if terms.is_empty() {
+                "none"
+            } else {
+                terms.as_str()
+            }
+        ),
         format!(
             "Index      : {} file(s), {} ms",
             value_u64(index, "files_indexed"),
@@ -2244,7 +2595,10 @@ fn context_item_rows(item: &Value) -> Vec<String> {
         format!("Language : {}", value_str(item, "language")),
         format!("Score    : {}", value_u64(item, "score")),
         format!("Reason   : {}", value_str(item, "reason")),
-        format!("Evidence : {}", value_array_strings(item, "evidence", 4).join("; ")),
+        format!(
+            "Evidence : {}",
+            value_array_strings(item, "evidence", 4).join("; ")
+        ),
     ];
     let symbols = value_array_strings(item, "symbols", 10);
     if !symbols.is_empty() {
@@ -2261,7 +2615,11 @@ fn context_item_rows(item: &Value) -> Vec<String> {
     let snippet = value_str(item, "snippet");
     if !snippet.trim().is_empty() {
         rows.push("Snippet  :".to_string());
-        rows.extend(wrap_lines(&snippet, panel_inner_width()).into_iter().take(12));
+        rows.extend(
+            wrap_lines(&snippet, panel_inner_width())
+                .into_iter()
+                .take(12),
+        );
     }
     rows
 }
@@ -2279,7 +2637,9 @@ fn value_u64(value: &Value, key: &str) -> u64 {
 }
 
 fn value_u64_any(value: &Value, keys: &[&str]) -> u64 {
-    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_u64)).unwrap_or(0)
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_u64))
+        .unwrap_or(0)
 }
 
 fn value_array_strings(value: &Value, key: &str, limit: usize) -> Vec<String> {
@@ -2320,7 +2680,14 @@ fn print_panel(title: &str, rows: &[String], tone: PanelTone) {
             print_panel_row(&truncate_plain(&wrapped, inner), inner);
         }
     }
-    println!("{}", tone_style(&format!("+{}+", repeat_char('-', width.saturating_sub(2))), tone).bold());
+    println!(
+        "{}",
+        tone_style(
+            &format!("+{}+", repeat_char('-', width.saturating_sub(2))),
+            tone
+        )
+        .bold()
+    );
     println!();
 }
 
@@ -2431,7 +2798,7 @@ fn truncate_plain(text: &str, width: usize) -> String {
 }
 
 fn repeat_char(ch: char, width: usize) -> String {
-    std::iter::repeat(ch).take(width).collect()
+    std::iter::repeat_n(ch, width).collect()
 }
 
 fn empty_as_unknown(value: &str) -> &str {
@@ -2499,7 +2866,10 @@ fn call_list_models(validate_api_keys: bool) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("list_models")?.call1((validate_api_keys,))?.extract()
+        module
+            .getattr("list_models")?
+            .call1((validate_api_keys,))?
+            .extract()
     })
 }
 
@@ -2523,7 +2893,10 @@ fn call_add_api_key(provider: String, api_key: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("add_api_key")?.call1((provider, api_key))?.extract()
+        module
+            .getattr("add_api_key")?
+            .call1((provider, api_key))?
+            .extract()
     })
 }
 
@@ -2560,11 +2933,25 @@ fn call_configure_agent_prompt_profile(value: Option<String>) -> PyResult<String
     })
 }
 
+fn call_configure_optional_agent(name: String, enabled: bool) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr("configure_optional_agent")?
+            .call1((name, enabled))?
+            .extract()
+    })
+}
+
 fn call_answer_help_question(question: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("answer_help_question")?.call1((question,))?.extract()
+        module
+            .getattr("answer_help_question")?
+            .call1((question,))?
+            .extract()
     })
 }
 
@@ -2589,7 +2976,10 @@ fn call_list_quality_eval_tasks() -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("list_quality_eval_tasks")?.call0()?.extract()
+        module
+            .getattr("list_quality_eval_tasks")?
+            .call0()?
+            .extract()
     })
 }
 
@@ -2642,7 +3032,10 @@ fn call_component_versions(cli_version: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("component_versions")?.call1((cli_version,))?.extract()
+        module
+            .getattr("component_versions")?
+            .call1((cli_version,))?
+            .extract()
     })
 }
 
@@ -2650,7 +3043,10 @@ fn call_context_status(workspace: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("context_status")?.call1((workspace,))?.extract()
+        module
+            .getattr("context_status")?
+            .call1((workspace,))?
+            .extract()
     })
 }
 
@@ -2658,7 +3054,10 @@ fn call_refresh_context(workspace: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("refresh_context")?.call1((workspace,))?.extract()
+        module
+            .getattr("refresh_context")?
+            .call1((workspace,))?
+            .extract()
     })
 }
 
@@ -2666,7 +3065,10 @@ fn call_context_pack(query: String, workspace: String) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
-        module.getattr("context_pack")?.call1((query, workspace))?.extract()
+        module
+            .getattr("context_pack")?
+            .call1((query, workspace))?
+            .extract()
     })
 }
 
@@ -2789,7 +3191,9 @@ pub(crate) fn set_active_project(input: &str) -> Result<PathBuf> {
     let selected_label = selected.to_string_lossy().to_string();
     let mut config = load_project_config();
     config.active_project = Some(selected_label.clone());
-    config.recent_projects.retain(|path| path != &selected_label);
+    config
+        .recent_projects
+        .retain(|path| path != &selected_label);
     config.recent_projects.insert(0, selected_label);
     config.recent_projects.truncate(12);
     save_project_config(&config)?;
@@ -2850,11 +3254,17 @@ fn resolve_project_path(input: &str) -> Result<PathBuf> {
     } else {
         default_launch_workspace().join(expanded)
     };
-    let resolved = path
-        .canonicalize()
-        .map_err(|err| anyhow!("Could not open project folder `{}`: {err}", path.to_string_lossy()))?;
+    let resolved = path.canonicalize().map_err(|err| {
+        anyhow!(
+            "Could not open project folder `{}`: {err}",
+            path.to_string_lossy()
+        )
+    })?;
     if !resolved.is_dir() {
-        return Err(anyhow!("Project path is not a folder: {}", resolved.to_string_lossy()));
+        return Err(anyhow!(
+            "Project path is not a folder: {}",
+            resolved.to_string_lossy()
+        ));
     }
     Ok(resolved)
 }

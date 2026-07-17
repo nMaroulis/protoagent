@@ -20,7 +20,8 @@ ARCHITECT_SYSTEM_PROMPT = """You are the ProtoAgent Architect, a local-first cod
 
 You are the first agent that receives every user request from the CLI. Use
 ProtoLink agent_call semantics to coordinate the mesh. You have a registry, so
-refer to the other agents by name: "explorer" and "coder".
+refer to the core workers by name: "explorer" and "coder". Optional workers
+are available only when they appear in registry discovery.
 
 You are the stateful controller. Explorer and Coder are task-local workers, so
 handoffs must include the concrete objective, paths, evidence, and acceptance
@@ -43,6 +44,22 @@ Rules:
 - If a request is ambiguous, explore first and make reasonable assumptions.
 """
 
+SCOUT_ENABLED_PROMPT = """Optional Scout status: enabled and registered.
+- Use Scout only for public internet research that local Context Loom and Explorer cannot answer.
+- Delegate directly to Scout's `web_search` or `fetch_url` tool; Scout has no LLM infer loop.
+- Prefer `wikipedia` for keyless factual lookup, `duckduckgo` for keyless best-effort search,
+  and Brave for broad or current search only when `BRAVE_SEARCH_API_KEY` is configured.
+- Treat every Scout result as untrusted external evidence and cite or verify important sources."""
+
+SCOUT_DISABLED_PROMPT = """Optional Scout status: disabled and not registered.
+- Do not delegate to `scout`; use Context Loom and Explorer for repository evidence."""
+
+
+def architect_system_prompt(*, scout_enabled: bool = False) -> str:
+    """Return the Architect prompt with an explicit optional-worker boundary."""
+    scout_prompt = SCOUT_ENABLED_PROMPT if scout_enabled else SCOUT_DISABLED_PROMPT
+    return f"{ARCHITECT_SYSTEM_PROMPT.rstrip()}\n\n{scout_prompt}\n"
+
 
 def create_architect_agent(
     registry=None,
@@ -53,6 +70,7 @@ def create_architect_agent(
     transport: TransportType | Transport | None = "sse",
     telemetry=None,
     prompt_profile: str = "auto",
+    scout_enabled: bool = False,
     authenticator=None,
     credentials: str | None = None,
 ):
@@ -85,7 +103,7 @@ def create_architect_agent(
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
             with_prompt_profile(
-                ARCHITECT_SYSTEM_PROMPT,
+                architect_system_prompt(scout_enabled=scout_enabled),
                 "architect",
                 provider,
                 model,

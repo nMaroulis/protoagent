@@ -2,7 +2,9 @@ use anyhow::Result;
 use crossterm::{
     cursor::MoveTo,
     queue,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
+    style::{
+        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    },
 };
 use std::io::Stdout;
 
@@ -12,8 +14,8 @@ use crate::wrap_lines;
 use super::input::InputEditor;
 use super::state::{PanelView, TerminalApp, TerminalMessage};
 use super::theme::{
-    bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, red, role_color, surface_bg,
-    text, write_at, write_line, yellow,
+    bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, red, role_color,
+    surface_bg, text, write_at, write_line, yellow,
 };
 use super::{HEADER_ROWS, INPUT_ROWS};
 
@@ -40,11 +42,24 @@ pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Re
     draw_panel_rows(out, width, &rows, available_rows.saturating_sub(1), 2)?;
 
     draw_command_bar(out, controls_row, width, app.panel)?;
-    write_line(out, separator_row, width, &"-".repeat(width as usize), magenta(), panel_bg(), false)?;
+    write_line(
+        out,
+        separator_row,
+        width,
+        &"-".repeat(width as usize),
+        magenta(),
+        panel_bg(),
+        false,
+    )?;
     Ok(())
 }
 
-pub(super) fn draw_transcript(out: &mut Stdout, width: u16, height: u16, app: &TerminalApp) -> Result<()> {
+pub(super) fn draw_transcript(
+    out: &mut Stdout,
+    width: u16,
+    height: u16,
+    app: &TerminalApp,
+) -> Result<()> {
     let top = HEADER_ROWS;
     let bottom = height.saturating_sub(INPUT_ROWS).max(top + 1);
     for y in top..bottom {
@@ -90,7 +105,16 @@ fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> 
                 )?;
             }
             InlineKind::Code => {
-                draw_text_segment(out, &mut x, y, width, &segment.text, black(), yellow(), true)?;
+                draw_text_segment(
+                    out,
+                    &mut x,
+                    y,
+                    width,
+                    &segment.text,
+                    black(),
+                    yellow(),
+                    true,
+                )?;
             }
         }
     }
@@ -105,7 +129,15 @@ pub(super) fn draw_input(
     editor: Option<&InputEditor>,
 ) -> Result<(u16, u16)> {
     let top = height.saturating_sub(INPUT_ROWS);
-    write_line(out, top, width, &"-".repeat(width as usize), cyan(), input_bg(), false)?;
+    write_line(
+        out,
+        top,
+        width,
+        &"-".repeat(width as usize),
+        cyan(),
+        input_bg(),
+        false,
+    )?;
     write_line(out, top + 1, width, "", text(), input_bg(), false)?;
     draw_context_usage(out, top + 2, width, app)?;
     draw_bottom_status(out, top + 3, width, app)?;
@@ -146,17 +178,21 @@ fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -
         );
     };
 
-    let pressure = latest
-        .used_percent
-        .or_else(|| {
-            latest
-                .window_tokens
-                .filter(|window| *window > 0)
-                .map(|window| latest.used_tokens as f64 / window as f64 * 100.0)
-        });
+    let pressure = latest.used_percent.or_else(|| {
+        latest
+            .window_tokens
+            .filter(|window| *window > 0)
+            .map(|window| latest.used_tokens as f64 / window as f64 * 100.0)
+    });
     let pressure_color = context_pressure_color(pressure);
     if let Some(percent) = pressure {
-        let cells = if width >= 88 { 18 } else if width >= 60 { 12 } else { 7 };
+        let cells = if width >= 88 {
+            18
+        } else if width >= 60 {
+            12
+        } else {
+            7
+        };
         let filled = meter_fill(percent, cells);
         draw_text_segment(out, &mut x, y, width, "[", muted(), input_bg(), false)?;
         draw_text_segment(
@@ -193,7 +229,16 @@ fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -
         ),
         None => format!("{}{} tokens", estimated, compact_tokens(latest.used_tokens)),
     };
-    draw_text_segment(out, &mut x, y, width, &usage, pressure_color, input_bg(), true)?;
+    draw_text_segment(
+        out,
+        &mut x,
+        y,
+        width,
+        &usage,
+        pressure_color,
+        input_bg(),
+        true,
+    )?;
 
     if width >= 76 {
         if let Some(peak) = app.context_usage.peak() {
@@ -209,7 +254,16 @@ fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -
                     compact_tokens(peak.used_tokens)
                 ),
             };
-            draw_text_segment(out, &mut x, y, width, &peak_text, muted(), input_bg(), false)?;
+            draw_text_segment(
+                out,
+                &mut x,
+                y,
+                width,
+                &peak_text,
+                muted(),
+                input_bg(),
+                false,
+            )?;
         }
     }
     if width >= 108 && !latest.model.is_empty() {
@@ -250,25 +304,6 @@ fn compact_tokens(tokens: u64) -> String {
     }
 }
 
-#[cfg(test)]
-mod context_meter_tests {
-    use super::{compact_tokens, meter_fill};
-
-    #[test]
-    fn scales_context_pressure_into_fixed_cells() {
-        assert_eq!(meter_fill(0.0, 12), 0);
-        assert_eq!(meter_fill(62.5, 12), 8);
-        assert_eq!(meter_fill(140.0, 12), 12);
-    }
-
-    #[test]
-    fn formats_token_counts_compactly() {
-        assert_eq!(compact_tokens(5116), "5.1k");
-        assert_eq!(compact_tokens(8192), "8.2k");
-        assert_eq!(compact_tokens(1_200_000), "1.2m");
-    }
-}
-
 pub(super) fn truncate_detail(text: &str, max_lines: usize) -> String {
     let mut lines = text.lines().take(max_lines).collect::<Vec<_>>().join("\n");
     if text.lines().count() > max_lines {
@@ -293,98 +328,253 @@ fn row(label: &'static str, value: impl Into<String>, color: Color, bold: bool) 
     }
 }
 
+fn agent_state<'a>(agent: Option<&'a crate::AgentManifest>, fallback: &'a str) -> &'a str {
+    agent
+        .map(|agent| agent.state.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+}
+
+fn agent_memory<'a>(agent: Option<&'a crate::AgentManifest>, fallback: &'a str) -> &'a str {
+    agent
+        .map(|agent| agent.memory.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+}
+
+fn agent_tools(agent: Option<&crate::AgentManifest>, fallback: &str) -> String {
+    agent
+        .filter(|agent| !agent.tools.is_empty())
+        .map(|agent| agent.tools.join(" + "))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
     let mut rows = Vec::new();
     match app.panel {
         PanelView::Dashboard => {
-            rows.push(row("project", &app.status.workspace, magenta(), app.status.project_ready));
+            rows.push(row(
+                "project",
+                &app.status.workspace,
+                magenta(),
+                app.status.project_ready,
+            ));
             rows.push(row("models", &app.status.model_summary, cyan(), false));
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
-            rows.push(row("agents", "RunContract -> Architect -> stateless workers -> policy gate", yellow(), false));
+            rows.push(row(
+                "agents",
+                "RunContract -> Architect -> stateless workers -> policy gate",
+                yellow(),
+                false,
+            ));
             rows.push(row(
                 "last",
-                if app.last_query.is_empty() { "none".to_string() } else { app.last_query.clone() },
+                if app.last_query.is_empty() {
+                    "none".to_string()
+                } else {
+                    app.last_query.clone()
+                },
                 muted(),
                 false,
             ));
-            rows.push(row("mode", "fullscreen takeover, fixed panels, fluid transcript, bottom input", green(), false));
+            rows.push(row(
+                "mode",
+                "fullscreen takeover, fixed panels, fluid transcript, bottom input",
+                green(),
+                false,
+            ));
         }
         PanelView::Project => {
-            rows.push(row("active", &app.status.workspace, magenta(), app.status.project_ready));
-            rows.push(row("state", if app.status.project_ready { "ready for tasks" } else { "select a project before tasks" }, cyan(), true));
+            rows.push(row(
+                "active",
+                &app.status.workspace,
+                magenta(),
+                app.status.project_ready,
+            ));
+            rows.push(row(
+                "state",
+                if app.status.project_ready {
+                    "ready for tasks"
+                } else {
+                    "select a project before tasks"
+                },
+                cyan(),
+                true,
+            ));
             rows.push(row("set", "/project or /project PATH", yellow(), false));
             rows.push(row("clear", "/project clear", muted(), false));
-            rows.push(row("tags", "type @ in the prompt to choose a file from the active project", green(), false));
-            rows.push(row("store", &app.status.project_config_path, muted(), false));
+            rows.push(row(
+                "tags",
+                "type @ in the prompt to choose a file from the active project",
+                green(),
+                false,
+            ));
+            rows.push(row(
+                "store",
+                &app.status.project_config_path,
+                muted(),
+                false,
+            ));
         }
         PanelView::Models => {
-            rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), true));
+            rows.push(row(
+                "active",
+                format!("{} / {}", app.status.provider, app.status.model),
+                cyan(),
+                true,
+            ));
             if app.models_loading {
-                rows.push(row("inventory", "scanning configured model sources...", magenta(), true));
-                rows.push(row("local", "Ollama [LOADING]  LM Studio [LOADING]  llama.cpp [LOADING]", cyan(), false));
-                rows.push(row("cloud", "provider keys and model access [CHECKING]", yellow(), false));
+                rows.push(row(
+                    "inventory",
+                    "scanning configured model sources...",
+                    magenta(),
+                    true,
+                ));
+                rows.push(row(
+                    "local",
+                    "Ollama [LOADING]  LM Studio [LOADING]  llama.cpp [LOADING]",
+                    cyan(),
+                    false,
+                ));
+                rows.push(row(
+                    "cloud",
+                    "provider keys and model access [CHECKING]",
+                    yellow(),
+                    false,
+                ));
                 rows.push(row("config", &app.status.config_path, muted(), false));
             } else {
-                rows.push(row("inventory", &app.status.model_summary, magenta(), false));
-                rows.push(row("providers", &app.status.provider_summary, text(), false));
-                rows.push(row("setup", "/model picks provider/model; /key openai stores a key", green(), true));
+                rows.push(row(
+                    "inventory",
+                    &app.status.model_summary,
+                    magenta(),
+                    false,
+                ));
+                rows.push(row(
+                    "providers",
+                    &app.status.provider_summary,
+                    text(),
+                    false,
+                ));
+                rows.push(row(
+                    "setup",
+                    "/model picks provider/model; /key openai stores a key",
+                    green(),
+                    true,
+                ));
                 rows.push(row("config", &app.status.config_path, muted(), false));
             }
         }
         PanelView::Agents => {
+            let architect = app.agent_settings.agent("architect");
+            let explorer = app.agent_settings.agent("explorer");
+            let coder = app.agent_settings.agent("coder");
+            let scout = app.agent_settings.agent("scout");
             rows.push(row(
                 "kernel",
-                "ProtoLink owns RunContext, budgets, events, approvals, reports",
+                "ProtoLink: context, budgets, events, policy, reports",
                 magenta(),
                 true,
             ));
             rows.push(row(
                 "contract",
-                "write tasks must reach Coder, diff approval, or explicit blocker",
+                "writes require Coder, diff/approval, or an explicit blocker",
                 green(),
                 true,
             ));
             rows.push(row(
                 "architect",
-                "stateful controller; durable memory protoagent-architect",
+                format!(
+                    "{} controller; durable memory {}",
+                    agent_state(architect, "stateful"),
+                    agent_memory(architect, "protoagent-architect"),
+                ),
                 magenta(),
                 true,
             ));
-            rows.push(row("loom", "Context Loom feeds source-cited evidence before routing", green(), true));
             rows.push(row(
-                "explorer",
-                "stateless read worker; context pack, read_file, search, git status",
+                "workers",
+                format!(
+                    "Explorer read/{} | Coder write/{}",
+                    agent_state(explorer, "stateless"),
+                    agent_state(coder, "stateless"),
+                ),
                 cyan(),
                 false,
             ));
             rows.push(row(
-                "coder",
-                "stateless write worker; RunAction diff previews behind approval",
-                yellow(),
-                false,
+                "scout",
+                format!(
+                    "{} | {} | /agents scout {}",
+                    if app.agent_settings.is_scout_enabled() {
+                        "ON"
+                    } else {
+                        "OFF"
+                    },
+                    agent_tools(scout, "web_search + fetch_url"),
+                    if app.agent_settings.is_scout_enabled() {
+                        "off"
+                    } else {
+                        "on"
+                    },
+                ),
+                if app.agent_settings.is_scout_enabled() {
+                    green()
+                } else {
+                    yellow()
+                },
+                true,
             ));
-            rows.push(row("approval", "ProtoLink pauses execution until the human decides", green(), false));
-            rows.push(row("guard", "runtime marks missing write artifacts as incomplete", red(), false));
-            rows.push(row("prompt", format!("{}; /agents profile changes it", app.status.prompt_profile), magenta(), false));
-            rows.push(row("surface", "shell command: proto-cli agents", muted(), false));
         }
         PanelView::Context => {
-            rows.push(row("loom", "deterministic workspace index plus source-cited Context Packs", magenta(), true));
+            rows.push(row(
+                "loom",
+                "deterministic workspace index plus source-cited Context Packs",
+                magenta(),
+                true,
+            ));
             rows.push(row("window", "/context window 16k | auto", cyan(), true));
-            rows.push(row("memory", "/context on | off | history | compact | reset", yellow(), true));
-            rows.push(row("pack", "/context <query> previews workspace evidence", green(), false));
-            rows.push(row("refresh", "/index refresh rebuilds the local SQLite index", muted(), false));
+            rows.push(row(
+                "memory",
+                "/context on | off | history | compact | reset",
+                yellow(),
+                true,
+            ));
+            rows.push(row(
+                "pack",
+                "/context <query> previews workspace evidence",
+                green(),
+                false,
+            ));
+            rows.push(row(
+                "refresh",
+                "/index refresh reports updated / unchanged / removed files",
+                muted(),
+                false,
+            ));
         }
         PanelView::Sessions => {
-            for (idx, line) in crate::sessions::session_panel_rows().into_iter().take(6).enumerate() {
-                rows.push(row(if idx == 0 { "current" } else { "session" }, line, if idx == 0 { cyan() } else { muted() }, idx == 0));
+            for (idx, line) in crate::sessions::session_panel_rows()
+                .into_iter()
+                .take(6)
+                .enumerate()
+            {
+                rows.push(row(
+                    if idx == 0 { "current" } else { "session" },
+                    line,
+                    if idx == 0 { cyan() } else { muted() },
+                    idx == 0,
+                ));
             }
         }
         PanelView::Timeline => {
             if let Some(response) = &app.last_response {
                 rows.push(row(
                     "summary",
-                    crate::timeline::summary_from_run_events(&response.run_events, &response.events),
+                    crate::timeline::summary_from_run_events(
+                        &response.run_events,
+                        &response.events,
+                    ),
                     cyan(),
                     true,
                 ));
@@ -396,13 +586,28 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                     rows.push(row("step", line, yellow(), false));
                 }
             } else {
-                rows.push(row("timeline", "No timeline yet. Run a task first.", muted(), false));
-                rows.push(row("command", "/timeline opens the latest structured agent path", cyan(), false));
+                rows.push(row(
+                    "timeline",
+                    "No timeline yet. Run a task first.",
+                    muted(),
+                    false,
+                ));
+                rows.push(row(
+                    "command",
+                    "/timeline opens the latest structured agent path",
+                    cyan(),
+                    false,
+                ));
             }
         }
         PanelView::Check => {
             rows.push(row("runtime", &app.status.runtime, magenta(), true));
-            rows.push(row("active", format!("{} / {}", app.status.provider, app.status.model), cyan(), false));
+            rows.push(row(
+                "active",
+                format!("{} / {}", app.status.provider, app.status.model),
+                cyan(),
+                false,
+            ));
             rows.push(row("workspace", &app.status.workspace, yellow(), false));
             rows.push(row("config", &app.status.config_path, muted(), false));
             rows.push(row("refresh", "run /check to refresh", green(), false));
@@ -412,33 +617,113 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("model", &app.status.model, magenta(), false));
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
             rows.push(row("config", &app.status.config_path, yellow(), false));
-            rows.push(row("keys", "/key sets API keys here; proto-cli key openai works from shell", green(), false));
-            rows.push(row("report", "full report: proto-cli config", green(), false));
+            rows.push(row(
+                "keys",
+                "/key sets API keys here; proto-cli key openai works from shell",
+                green(),
+                false,
+            ));
+            rows.push(row(
+                "report",
+                "full report: proto-cli config",
+                green(),
+                false,
+            ));
         }
         PanelView::Versions => {
             if app.version_rows.is_empty() {
-                rows.push(row("refresh", "/version loads component versions", cyan(), true));
+                rows.push(row(
+                    "refresh",
+                    "/version loads component versions",
+                    cyan(),
+                    true,
+                ));
             } else {
                 for line in app.version_rows.iter().take(6) {
                     rows.push(row("component", line, cyan(), line.contains("proto-cli")));
                 }
             }
-            rows.push(row("policy", "CLI and core are active 0.1.x surfaces; ACP stays prerelease until implemented", green(), false));
-            rows.push(row("sources", "cli/Cargo.toml, core/pyproject.toml, acp/VERSION", muted(), false));
+            rows.push(row(
+                "policy",
+                "CLI/core follow SemVer; ACP stays prerelease until implemented",
+                green(),
+                false,
+            ));
+            rows.push(row(
+                "sources",
+                "cli/Cargo.toml, core/pyproject.toml, acp/VERSION",
+                muted(),
+                false,
+            ));
         }
         PanelView::Help => {
             rows.push(row("chat", "type any task or /run <task>", cyan(), true));
-            rows.push(row("guide", "/help <question> asks isolated Guide with current settings", magenta(), true));
-            rows.push(row("project", "/project chooses the folder; @ tags files into the prompt", yellow(), true));
-            rows.push(row("model", "/model changes active provider/model; /key stores API keys", green(), true));
-            rows.push(row("prompt", "/agents profile auto|small|medium|large|api", cyan(), false));
-            rows.push(row("panels", "/dashboard /project /models /agents /context /sessions /timeline /version", magenta(), false));
-            rows.push(row("context", "/context on | off | history | window 16k | compact | reset", green(), false));
-            rows.push(row("output", "/trace raw logs; /timeline structured path; /diff proposed changes", cyan(), false));
-            rows.push(row("scroll", "mouse wheel, PageUp/PageDown, Ctrl-End", yellow(), false));
-            rows.push(row("cancel", "Esc or Ctrl-C while a task runs", red(), false));
-            rows.push(row("session", "/quit exits now; Esc asks first", muted(), false));
-            rows.push(row("launch", "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"", green(), false));
+            rows.push(row(
+                "guide",
+                "/help <question> asks isolated Guide with current settings",
+                magenta(),
+                true,
+            ));
+            rows.push(row(
+                "project",
+                "/project chooses the folder; @ tags files into the prompt",
+                yellow(),
+                true,
+            ));
+            rows.push(row(
+                "model",
+                "/model changes active provider/model; /key stores API keys",
+                green(),
+                true,
+            ));
+            rows.push(row(
+                "agents",
+                "/agents profile | /agents scout on|off",
+                cyan(),
+                false,
+            ));
+            rows.push(row(
+                "panels",
+                "/dashboard /project /models /agents /context /sessions /timeline /version",
+                magenta(),
+                false,
+            ));
+            rows.push(row(
+                "context",
+                "/context on | off | history | window 16k | compact | reset",
+                green(),
+                false,
+            ));
+            rows.push(row(
+                "output",
+                "/trace raw logs; /timeline structured path; /diff proposed changes",
+                cyan(),
+                false,
+            ));
+            rows.push(row(
+                "scroll",
+                "mouse wheel, PageUp/PageDown, Ctrl-End",
+                yellow(),
+                false,
+            ));
+            rows.push(row(
+                "cancel",
+                "Esc or Ctrl-C while a task runs",
+                red(),
+                false,
+            ));
+            rows.push(row(
+                "session",
+                "/quit exits now; Esc asks first",
+                muted(),
+                false,
+            ));
+            rows.push(row(
+                "launch",
+                "fullscreen TUI: proto-cli start | direct task: proto-cli run \"task\"",
+                green(),
+                false,
+            ));
         }
     }
     rows
@@ -465,7 +750,13 @@ fn draw_model_activity_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalA
     Ok(())
 }
 
-fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: usize, start_y: u16) -> Result<()> {
+fn draw_panel_rows(
+    out: &mut Stdout,
+    width: u16,
+    rows: &[PanelRow],
+    max_rows: usize,
+    start_y: u16,
+) -> Result<()> {
     let label_width = 12usize;
     let body_x = label_width as u16 + 1;
     let body_width = width.saturating_sub(body_x + 1).max(10) as usize;
@@ -508,7 +799,16 @@ fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: us
                     true,
                 )?;
             }
-            write_at(out, body_x, y, width.saturating_sub(body_x), line, text(), panel_bg(), row.bold)?;
+            write_at(
+                out,
+                body_x,
+                y,
+                width.saturating_sub(body_x),
+                line,
+                text(),
+                panel_bg(),
+                row.bold,
+            )?;
             y += 1;
             used += 1;
         }
@@ -516,10 +816,28 @@ fn draw_panel_rows(out: &mut Stdout, width: u16, rows: &[PanelRow], max_rows: us
     Ok(())
 }
 
-fn draw_provider_segments(out: &mut Stdout, start_x: u16, y: u16, width: u16, value: &str) -> Result<()> {
-    write_at(out, start_x, y, width.saturating_sub(start_x), "", text(), panel_bg(), false)?;
+fn draw_provider_segments(
+    out: &mut Stdout,
+    start_x: u16,
+    y: u16,
+    width: u16,
+    value: &str,
+) -> Result<()> {
+    write_at(
+        out,
+        start_x,
+        y,
+        width.saturating_sub(start_x),
+        "",
+        text(),
+        panel_bg(),
+        false,
+    )?;
     let mut x = start_x;
-    for segment in value.split("  ").filter(|segment| !segment.trim().is_empty()) {
+    for segment in value
+        .split("  ")
+        .filter(|segment| !segment.trim().is_empty())
+    {
         let color = provider_segment_color(segment);
         draw_text_segment(out, &mut x, y, width, segment, color, panel_bg(), true)?;
         draw_text_segment(out, &mut x, y, width, "  ", muted(), panel_bg(), false)?;
@@ -545,7 +863,16 @@ fn provider_segment_color(segment: &str) -> Color {
 fn draw_scroll_marker(out: &mut Stdout, y: u16, width: u16, scroll_offset: usize) -> Result<()> {
     write_line(out, y, width, "", text(), bg(), false)?;
     let mut x = 2u16;
-    draw_badge(out, &mut x, y, width, "CHAT SCROLLED", black(), yellow(), true)?;
+    draw_badge(
+        out,
+        &mut x,
+        y,
+        width,
+        "CHAT SCROLLED",
+        black(),
+        yellow(),
+        true,
+    )?;
     draw_text_segment(
         out,
         &mut x,
@@ -627,7 +954,16 @@ fn draw_activity_inline(
         draw_text_segment(out, x, y, width, " ", muted(), background, false)?;
     }
     if let Some(active) = parsed.active.as_deref() {
-        draw_badge(out, x, y, width, active, black(), activity_color(active), true)?;
+        draw_badge(
+            out,
+            x,
+            y,
+            width,
+            active,
+            black(),
+            activity_color(active),
+            true,
+        )?;
         draw_text_segment(out, x, y, width, " ", muted(), background, false)?;
     }
     if let Some(spinner) = parsed.spinner.as_deref() {
@@ -638,6 +974,7 @@ fn draw_activity_inline(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 fn draw_badge(
     out: &mut Stdout,
     x: &mut u16,
@@ -648,9 +985,19 @@ fn draw_badge(
     background: Color,
     bold: bool,
 ) -> Result<()> {
-    draw_text_segment(out, x, y, width, &format!(" {} ", label), fg, background, bold)
+    draw_text_segment(
+        out,
+        x,
+        y,
+        width,
+        &format!(" {} ", label),
+        fg,
+        background,
+        bold,
+    )
 }
 
+#[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 fn draw_text_segment(
     out: &mut Stdout,
     x: &mut u16,
@@ -675,7 +1022,11 @@ fn draw_text_segment(
         MoveTo(*x, y),
         SetForegroundColor(fg),
         SetBackgroundColor(background),
-        SetAttribute(if bold { Attribute::Bold } else { Attribute::Reset }),
+        SetAttribute(if bold {
+            Attribute::Bold
+        } else {
+            Attribute::Reset
+        }),
         Print(value),
         SetAttribute(Attribute::Reset),
         ResetColor
@@ -739,9 +1090,7 @@ fn activity_color(agent: &str) -> Color {
         cyan()
     } else if agent.contains("Coder") {
         yellow()
-    } else if agent.contains("Registry") {
-        green()
-    } else if agent.contains("CLI") {
+    } else if agent.contains("Registry") || agent.contains("CLI") {
         green()
     } else {
         muted()
@@ -769,7 +1118,14 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
             return Ok(());
         }
         let active_chip = panel == active;
-        let chip = format!(" {} ", if active_chip { label.to_uppercase() } else { label.to_string() });
+        let chip = format!(
+            " {} ",
+            if active_chip {
+                label.to_uppercase()
+            } else {
+                label.to_string()
+            }
+        );
         let remaining = width.saturating_sub(x);
         let chip_width = (chip.chars().count() as u16).min(remaining);
         write_at(
@@ -801,7 +1157,14 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
     });
     append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
     if !message.meta.is_empty() {
-        append_wrapped_render_line(lines, "  | ", &format!("[{}]", message.meta.join("] [")), muted(), false, width);
+        append_wrapped_render_line(
+            lines,
+            "  | ",
+            &format!("[{}]", message.meta.join("] [")),
+            muted(),
+            false,
+            width,
+        );
     }
     if !message.details.is_empty() {
         let labels = message
@@ -810,9 +1173,17 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
             .map(|(label, _)| label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        let hint = if message.details.iter().any(|(label, _)| label == "Proposed diff") {
+        let hint = if message
+            .details
+            .iter()
+            .any(|(label, _)| label == "Proposed diff")
+        {
             " (use /diff for proposed diff)"
-        } else if message.details.iter().any(|(label, _)| label.contains("trace")) {
+        } else if message
+            .details
+            .iter()
+            .any(|(label, _)| label.contains("trace"))
+        {
             " (use /trace for last agent trace)"
         } else {
             ""
@@ -860,5 +1231,24 @@ impl RenderLine {
             color: muted(),
             bold: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod context_meter_tests {
+    use super::{compact_tokens, meter_fill};
+
+    #[test]
+    fn scales_context_pressure_into_fixed_cells() {
+        assert_eq!(meter_fill(0.0, 12), 0);
+        assert_eq!(meter_fill(62.5, 12), 8);
+        assert_eq!(meter_fill(140.0, 12), 12);
+    }
+
+    #[test]
+    fn formats_token_counts_compactly() {
+        assert_eq!(compact_tokens(5116), "5.1k");
+        assert_eq!(compact_tokens(8192), "8.2k");
+        assert_eq!(compact_tokens(1_200_000), "1.2m");
     }
 }

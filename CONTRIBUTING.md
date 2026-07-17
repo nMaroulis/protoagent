@@ -6,15 +6,15 @@ Rust under `cli/`, and the docs live under `docs/`.
 
 ## Development Setup
 
-Use Python 3.12 or newer and a current Rust toolchain.
+Use Python 3.12 or newer and Rust/Cargo 1.83 or newer.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms]>=0.6.5" ruff ty
+python -m pip install "protolink[http,llms]>=0.6.6" ruff ty
 rustup component add rustfmt clippy
-cargo build --manifest-path cli/Cargo.toml
+cargo build --locked --manifest-path cli/Cargo.toml
 ```
 
 ## Project Boundaries
@@ -54,8 +54,8 @@ PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
 
 # Rust formatting, linting, and tests
 cargo fmt --manifest-path cli/Cargo.toml -- --check
-cargo clippy --manifest-path cli/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path cli/Cargo.toml
+cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path cli/Cargo.toml
 
 # Documentation site
 cd docs
@@ -66,8 +66,9 @@ Ruff is configured for all checked-in Python source. Ty currently focuses on the
 core runtime and the CLI compatibility shim so the main product surface gets a
 clean type-checking gate first.
 
-GitHub Actions runs the Python formatting, linting, and type-checking gate on
-every push and pull request through `.github/workflows/python-quality.yml`.
+GitHub Actions runs the Python gate through
+`.github/workflows/python-quality.yml` and the Rust formatting/test gate through
+`.github/workflows/cli-quality.yml` on every push and pull request.
 
 ## Pull Requests
 

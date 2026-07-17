@@ -34,6 +34,24 @@ Architect, Explorer, and Coder. Valid values are `auto`, `small`, `medium`,
 such as 14B/27B resolve to `medium`; 30B+ or `large` model names resolve to
 `large`.
 
+Optional agents live under a separate top-level key:
+
+```json
+{
+  "optional_agents": {
+    "scout": {
+      "enabled": false
+    }
+  }
+}
+```
+
+`optional_agent_enabled("scout")` reads the setting and
+`set_optional_agent_enabled("scout", enabled)` persists it. The CLI exposes
+those helpers through `get_agent_settings()` and
+`configure_optional_agent()`. Scout is not constructed or registered while
+disabled.
+
 ## Provider Aliases
 
 `normalize_provider()` accepts common aliases:
@@ -126,5 +144,9 @@ features ProtoAgent expects:
 | `logging_ready` | the shared no-output `QuietLogger` exists for embedded agent runs. |
 | `auth_ready` | `APIKeyAuth` plus agent and HTTP transport credential hooks exist. |
 | `transport_ready` | shared transport configuration, limits, capabilities, health, request context, and metrics APIs exist. |
+| `web_tools_ready` | ProtoLink's `web_search` and `fetch_url` factories return first-party `network.read` tools. |
 
-`agent_ready` is true only when all expected runtime capabilities are ready.
+`agent_ready` is true only when all required baseline runtime capabilities are
+ready. `web_tools_ready` is reported separately because Scout is optional; a
+missing web-tool surface prevents Scout use but should not make the default
+coding deck unavailable.
