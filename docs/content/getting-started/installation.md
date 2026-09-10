@@ -13,7 +13,7 @@ PyO3, so both the Rust toolchain and the Python environment must be available.
 | Python 3.12 or newer | Runs `core/protoagent_core` and ProtoLink. |
 | Rust and Cargo 1.83 or newer | Builds `cli/`, including PyO3 0.28. |
 | A model provider | Ollama, LM Studio, llama.cpp, OpenAI-compatible local server, or a cloud API provider. |
-| Node.js 18 or newer | Runs the Docusaurus documentation site. |
+| Node.js 20 or newer | Runs the Docusaurus documentation site. |
 
 ## Clone And Create Python Environment
 

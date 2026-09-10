@@ -1,4 +1,4 @@
-# ProtoAgent
+# protoagent_
 
 <div align="center">
   <img src="misc/assets/banner.jpeg" alt="ProtoAgent banner" width="60%">

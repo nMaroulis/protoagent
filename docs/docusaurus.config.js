@@ -2,7 +2,18 @@
 
 const {themes} = require('prism-react-renderer');
 const lightCodeTheme = themes.github;
-const darkCodeTheme = themes.dracula;
+const darkCodeTheme = {
+  plain: {color: '#eef3f8', backgroundColor: '#0e1018'},
+  styles: [
+    {types: ['comment', 'prolog', 'doctype', 'cdata'], style: {color: '#9aa7b8'}},
+    {types: ['punctuation', 'operator'], style: {color: '#9aa7b8'}},
+    {types: ['keyword', 'tag', 'atrule'], style: {color: '#e056d8'}},
+    {types: ['string', 'char', 'attr-value', 'inserted'], style: {color: '#74df9f'}},
+    {types: ['function', 'class-name', 'builtin'], style: {color: '#58dce9'}},
+    {types: ['number', 'boolean', 'constant', 'symbol', 'property', 'attr-name'], style: {color: '#f3c65b'}},
+    {types: ['deleted', 'important'], style: {color: '#ff7a8a'}},
+  ],
+};
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -14,7 +25,7 @@ const config = {
   projectName: 'protoagent',
   trailingSlash: false,
   onBrokenLinks: 'throw',
-  favicon: 'img/banner.jpeg',
+  favicon: 'img/terminal.svg',
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
@@ -50,21 +61,21 @@ const config = {
     ({
       image: 'img/banner.jpeg',
       colorMode: {
-        defaultMode: 'light',
+        defaultMode: 'dark',
         disableSwitch: false,
         respectPrefersColorScheme: false,
       },
       navbar: {
-        title: 'ProtoAgent',
+        title: 'protoagent_',
         logo: {
           alt: 'ProtoAgent',
-          src: 'img/banner.jpeg',
+          src: 'img/terminal.svg',
         },
         items: [
-          {to: '/docs/intro', label: 'Docs', position: 'left'},
-          {to: '/docs/cli/overview', label: 'CLI', position: 'left'},
-          {to: '/docs/core/overview', label: 'Core', position: 'left'},
-          {to: '/docs/acp/overview', label: 'ACP', position: 'left'},
+          {to: '/docs/intro', label: '/docs', position: 'left', activeBaseRegex: '/docs/(intro|getting-started|reference|contributing|playground)'},
+          {to: '/docs/cli/overview', label: '/cli', position: 'left', activeBasePath: 'docs/cli'},
+          {to: '/docs/core/overview', label: '/core', position: 'left', activeBasePath: 'docs/core'},
+          {to: '/docs/acp/overview', label: '/acp', position: 'left', activeBasePath: 'docs/acp'},
           {
             href: 'https://github.com/nMaroulis/protoagent/blob/main/CHANGELOG.md',
             label: 'Changelog',
@@ -74,6 +85,7 @@ const config = {
             href: 'https://github.com/nMaroulis/protoagent',
             label: 'GitHub',
             position: 'right',
+            className: 'navbar-github',
           },
         ],
       },
@@ -81,7 +93,7 @@ const config = {
         style: 'dark',
         links: [
           {
-            title: 'Start',
+            title: 'start',
             items: [
               {label: 'Install', to: '/docs/getting-started/installation'},
               {label: 'First Run', to: '/docs/getting-started/first-run'},
@@ -89,7 +101,7 @@ const config = {
             ],
           },
           {
-            title: 'Architecture',
+            title: 'architecture',
             items: [
               {label: 'Runtime Flow', to: '/docs/core/runtime'},
               {label: 'Agent Deck', to: '/docs/core/agents'},
@@ -97,7 +109,7 @@ const config = {
             ],
           },
           {
-            title: 'Operate',
+            title: 'operate',
             items: [
               {label: 'Environment', to: '/docs/reference/environment'},
               {label: 'Troubleshooting', to: '/docs/reference/troubleshooting'},
@@ -109,7 +121,7 @@ const config = {
             ],
           },
         ],
-        copyright: `Copyright ${new Date().getFullYear()} ProtoAgent.`,
+        copyright: `protoagent_ / v0.2.0 / MIT · © ${new Date().getFullYear()} ProtoAgent`,
       },
       prism: {
         theme: lightCodeTheme,
@@ -118,6 +130,9 @@ const config = {
       },
       mermaid: {
         theme: {light: 'neutral', dark: 'dark'},
+        options: {
+          fontFamily: 'JetBrains Mono, monospace',
+        },
       },
     }),
 };
