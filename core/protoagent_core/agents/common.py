@@ -20,12 +20,14 @@ DEFAULT_AGENT_URLS = {
     "explorer": "http://127.0.0.1:9120",
     "coder": "http://127.0.0.1:9130",
     "scout": "http://127.0.0.1:9140",
+    "verifier": "http://127.0.0.1:9150",
 }
 
 RUNTIME_SCOPES = (
     "agent.delegate",
     "workspace.read",
     "workspace.write",
+    "shell.execute",
     "network.read",
 )
 

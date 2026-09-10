@@ -23,6 +23,7 @@ from .llm import ollama_context_window
 from .prompt_profiles import prompt_profile_status
 from .run_contracts import infer_run_contract, validate_run_completion
 from .runtime_bridge import RuntimeBridge
+from .verification import VerificationEvidence, verification_summary
 
 _FALLBACK_PORT = 19100
 TransportName = Literal["http", "websocket", "sse", "json-rpc", "sse-json-rpc", "grpc", "runtime"]
@@ -80,7 +81,14 @@ async def _run_agent_deck(
     scout_enabled: bool = False,
 ) -> dict[str, Any]:
     """Start the local ProtoLink mesh and send the prompt to Architect."""
-    from protolink import DEFAULT_REDACTION_POLICY, RunBudget, RunContext, RunRecorder, Task
+    from protolink import (
+        DEFAULT_REDACTION_POLICY,
+        RunBudget,
+        RunContext,
+        RunEvent,
+        RunRecorder,
+        Task,
+    )
     from protolink.client import AgentClient
     from protolink.discovery import Registry
 
@@ -89,6 +97,7 @@ async def _run_agent_deck(
     streaming = _streaming_enabled(agent_transport)
     events: list[str] = []
     recorder = RunRecorder()
+    verification = VerificationEvidence()
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
     contract = infer_run_contract(user_prompt or prompt)
     task = Task.create_infer(prompt=prompt)
@@ -179,6 +188,7 @@ async def _run_agent_deck(
                 "coder": urls["coder"],
                 "architect": urls["architect"],
                 "scout": urls["scout"],
+                "verifier": urls["verifier"],
             },
             transport=agent_transport,
             approval_handler=bridge.approval_handler,
@@ -186,6 +196,8 @@ async def _run_agent_deck(
             prompt_profile=str(prompt_profile["resolved"]),
             scout_enabled=scout_enabled,
             auth=auth,
+            evidence=verification,
+            on_command_output=lambda text: bridge.emit(f"Verifier output: {text}"),
         )
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
@@ -273,6 +285,18 @@ async def _run_agent_deck(
         events.extend(
             _approval_event_summaries(bridge.approval_requests, bridge.approval_decisions)
         )
+        verification_report = verification.report()
+        for result in verification_report["results"]:
+            await recorder.emit(
+                RunEvent(
+                    type="verification.result",
+                    run_id=context.run_id,
+                    task_id=task.id,
+                    agent_name="verifier",
+                    summary=f"{result['command']}: exit {result['exit_code']}",
+                    payload=result,
+                )
+            )
         run_events = _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY)
         completion = validate_run_completion(
             contract,
@@ -296,6 +320,17 @@ async def _run_agent_deck(
         elif completion.outcome == "satisfied":
             emit("Run contract satisfied by Coder delegation or write artifact.")
 
+        if (
+            contract.requires_write
+            or contract.task_kind == "workspace-verification"
+            or verification_report["results"]
+            or any(
+                "shell.execute" in request.get("action", {}).get("capabilities", [])
+                for request in bridge.approval_requests
+            )
+        ):
+            answer += "\n\n" + verification_summary(verification_report)
+
         run_report = _run_report_to_dict(
             recorder,
             context=final_context,
@@ -307,6 +342,7 @@ async def _run_agent_deck(
                 "application_status": status,
                 "run_contract": contract.to_dict(),
                 "completion_validation": completion.to_dict(),
+                "verification": verification_report,
             },
             redaction_policy=DEFAULT_REDACTION_POLICY,
         )
@@ -337,6 +373,7 @@ async def _run_agent_deck(
             "run_contract": contract.to_dict(),
             "completion_validation": completion.to_dict(),
             "transport_report": transport_report,
+            "verification": verification_report,
         }
     finally:
         if cancellation_monitor is not None:
@@ -367,6 +404,7 @@ def _runtime_urls() -> dict[str, str]:
         "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
         "coder": _env_url("PROTOAGENT_CODER_URL", "CODER_AGENT_URL") or _local_url(host),
         "scout": _env_url("PROTOAGENT_SCOUT_URL", "SCOUT_AGENT_URL") or _local_url(host),
+        "verifier": _env_url("PROTOAGENT_VERIFIER_URL", "VERIFIER_AGENT_URL") or _local_url(host),
     }
 
 

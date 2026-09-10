@@ -50,7 +50,7 @@ class PromptProfileTests(unittest.TestCase):
 
         self.assertIn("Base architect prompt.", prompt)
         self.assertIn("Prompt profile: Small local model.", prompt)
-        self.assertIn("Use the exact agent names `explorer` and `coder`.", prompt)
+        self.assertIn("Use the exact agent names `explorer`, `coder`, and `verifier`.", prompt)
         self.assertIn("Do not reveal hidden chain-of-thought", prompt)
 
     def test_config_persists_prompt_profile(self) -> None:

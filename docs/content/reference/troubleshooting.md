@@ -57,7 +57,7 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.6"
+pip install "protolink[http,llms]>=0.6.9"
 proto-cli check
 ```
 
@@ -80,7 +80,7 @@ Enable Scout for the next run:
 proto-cli agents scout on
 ```
 
-If `web_tools_ready` is unavailable, install ProtoLink 0.6.6 or newer. Brave is
+If `web_tools_ready` is unavailable, install ProtoLink 0.6.9 or newer. Brave is
 the default search engine and needs:
 
 ```bash
@@ -93,10 +93,9 @@ factual search. Architect can pass either to `web_search`. Wikipedia only suppor
 nonstandard ports, unsafe redirects, binary content, and oversized responses.
 These rejections are safety behavior, not general network failures.
 
-Scout's direct delegated tools are policy- and cancellation-aware, but
-ProtoLink 0.6.6 does not yet count that direct path against
-`RunBudget.max_tool_calls`. Keep Scout disabled when external calls are not
-needed; ProtoAgent intentionally does not add a second local budget counter.
+ProtoLink 0.6.9 applies native budget checks to direct tool tasks. If a call
+stops at a budget boundary, inspect `/trace` and the configured run budget.
+Verifier also has a separate per-command timeout.
 
 ## Localhost Runtime Fails In A Sandbox
 
@@ -206,3 +205,14 @@ Remember:
 3. `/context off` makes each task use task-local state.
 4. `/context reset` clears saved ProtoLink histories for the active project
    session.
+
+## Verification Or Undo Is Blocked
+
+For a command, inspect the `shell.execute` approval preview with V, confirm the
+working directory, and check the recorded exit code or timeout. An unavailable
+executable is a failed check, not a passing result. Later Coder edits make prior
+checks stale. Commands with no current evidence show `not-run`.
+
+For undo, select the same project and run `/checkpoints`. A conflict means the
+current bytes differ from the agent's last write, so recovery leaves them alone.
+Checkpoints cover Coder writes only. See [Verify & Recover](../cli/verification-and-recovery.md).

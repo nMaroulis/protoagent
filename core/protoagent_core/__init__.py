@@ -9,6 +9,7 @@ from ._version import __version__, acp_version
 from .agent_engine import (
     add_api_key,
     answer_help_question,
+    checkpoint_inventory,
     component_versions,
     configure_agent_prompt_profile,
     configure_context_window,
@@ -23,6 +24,7 @@ from .agent_engine import (
     process_prompt,
     run_quality_eval,
     set_model,
+    undo_checkpoint,
 )
 
 __all__ = [
@@ -30,6 +32,7 @@ __all__ = [
     "add_api_key",
     "answer_help_question",
     "acp_version",
+    "checkpoint_inventory",
     "component_versions",
     "configure_agent_prompt_profile",
     "configure_context_window",
@@ -44,4 +47,5 @@ __all__ = [
     "process_prompt",
     "run_quality_eval",
     "set_model",
+    "undo_checkpoint",
 ]

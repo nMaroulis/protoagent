@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "proto-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "console",
@@ -327,6 +327,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

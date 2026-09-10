@@ -63,6 +63,31 @@ class RunContractTests(unittest.TestCase):
         self.assertEqual(validation.outcome, "incomplete")
         self.assertIn("Coder worker", validation.missing[0])
 
+    def test_verification_only_requests_do_not_require_file_writes(self) -> None:
+        for prompt in (
+            "Run the tests",
+            "Check test coverage",
+            "Build the docs",
+            "Please run the tests",
+        ):
+            with self.subTest(prompt=prompt):
+                contract = infer_run_contract(prompt)
+                self.assertFalse(contract.requires_write)
+                self.assertEqual(contract.task_kind, "workspace-verification")
+        self.assertTrue(infer_run_contract("Run the tests and fix failures").requires_write)
+
+    def test_shell_approval_cannot_satisfy_a_write_contract(self) -> None:
+        result = validate_run_completion(
+            infer_run_contract("Fix the failing tests"),
+            answer="Tests ran.",
+            status="completed",
+            run_events=[],
+            diff_items=[],
+            approval_requests=[{"action": {"capabilities": ["shell.execute"]}}, {"action": None}],
+        )
+        self.assertFalse(result.satisfied)
+        self.assertFalse(result.approval_requested)
+
     def test_write_contract_accepts_approval_request(self) -> None:
         contract = infer_run_contract("Update the CLI docs")
 
@@ -71,7 +96,9 @@ class RunContractTests(unittest.TestCase):
             answer="Prepared the docs update.",
             status="completed",
             run_events=[],
-            approval_requests=[{"request_id": "approval-1"}],
+            approval_requests=[
+                {"request_id": "approval-1", "action": {"capabilities": ["workspace.write"]}}
+            ],
             diff_items=[],
         )
 

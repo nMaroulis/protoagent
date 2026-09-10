@@ -26,7 +26,7 @@ const runPath = [
   ['Context Loom', 'Collect bounded, source-cited evidence.'],
   ['Architect', 'Plan the task. Delegate narrow roles.'],
   ['Explorer / Coder', 'Read the workspace. Prepare a change.'],
-  ['Approval gate', 'Review the diff before a write runs.'],
+  ['Verify & recover', 'Approve real checks. Undo a Coder change.'],
 ];
 
 function TerminalPreview() {
@@ -44,7 +44,7 @@ function TerminalPreview() {
         <Link to="/docs/cli/projects-and-sessions">/project</Link>
         <Link to="/docs/cli/models-and-config">/models</Link>
         <Link to="/docs/core/agents" className={styles.selectedTab}>/agents</Link>
-        <Link to="/docs/cli/context-loom">/context</Link>
+        <Link to="/docs/cli/verification-and-recovery">/undo</Link>
       </div>
       <div className={styles.transcript}>
         <p className={styles.prompt}><span aria-hidden="true">❯</span> explain <mark>@src/auth.rs</mark> and propose a safer diff</p>
@@ -68,13 +68,13 @@ export default function Home() {
       <main className={styles.workspace}>
         <div className={styles.pathBar}>
           <span><span className={styles.pathRoot}>~/protoagent</span> / docs</span>
-          <span className={styles.version}>v0.2.0 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
+          <span className={styles.version}>v0.2.1 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
         </div>
         <section className={styles.hero} aria-labelledby="home-title">
           <div className={styles.heroCopy}>
             <p className={styles.eyebrow}><span aria-hidden="true">[</span> LOCAL-FIRST AGENT CONSOLE <span aria-hidden="true">]</span></p>
             <Heading as="h1" id="home-title" className={styles.title}>Small models.<br />Full control<span className={styles.titleCursor} aria-hidden="true">_</span></Heading>
-            <p className={styles.subtitle}>A fast Rust terminal. A Python core powered by ProtoLink. Narrow agents, visible context, and the final say on every write.</p>
+            <p className={styles.subtitle}>A fast Rust terminal. A Python core powered by ProtoLink. Narrow agents, visible context, and approval before edits and commands.</p>
             <div className={styles.actions}>
               <Link className={styles.primaryAction} to="/docs/getting-started/installation"><span aria-hidden="true">❯</span> Get started <span aria-hidden="true">↗</span></Link>
               <Link className={styles.secondaryAction} to="/docs/cli/commands">Command reference <span aria-hidden="true">→</span></Link>

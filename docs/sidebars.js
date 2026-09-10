@@ -24,6 +24,7 @@ const sidebars = {
         'cli/models-and-config',
         'cli/context-loom',
         'cli/safety-tracing',
+        'cli/verification-and-recovery',
       ],
     },
     {

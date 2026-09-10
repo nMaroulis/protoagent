@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.2.0`. It is declared in
+The active core package version is `0.2.1`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:

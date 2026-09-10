@@ -45,6 +45,7 @@ pub(crate) struct RuntimeApproval {
     pub(crate) description: String,
     pub(crate) target: String,
     pub(crate) diff: String,
+    pub(crate) preview: String,
     request: Value,
 }
 
@@ -249,6 +250,24 @@ impl RuntimeApproval {
             .filter_map(|part| part.get("content").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join("\n");
+        let preview = action
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|artifact| {
+                artifact.get("media_type").and_then(Value::as_str) == Some("text/plain")
+            })
+            .flat_map(|artifact| {
+                artifact
+                    .get("parts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter_map(|part| part.get("content").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n");
         Some(Self {
             request_id,
             run_id: value_string(&request, &["run_id"]),
@@ -256,6 +275,7 @@ impl RuntimeApproval {
             description: value_string(action, &["description"]),
             target,
             diff,
+            preview,
             request,
         })
     }
@@ -826,6 +846,24 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extracts_complete_command_preview_from_a_typed_approval() {
+        let approval = super::RuntimeApproval::from_value(serde_json::json!({
+            "request_id": "command-approval",
+            "action": {
+                "name": "run_command", "capabilities": ["shell.execute"],
+                "metadata": {"path": "/project"},
+                "artifacts": [{"media_type": "text/plain", "parts": [{"content": "cargo test\nDirectory: /project\nTimeout: 120s\nHost access"}]}]
+            }
+        })).unwrap();
+        assert!(approval.diff.is_empty());
+        assert_eq!(
+            approval.preview,
+            "cargo test\nDirectory: /project\nTimeout: 120s\nHost access"
+        );
+        assert_eq!(approval.capabilities(), "shell.execute");
+    }
+
     use super::{format_live_progress, latest_progress_message, ContextUsage, ProgressFile};
     use serde_json::{json, Value};
     use std::fs;

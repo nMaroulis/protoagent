@@ -9,7 +9,7 @@ from unittest.mock import patch
 from protoagent_core.context import context_status
 from protoagent_core.context.indexer import refresh_context_index
 from protoagent_core.context.store import ContextStore
-from protoagent_core.tools import build_context_map
+from protoagent_core.tools import build_context_map, search_regex
 
 
 class ContextIndexerTests(unittest.TestCase):
@@ -25,6 +25,24 @@ class ContextIndexerTests(unittest.TestCase):
             paths = [item["path"] for item in build_context_map(str(root))["files"]]
 
         self.assertEqual(paths, ["alpha/a.py", "alpha/z.py", "zeta/b.py"])
+
+    def test_scans_skip_outside_file_links_and_directory_cycles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (root / "secret.txt").write_text("PRIVATE_TOKEN", encoding="utf-8")
+            (workspace / "safe.py").write_text("PUBLIC = 1", encoding="utf-8")
+            (workspace / "link.txt").symlink_to(root / "secret.txt")
+            (workspace / "cycle").symlink_to(workspace, target_is_directory=True)
+            with patch.dict(os.environ, {"PROTOAGENT_CONFIG_DIR": str(root / "config")}):
+                status = refresh_context_index(str(workspace))
+                self.assertEqual(status["files_indexed"], 1)
+                self.assertIsNone(ContextStore(str(workspace)).read_file("link.txt"))
+            self.assertEqual(search_regex("PRIVATE_TOKEN", workspace=str(workspace))["matches"], [])
+            self.assertEqual(
+                [item["path"] for item in build_context_map(str(workspace))["files"]], ["safe.py"]
+            )
 
     def test_refresh_skips_unchanged_files_and_removes_deleted_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

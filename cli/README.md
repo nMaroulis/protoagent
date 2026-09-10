@@ -4,11 +4,11 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.2.0`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.2.1`, sourced from `cli/Cargo.toml`.
 
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
-CLI requires Rust/Cargo 1.83 or newer.
+CLI requires Rust/Cargo 1.85 or newer.
 
 ## Install
 
@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.6.6"
+python -m pip install "protolink[http,llms]>=0.6.9"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -45,10 +45,27 @@ Use `@` in the TUI editor to attach bounded read-only file context:
 explain @src/auth.rs and suggest a safer JWT flow
 ```
 
+## Compose, Verify, Recover
+
+Enter submits the complete prompt; Ctrl-J inserts a newline. Bracketed paste
+retains multiline text without submitting. Tab opens slash-command completion
+and Ctrl-R searches recent input. Ctrl-P/Ctrl-N browse history from any row.
+
+Architect delegates checks to Verifier through ProtoLink. Each command requires
+approval of its argv, working directory and timeout; V opens the full preview.
+Commands run with host access, may write files or use the network, and have
+bounded output and a timeout. Final answers report measured outcomes.
+
+Use `/checkpoints` and `/undo [id]` (or `proto-cli checkpoints` / `proto-cli undo`)
+to review and restore individual Coder writes without a model. Undo requires
+approval and refuses files edited after the agent write. Commands' side effects
+are not checkpointed. See [Verify & Recover](../docs/content/cli/verification-and-recovery.md).
+
 ## Agent Controls
 
 The default runtime has a stateful Architect and task-local Explorer/Coder
-workers. Scout is an optional task-local web research worker and is off by
+workers plus a tool-only Verifier for approved test/build/lint commands.
+Scout is an optional task-local web research worker and is off by
 default.
 
 ```bash

@@ -2,7 +2,8 @@ use anyhow::Result;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
-        read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+        read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyModifiers, MouseEventKind,
     },
     execute, queue,
     style::ResetColor,
@@ -14,8 +15,9 @@ use crossterm::{
 use std::io::{stdout, Write};
 use std::time::{Duration, Instant};
 
+use super::commands::matching_commands;
 use super::input::InputEditor;
-use super::modal::draw_exit_modal;
+use super::modal::{draw_exit_modal, pick_choice_modal};
 use super::project::{format_file_tag, pick_project_file};
 use super::render::{draw_header, draw_input, draw_transcript};
 use super::state::{PanelView, Role, TerminalApp};
@@ -36,6 +38,7 @@ impl TerminalSurface {
             EnterAlternateScreen,
             DisableLineWrap,
             EnableMouseCapture,
+            EnableBracketedPaste,
             Hide,
             SetTitle("ProtoAgent Terminal"),
             Clear(ClearType::All),
@@ -58,6 +61,7 @@ impl TerminalSurface {
                 ResetColor,
                 Show,
                 DisableMouseCapture,
+                DisableBracketedPaste,
                 EnableLineWrap,
                 Clear(ClearType::All),
                 LeaveAlternateScreen
@@ -94,7 +98,46 @@ impl TerminalSurface {
             let mut needs_render = false;
             match read()? {
                 Event::Key(key) => match key.code {
+                    KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        editor.insert('\n');
+                        needs_render = true;
+                    }
+                    KeyCode::Enter
+                        if key
+                            .modifiers
+                            .intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+                    {
+                        editor.insert('\n');
+                        needs_render = true;
+                    }
                     KeyCode::Enter => return Ok(Some(editor.line())),
+                    KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        editor.history_prev();
+                        needs_render = true;
+                    }
+                    KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        editor.history_next();
+                        needs_render = true;
+                    }
+                    KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        let history: Vec<_> =
+                            app.input_history.iter().rev().take(1000).cloned().collect();
+                        let choices: Vec<_> = history
+                            .iter()
+                            .map(|item| item.replace('\n', " ↵ "))
+                            .collect();
+                        if let Some(index) = pick_choice_modal(
+                            self,
+                            app,
+                            "Prompt History",
+                            &["Type to filter · Enter recalls without submitting".to_string()],
+                            &choices,
+                            0,
+                        )? {
+                            editor.replace(&history[index]);
+                        }
+                        needs_render = true;
+                    }
                     KeyCode::Esc => {
                         if self.exit_escape_is_suppressed() {
                             continue;
@@ -178,19 +221,46 @@ impl TerminalSurface {
                         needs_render = true;
                     }
                     KeyCode::Up => {
-                        editor.history_prev();
+                        if !editor.move_vertical(false, size().0.saturating_sub(7).max(1) as usize)
+                        {
+                            editor.history_prev();
+                        }
                         needs_render = true;
                     }
                     KeyCode::Down => {
-                        editor.history_next();
+                        if !editor.move_vertical(true, size().0.saturating_sub(7).max(1) as usize) {
+                            editor.history_next();
+                        }
                         needs_render = true;
                     }
                     KeyCode::Tab => {
-                        editor.insert_str("  ");
+                        if editor.line().starts_with('/') && !editor.line().contains('\n') {
+                            let matches = matching_commands(&editor.line());
+                            let choices: Vec<_> = matches
+                                .iter()
+                                .map(|(command, help)| format!("{command}  — {help}"))
+                                .collect();
+                            if let Some(index) = pick_choice_modal(
+                                self,
+                                app,
+                                "Commands",
+                                &["Enter inserts a command; it does not run it".to_string()],
+                                &choices,
+                                0,
+                            )? {
+                                editor.replace(&format!("{} ", matches[index].0));
+                            }
+                        } else {
+                            editor.insert_str("  ");
+                        }
                         needs_render = true;
                     }
                     _ => {}
                 },
+                Event::Paste(text) => {
+                    editor.insert_str(&text);
+                    needs_render = true;
+                }
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollUp => {
                         let before = app.scroll_offset;

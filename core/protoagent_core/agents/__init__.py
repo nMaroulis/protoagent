@@ -5,6 +5,7 @@ from .coder import CODER_SYSTEM_PROMPT, create_coder_agent
 from .deck import agent_manifest, create_agent_deck
 from .explorer import EXPLORER_SYSTEM_PROMPT, create_explorer_agent
 from .scout import SCOUT_SYSTEM_PROMPT, create_scout_agent
+from .verifier import create_verifier_agent
 
 __all__ = [
     "ARCHITECT_SYSTEM_PROMPT",
@@ -17,4 +18,5 @@ __all__ = [
     "create_coder_agent",
     "create_explorer_agent",
     "create_scout_agent",
+    "create_verifier_agent",
 ]

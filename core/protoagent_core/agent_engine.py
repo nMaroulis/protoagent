@@ -582,6 +582,7 @@ def _model_response(
         "completion_validation": completion,
         "run_report": result.get("run_report", {}),
         "transport_report": result.get("transport_report", {}),
+        "verification": result.get("verification", {}),
     }
 
 
@@ -819,3 +820,69 @@ def _emit_progress(progress_path: str | None, message: str) -> None:
             handle.flush()
     except OSError:
         pass
+
+
+def checkpoint_inventory(workspace: str | None = None) -> str:
+    """Return recovery snapshot metadata for the selected project, without contents."""
+    from .checkpoints import list_checkpoints
+
+    return _json({"checkpoints": list_checkpoints(workspace)})
+
+
+def undo_checkpoint(
+    workspace: str,
+    checkpoint_id: str = "latest",
+    session_id: str | None = None,
+    progress_path: str | None = None,
+) -> str:
+    """Restore one checkpoint through Coder's ProtoLink tool and approval policy.
+
+    This deterministic recovery path needs no model. The same Rust progress
+    bridge displays the undo diff and returns a correlated approval decision.
+    """
+    import asyncio
+
+    from protolink import ActionDeniedError, RunContext
+
+    from .agents.coder import create_coder_agent
+    from .runtime_bridge import RuntimeBridge
+
+    started = time.monotonic()
+    bridge = RuntimeBridge(progress_path)
+    context = RunContext(session_id=session_id, workspace_uri=Path(workspace).resolve().as_uri())
+    agent = create_coder_agent(
+        workspace=workspace,
+        transport="runtime",
+        tool_only=True,
+        approval_handler=bridge.approval_handler,
+    )
+    try:
+        result = asyncio.run(
+            agent.call_tool_in_context(
+                "restore_checkpoint",
+                context,
+                checkpoint_id=checkpoint_id,
+            )
+        )
+        answer = f"Restored {result['path']} from checkpoint {result['checkpoint_id']}."
+        status = "answered"
+    except (ActionDeniedError, ValueError, OSError) as exc:
+        result = {}
+        answer = f"Undo was not applied: {exc}"
+        status = "canceled" if bridge.cancel_reason() else "blocked"
+    finally:
+        bridge.cleanup()
+    return _json(
+        {
+            "status": status,
+            "answer": answer,
+            "headline": "Checkpoint recovery",
+            "file_target": result.get("path", ""),
+            "workspace": workspace,
+            "responder": "coder",
+            "run_context": context.to_dict(),
+            "approval_requests": bridge.approval_requests,
+            "approval_decisions": bridge.approval_decisions,
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+    )

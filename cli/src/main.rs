@@ -379,6 +379,21 @@ async fn main() -> Result<()> {
             print_header()?;
             show_sessions()
         }
+        Some("checkpoints") => {
+            println!("{}", checkpoint_inventory_text()?);
+            Ok(())
+        }
+        Some("undo") => {
+            if args.len() > 2 {
+                return Err(anyhow!("Usage: proto-cli undo [checkpoint-id]"));
+            }
+            run_orchestration(&format!(
+                "/undo {}",
+                args.get(1).map(String::as_str).unwrap_or("latest")
+            ))
+            .await
+            .map(|_| ())
+        }
         Some("help") | Some("--help") | Some("-h") => {
             let question = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
             print_cli_help();
@@ -437,6 +452,8 @@ fn print_cli_help() {
     println!("  proto-cli context on|off     Toggle persistent project conversation memory");
     println!("  proto-cli index refresh      Refresh the Context Loom workspace index");
     println!("  proto-cli sessions           Show saved project sessions");
+    println!("  proto-cli checkpoints        List recoverable agent file writes");
+    println!("  proto-cli undo [id]          Review and undo one agent file write");
     println!("  proto-cli help [question]    Ask Guide about ProtoAgent usage");
     println!();
 }
@@ -530,6 +547,9 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
                         render_runtime_approval(&approval);
                         if !approval.diff.trim().is_empty() {
                             render_diff(&approval.diff);
+                        }
+                        if !approval.preview.trim().is_empty() {
+                            println!("{}", approval.preview);
                         }
                         Ok(Confirm::new("Authorize this Protolink action?")
                             .with_default(false)
@@ -2458,7 +2478,9 @@ fn print_agent_graph(scout_enabled: bool) {
             if scout_enabled { "on" } else { "off" }
         ),
         "   |".to_string(),
-        "   +--> [CODER] stateless write worker: diff preview, new file".to_string(),
+        "   +--> [CODER] stateless write worker: approved edits, checkpoints, undo".to_string(),
+        "   |".to_string(),
+        "   +--> [VERIFIER] tool-only worker: approved test/build/lint commands".to_string(),
         "   |".to_string(),
         "   v".to_string(),
         "[PROTOLINK POLICY] approval gate, events, report".to_string(),
@@ -2882,11 +2904,58 @@ fn call_process_prompt_with_progress(
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
+        if prompt == "/undo" || prompt.starts_with("/undo ") {
+            let checkpoint = prompt.strip_prefix("/undo").unwrap_or("").trim();
+            return module
+                .getattr("undo_checkpoint")?
+                .call1((
+                    workspace,
+                    if checkpoint.is_empty() {
+                        "latest"
+                    } else {
+                        checkpoint
+                    },
+                    session_id,
+                    progress_path,
+                ))?
+                .extract();
+        }
         module
             .getattr("process_prompt")?
             .call1((prompt, workspace, session_id, progress_path))?
             .extract()
     })
+}
+
+/// Display recovery metadata without reading snapshot contents or calling a model.
+fn checkpoint_inventory_text() -> Result<String> {
+    let workspace = require_project_dir_string()?;
+    let raw: String = Python::attach(|py| -> PyResult<String> {
+        prepare_python_path(py)?;
+        py.import("protoagent_core.agent_engine")?
+            .getattr("checkpoint_inventory")?
+            .call1((workspace,))?
+            .extract()
+    })
+    .map_err(|err| anyhow!("Checkpoint inventory failed: {err}"))?;
+    let data: Value = serde_json::from_str(&raw)?;
+    let rows = data["checkpoints"].as_array().cloned().unwrap_or_default();
+    if rows.is_empty() {
+        return Ok("No file checkpoints for this project yet.".to_string());
+    }
+    let mut lines = vec!["FILE CHECKPOINTS — newest first".to_string()];
+    for row in rows {
+        lines.push(format!(
+            "{}  {}",
+            row["id"].as_str().unwrap_or(""),
+            row["path"].as_str().unwrap_or("")
+        ));
+    }
+    lines.push(
+        "Use /undo [id] to review and restore one file write. Later file edits cause a conflict."
+            .to_string(),
+    );
+    Ok(lines.join("\n"))
 }
 
 fn call_add_api_key(provider: String, api_key: String) -> PyResult<String> {

@@ -7,12 +7,12 @@ consumed component owns its version and follows semantic versioning.
 
 | Component | Package/binary | Current version | Status | Source of truth |
 | --- | --- | --- | --- | --- |
-| Rust CLI/TUI | `proto-cli` | `0.2.0` | Active | `cli/Cargo.toml` |
-| Python core | `protoagent-core` | `0.2.0` | Active | `core/pyproject.toml` and `protoagent_core.__version__` |
+| Rust CLI/TUI | `proto-cli` | `0.2.1` | Active | `cli/Cargo.toml` |
+| Python core | `protoagent-core` | `0.2.1` | Active | `core/pyproject.toml` and `protoagent_core.__version__` |
 | ACP adapter | `proto-acp` | `0.0.0-dev.0` | Planned | Documentation only until implementation begins |
-| Documentation site | `protoagent-docs` | `0.2.0` | Active release metadata | `docs/package.json` |
+| Documentation site | `protoagent-docs` | `0.2.1` | Active release metadata | `docs/package.json` |
 
-“ProtoAgent 0.2.0” is the coordinated release train for the active CLI and core
+“ProtoAgent 0.2.1” is the coordinated release train for the active CLI and core
 components. It does not create a root package version, and it does not imply
 that the planned ACP adapter is shipped.
 
@@ -31,8 +31,8 @@ that the planned ACP adapter is shipped.
 
 ## Release Checklist
 
-1. Confirm required ProtoLink release `0.6.6` is available from the target
-   package index. Publish ProtoLink first; ProtoAgent 0.2.0 cannot install from
+1. Confirm required ProtoLink release `0.6.9` is available from the target
+   package index. Publish ProtoLink first; ProtoAgent 0.2.1 cannot install from
    that index before its dependency exists.
 2. Update the source-of-truth component versions and runtime version inventory.
 3. Update tests that assert exact versions.

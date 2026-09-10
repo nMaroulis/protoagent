@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from protolink.transport import Transport
@@ -9,11 +10,13 @@ from protolink.types import TransportType
 
 from ..config import normalize_provider
 from ..prompt_profiles import prompt_profile_status
+from ..verification import VerificationEvidence
 from .architect import create_architect_agent
 from .coder import create_coder_agent
 from .common import AgentRuntimeAuth, create_runtime_auth
 from .explorer import create_explorer_agent
 from .scout import create_scout_agent
+from .verifier import create_verifier_agent
 
 
 def create_agent_deck(
@@ -28,12 +31,15 @@ def create_agent_deck(
     prompt_profile: str = "auto",
     scout_enabled: bool = False,
     auth: AgentRuntimeAuth | None = None,
+    evidence: VerificationEvidence | None = None,
+    on_command_output: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
     Every LLM-capable agent receives its own LLM instance configured with the
     same provider/model. Architect is the durable controller; Explorer and
-    Coder are task-local workers. The tool-only Scout is constructed only when
+    Coder are task-local workers. Verifier is a tool-only command worker.
+    The tool-only Scout is constructed only when
     its optional-agent setting is enabled.
     """
     provider = normalize_provider(provider)
@@ -52,6 +58,7 @@ def create_agent_deck(
         credentials=auth.credentials,
     )
     coder = create_coder_agent(
+        evidence=evidence,
         registry=registry,
         provider=provider,
         model=model,
@@ -95,6 +102,18 @@ def create_agent_deck(
     deck = {
         "explorer": explorer,
         "coder": coder,
+        "verifier": create_verifier_agent(
+            registry=registry,
+            workspace=workspace,
+            url=urls.get("verifier"),
+            transport=transport,
+            approval_handler=approval_handler,
+            telemetry=telemetry,
+            authenticator=auth.authenticator,
+            credentials=auth.credentials,
+            evidence=evidence,
+            on_output=on_command_output,
+        ),
     }
     if scout is not None:
         deck["scout"] = scout
@@ -125,6 +144,7 @@ def agent_manifest(
             "stateless": [
                 "explorer",
                 "coder",
+                "verifier",
                 *(["scout"] if scout_enabled else []),
             ],
             "optional": ["scout"],
@@ -182,10 +202,23 @@ def agent_manifest(
                 "persistence": "no durable conversation state",
                 "state": "stateless",
                 "contract": "prepares RunAction diff artifacts behind approval",
-                "tools": ["generate_unified_diff", "create_new_file"],
+                "tools": ["generate_unified_diff", "create_new_file", "restore_checkpoint"],
                 "enabled": True,
                 "optional": False,
                 **profile_fields,
+            },
+            {
+                "name": "verifier",
+                "role": "stateless verification worker",
+                "memory": "none",
+                "persistence": "no model or durable conversation state",
+                "state": "stateless",
+                "contract": "approved shell.execute with bounded output and timeout",
+                "tools": ["run_command"],
+                "enabled": True,
+                "optional": False,
+                "prompt_profile": "not-applicable",
+                "prompt_profile_label": "Tool-only (no LLM)",
             },
             {
                 "name": "scout",

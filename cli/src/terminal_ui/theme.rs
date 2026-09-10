@@ -6,6 +6,8 @@ use crossterm::{
     terminal,
 };
 use std::io::Stdout;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::state::Role;
 
@@ -37,7 +39,7 @@ pub(super) fn write_at(
     bold: bool,
 ) -> Result<()> {
     let mut value = clip_plain(text_value, width as usize);
-    let len = value.chars().count();
+    let len = UnicodeWidthStr::width(value.as_str());
     if len < width as usize {
         value.push_str(&" ".repeat(width as usize - len));
     }
@@ -58,7 +60,13 @@ pub(super) fn write_at(
 }
 
 pub(super) fn clip_plain(text: &str, width: usize) -> String {
-    text.chars().take(width).collect()
+    let mut used = 0;
+    text.graphemes(true)
+        .take_while(|grapheme| {
+            used += UnicodeWidthStr::width(*grapheme);
+            used <= width
+        })
+        .collect()
 }
 
 pub(super) fn role_color(role: Role) -> Color {

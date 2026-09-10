@@ -89,7 +89,7 @@ normal offline-oriented runs.
 
 * **Role:** Expose bounded public-web evidence without giving Explorer or Coder
   ambient network access.
-* **Tools:** ProtoLink 0.6.6 `web_search` and `fetch_url`, both declaring
+* **Tools:** ProtoLink 0.6.9 `web_search` and `fetch_url`, both declaring
   `network.read`.
 * **Logic:** When enabled, Architect discovers Scout and invokes one of its
   tools directly. Brave search uses `BRAVE_SEARCH_API_KEY`; DuckDuckGo is
@@ -109,7 +109,7 @@ receive Explorer's broad read/search tools. It receives a localized objective
 and enough evidence to prepare a patch.
 
 * **Role:** Synthesize code and generate file modifications.
-* **Tools:** `generate_unified_diff`, `create_new_file`.
+* **Tools:** `generate_unified_diff`, `create_new_file`, `restore_checkpoint`.
 * **Logic:** The Architect hands the Coder the user objective and bounded
   Context Pack evidence. The Coder prepares `RunAction` write operations with
   unified-diff preview artifacts, so policy and approval happen before files are
@@ -434,3 +434,24 @@ tools; stronger models keep the same trust boundary. Context is cited, network
 access is opt-in, actions are previewed, approvals are explicit, missing write
 artifacts are marked incomplete, and prompt behavior can be evaluated over
 time.
+
+## v0.2.1: Verification And Recovery
+
+The runtime target is ProtoLink 0.6.9. Verifier is a tool-only ProtoLink agent
+with no model or conversation state. Architect delegates test/build/lint argv
+through its `run_command` tool. Native `RunAction` policy requires a separate
+`shell.execute` approval displaying the command, working directory, timeout,
+and host access. The command runner closes stdin, retains at most 32 KiB of
+output, and enforces a 1–600 second timeout. It does not sandbox approved code.
+
+An application evidence accumulator ties measured command outcomes to Coder
+change revisions, then publishes them through ProtoLink `RunRecorder` events
+and report metadata. Later agent edits invalidate earlier checks. Architect is
+instructed to stop after two repair attempts or an explicit denial; this is a
+prompt rule, with native runtime budgets and command timeouts providing bounds.
+
+Coder snapshots preserve the pre-write bytes and mode before replacing a file.
+The CLI can list and restore one snapshot through the same ProtoLink write
+policy without a model. Undo refuses files that no longer match the agent's
+write. Snapshots belong to a separate application ledger and cover Coder file
+changes only; they do not replace ProtoLink state or roll back command effects.

@@ -12,7 +12,7 @@ alternate screen, raw mode, mouse capture, and fixed layout regions.
 | --- | --- | --- |
 | Header | 9 rows | Brand bar, active model, pinned status panel, command bar. |
 | Transcript | Flexible | User prompts, system progress, trace summaries, assistant responses, metadata. |
-| Input area | 4 rows | Prompt line, context meter, project/chat/activity status. |
+| Input area | 6 rows | Three prompt rows, command hints, context meter, project/chat/activity status. |
 
 The shell scrollback is not used during fullscreen mode. The transcript owns
 its own scroll offset.
@@ -26,7 +26,7 @@ The pinned panel is a compact status dashboard at the top of the screen.
 | Dashboard | Project, model inventory summary, agent roles, last query, UI mode. |
 | Project | Active project, state, `/project` commands, file-tagging hint, project config path. |
 | Models | Active provider/model, inventory status, provider chips, setup commands, config path. |
-| Agents | Architect, Context Loom, Explorer, Coder, optional Scout ON/OFF, and approval boundary. |
+| Agents | Architect, Context Loom, Explorer, Coder, Verifier, optional Scout ON/OFF, and approval boundary. |
 | Context | Context Loom, context window, memory commands, pack preview, index refresh. |
 | Sessions | Current session, store path, recent sessions. |
 | Timeline | Latest structured agent path. |
@@ -52,17 +52,25 @@ registered for the next run and gives the inverse toggle command:
 
 ## Input Editor
 
-The input editor is single-line and stable across terminal widths.
+The input editor wraps by terminal cell width and keeps the cursor visible in a
+three-row composer. Emoji and combining characters are edited as grapheme clusters.
 
 | Key | Behavior |
 | --- | --- |
-| Enter | Submit the line. |
+| Enter | Submit the complete prompt. |
+| Ctrl-J | Insert a newline. |
+| Shift-Enter / Alt-Enter | Insert a newline when the terminal reports the modifier. |
 | Left / Right | Move cursor. |
-| Home / End | Move to start/end. |
-| Backspace / Delete | Edit characters. |
-| Up / Down | Navigate input history. |
-| Tab | Insert two spaces. |
+| Home / End | Move to start/end of the logical line. |
+| Backspace / Delete | Delete complete grapheme clusters. |
+| Up / Down | Move between wrapped rows; browse history for a single-row prompt. |
+| Ctrl-P / Ctrl-N | Browse history from any row, preserving the unsubmitted draft. |
+| Ctrl-R | Search recent prompts and recall a selection without submitting. |
+| Tab | Open fuzzy slash-command completion; otherwise insert two spaces. |
 | `@` | Open the project file picker when a project is active. |
+
+Bracketed paste keeps multiline text and `@tags` literal: it neither submits the
+prompt nor opens a picker. Control bytes are removed; tabs become two spaces.
 
 Input history is stored in memory for the current TUI process and capped by
 `INPUT_HISTORY_CAPACITY`.
@@ -77,7 +85,7 @@ The picker:
 1. Scans the active project for taggable text files.
 2. Skips hidden and ignored directories such as `.git`, `.venv`,
    `node_modules`, `target`, `dist`, and `build`.
-3. Skips common binary suffixes.
+3. Skips symlink entries and common binary suffixes.
 4. Lets the user type to filter results.
 5. Inserts either `@path` or `@"path with spaces"` into the prompt.
 

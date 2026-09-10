@@ -48,8 +48,13 @@ fn prompt_input_modal(
     loop {
         terminal.render(app, None)?;
         draw_input_modal(title, rows, &editor, masked)?;
-        let Event::Key(key) = read()? else {
-            continue;
+        let key = match read()? {
+            Event::Key(key) => key,
+            Event::Paste(text) => {
+                editor.insert_str(&text.replace(['\n', '\r'], " "));
+                continue;
+            }
+            _ => continue,
         };
         match key.code {
             KeyCode::Enter => return Ok(Some(editor.line())),
@@ -233,8 +238,9 @@ fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Res
     let modal_width = width
         .saturating_mul(2)
         .saturating_div(3)
-        .clamp(42, width.saturating_sub(4));
-    let modal_height = (rows.len() as u16 + 4).clamp(7, height.saturating_sub(4));
+        .max(42)
+        .min(width.saturating_sub(4));
+    let modal_height = (rows.len() as u16 + 4).max(7).min(height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let mut out = stdout();
@@ -309,8 +315,9 @@ pub(super) fn draw_input_modal(
     let modal_width = width
         .saturating_mul(3)
         .saturating_div(4)
-        .clamp(48, width.saturating_sub(4));
-    let modal_height = (rows.len() as u16 + 6).clamp(8, height.saturating_sub(4));
+        .max(48)
+        .min(width.saturating_sub(4));
+    let modal_height = (rows.len() as u16 + 6).max(8).min(height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let inner_width = modal_width.saturating_sub(4).max(8) as usize;
@@ -410,11 +417,13 @@ fn draw_choice_picker_modal(
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
-        .clamp(52, width.saturating_sub(4));
+        .max(52)
+        .min(width.saturating_sub(4));
     let modal_height = height
         .saturating_mul(2)
         .saturating_div(3)
-        .clamp(11, height.saturating_sub(4));
+        .max(11)
+        .min(height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let info_rows = rows.len().min(modal_height.saturating_sub(8) as usize);

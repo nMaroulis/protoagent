@@ -41,6 +41,18 @@ sequenceDiagram
   end
 ```
 
+## Command Approval And Recovery
+
+Verifier commands use the same ProtoLink approval bridge with `shell.execute`
+and a `text/plain` command preview. Press V to read the complete preview before
+approving. Approved commands have host access and may write files or use the
+network. Each has bounded output and a timeout.
+
+Coder writes save a per-file checkpoint before replacement. `/checkpoints`
+lists them; `/undo [id]` shows a fresh diff and asks for write approval without
+calling a model. Undo refuses files changed since the agent write. See
+[Verify & Recover](verification-and-recovery.md) for exact scope and limits.
+
 ## Temporary Control Files
 
 The progress bridge uses OS temp paths named like:

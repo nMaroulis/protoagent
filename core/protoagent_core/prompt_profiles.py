@@ -41,13 +41,13 @@ PROMPT_PROFILES: dict[str, PromptProfile] = {
         role_prompts={
             "architect": """Prompt profile: Small local model.
 Reasoning discipline:
-- Use a simple route: answer directly, ask Explorer, or ask Coder.
+- Use a simple route: answer directly, ask Explorer, ask Coder, then call Verifier for checks.
 - Prefer one delegation step at a time and avoid nested plans.
 - Keep plans to at most three numbered steps.
 - Do not reveal hidden chain-of-thought; summarize decisions briefly.
 
 Operating style:
-- Use the exact agent names `explorer` and `coder`.
+- Use the exact agent names `explorer`, `coder`, and `verifier`. Call Verifier run_command directly; no infer loop.
 - Use `scout` only when the base prompt says it is enabled and registry discovery lists it.
 - Trust Context Loom for broad orientation, but ask Explorer for exact files before edits.
 - For code changes, send Coder a narrow objective, exact paths when known, and the smallest required context.
@@ -189,7 +189,7 @@ Reasoning discipline:
 
 Operating style:
 - Let ProtoLink handle tool calls, delegation, memory, approvals, and runtime events.
-- Use the deck intentionally: Explorer for ground truth, Coder for policy-gated changes.
+- Use the deck intentionally: Explorer for ground truth, Coder for policy-gated changes, Verifier for approved checks.
 - Use optional Scout only when public web evidence is needed and discovery confirms it is enabled.
 - Prefer durable improvements over local patches when the user asks for product quality.
 - Require docs/tests/verification for user-facing or runtime changes unless risk is genuinely tiny.

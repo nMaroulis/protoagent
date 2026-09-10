@@ -4,7 +4,7 @@ Status: **planned** (`0.0.0-dev.0`).
 
 This directory reserves the future Agent Client Protocol editor adapter. There
 is currently no installable ACP package, server entrypoint, or supported editor
-configuration in the repository. The active `0.2.0` release surfaces are the
+configuration in the repository. The active `0.2.1` release surfaces are the
 Rust CLI and Python core.
 
 The planned adapter should remain thin:

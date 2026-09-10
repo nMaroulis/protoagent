@@ -24,7 +24,7 @@ jobs:
       - name: Install embedded core
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "protolink[http,llms]>=0.6.6" -e core
+          python -m pip install "protolink[http,llms]>=0.6.9" -e core
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

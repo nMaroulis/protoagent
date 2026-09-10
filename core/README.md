@@ -3,18 +3,18 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Current package version: `0.2.0`. The source of truth is
+Current package version: `0.2.1`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.6.6 or newer with the HTTP/SSE transport and LLM extras so
+Install ProtoLink 0.6.9 or newer with the HTTP/SSE transport and LLM extras so
 the embedded Agent runtime can import streaming agents, lifecycle-aware task
 status events, recursive stream serialization, history compaction, metrics,
 state operations, run reports, context manifests, provider clients, and the
-shared transport limits/health/metrics contract. ProtoLink 0.6.6 also provides
+shared transport limits/health/metrics contract. ProtoLink 0.6.9 also provides
 the first-party web tools used by optional Scout:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.6"
+pip install "protolink[http,llms]>=0.6.9"
 ```
 
 ## Layout
@@ -30,15 +30,33 @@ pip install "protolink[http,llms]>=0.6.6"
 - `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.
 - `protoagent_core/quality_eval.py` - Fixed prompt-profile benchmark tasks and scoring helpers.
 - `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
-- `protoagent_core/agents/` - ProtoLink Architect, Explorer, Coder, and optional Scout factories. Architect is the stateful controller; all workers are task-local and stateless.
+- `protoagent_core/agents/` - ProtoLink Architect, Explorer, Coder, Verifier, and optional Scout factories. Architect is the stateful controller; all workers are task-local and stateless.
 - `protoagent_core/run_contracts.py` - Runtime task classification and completion validation for required workers, approval requests, and diff artifacts.
 - `protoagent_core/tools.py` - Workspace-safe exploration, diff preview, and authorized write helpers.
+
+## Verification And File Recovery
+
+`agents/verifier.py` registers `run_command` through ProtoLink with
+`shell.execute: require_approval`. `verification.py` supplies argv-based process
+execution, a 1–600 second timeout (120 default), 32 KiB output retention, and a
+per-run evidence accumulator. It is host execution, not a sandbox. ProtoLink
+owns agent delegation, task lifecycle, policy, budget checks, and cancellation.
+Measured outcomes appear in `verification.result` events and run report metadata.
+
+`checkpoints.py` retains exact pre-write bytes and modes for Coder mutations in
+private per-project SQLite ledgers. Action builders freeze the preview's target
+and preimage hash; writes and restore operations reject stale content.
+`checkpoint_inventory()` and `undo_checkpoint()` are JSON entrypoints for the
+CLI. Undo uses Coder's ProtoLink policy without an LLM. It covers one Coder file
+write at a time, not command side effects or a whole Git working tree, and is
+separate from ProtoLink conversation state.
 
 ## Provider Execution
 
 The CLI invokes the selected provider/model through ProtoLink agents by
 default. The selected model is used to create fresh LLM instances for
-Architect, Explorer, and Coder on each run. Scout is a tool-only agent with no
+Architect, Explorer, and Coder on each run. Verifier is always registered with
+no LLM and exposes approved command execution. Scout is a tool-only agent with no
 LLM and is not constructed or registered when it is disabled. Agents use ProtoLink's SSE
 JSON-RPC lifecycle-aware task stream by default, while the Registry remains on
 plain HTTP.
@@ -102,7 +120,7 @@ current run.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.6.6's
+apply to the next run. When enabled, Scout receives ProtoLink 0.6.9's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless

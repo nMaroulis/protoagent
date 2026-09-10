@@ -280,18 +280,27 @@ def build_context_map(workspace: str | None = None, max_files: int = 80) -> dict
 
 
 def _walk_text_files(root: Path):
-    """Yield text-like files below a root while respecting ignore rules."""
+    """Yield bounded text files, skipping ignored names and symlink entries."""
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
         dirs[:] = sorted(
-            name for name in dirs if name not in DEFAULT_IGNORES and not name.startswith(".")
+            name
+            for name in dirs
+            if name not in DEFAULT_IGNORES
+            and not name.startswith(".")
+            and not (Path(current) / name).is_symlink()
         )
         for filename in sorted(files):
             if filename.startswith("."):
                 continue
             path = Path(current) / filename
-            if _looks_binary(path) or _safe_size(path) > MAX_READ_BYTES:
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or _looks_binary(path)
+                or _safe_size(path) > MAX_READ_BYTES
+            ):
                 continue
             yield path
 

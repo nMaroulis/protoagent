@@ -10,8 +10,8 @@ The active coding mesh exposes three LLM-capable roles:
 3. Coder
 
 Architect is the stateful controller. Explorer and Coder are stateless,
-task-local workers. A fourth role, Scout, is a tool-only web-research agent that
-is disabled by default. Guide is separate and only answers usage help
+task-local workers. Verifier is an always-registered tool-only command worker. Scout is a
+tool-only web-research agent that is disabled by default. Guide is separate and only answers usage help
 questions.
 
 ## Runtime Shape
@@ -19,7 +19,7 @@ questions.
 The user-facing architecture is:
 
 ```text
-Context Loom -> RunContract -> Architect -> Explorer/Coder/(optional Scout) -> Policy Gate -> Completion Guard
+Context Loom -> RunContract -> Architect -> Explorer/Coder/Verifier/(optional Scout) -> Policy Gate -> Completion Guard
 ```
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
@@ -37,6 +37,7 @@ blocker.
 {
     "explorer": create_explorer_agent(...),
     "coder": create_coder_agent(...),
+    "verifier": create_verifier_agent(...),
     **({"scout": create_scout_agent(...)} if scout_enabled else {}),
     "architect": create_architect_agent(...),
 }
@@ -170,6 +171,7 @@ Tools:
 | Tool | Capability | Purpose |
 | --- | --- | --- |
 | `generate_unified_diff(path, updated_content, original_content=None)` | `workspace.write` | Replace a file after preview and approval. |
+| `restore_checkpoint(checkpoint_id="latest")` | `workspace.write` | Restore one approved checkpoint if the file still matches. |
 | `create_new_file(path, content)` | `workspace.write` | Create a file after preview and approval. |
 
 Policy:
@@ -184,6 +186,22 @@ The write helper only executes after ProtoLink receives an approving
 `ApprovalDecision`. If a write task finishes without Coder, approval/diff
 artifacts, or an explicit blocker, runtime completion validation returns the run
 as `incomplete`.
+
+## Verifier
+
+Source: `core/protoagent_core/agents/verifier.py`
+
+Verifier has `llm=None`, `state=[]`, no storage, and `expose_chat=False`.
+Architect calls `run_command(argv, cwd=".", timeout_seconds=120)` directly
+through ProtoLink. Its deny-by-default policy requires approval for
+`shell.execute`; the action includes the exact command preview. It returns
+actual output, exit status, timeout, truncation, and duration. Approval does not
+sandbox the subprocess or checkpoint its side effects.
+
+An application `VerificationEvidence` accumulator records outcomes by command,
+directory, and Coder change revision. It does not orchestrate agents. ProtoLink
+continues to own delegation, policy, cancellation, budgets, and reporting.
+[Verify & Recover](../cli/verification-and-recovery.md) describes the user flow.
 
 ## Scout
 
@@ -217,7 +235,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.6.6 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.6.9 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |
@@ -267,7 +285,8 @@ The CLI doctor and fallback paths use `agent_manifest()`:
 | --- | --- | --- | --- | --- |
 | Architect | stateful controller | stateful | `protoagent-architect` | none |
 | Explorer | stateless context worker | stateless | task-local | Context/read/search/git tools |
-| Coder | stateless write worker | stateless | task-local | diff/create tools |
+| Coder | stateless write worker | stateless | task-local | diff/create/restore tools |
+| Verifier | tool-only command worker | stateless | none | `run_command` |
 | Scout | optional tool-only web worker | stateless | none | `web_search`, `fetch_url` |
 
 The manifest also reports the runtime kernel, stateful pieces, stateless

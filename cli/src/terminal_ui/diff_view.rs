@@ -83,7 +83,8 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
-        .clamp(54, width.saturating_sub(4));
+        .max(54)
+        .min(width.saturating_sub(4));
     let modal_height = 14u16.min(height.saturating_sub(4)).max(11);
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
@@ -211,7 +212,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         green(),
     )?;
     button_x += 16;
-    if approval.diff.trim().is_empty() {
+    if approval.diff.trim().is_empty() && approval.preview.trim().is_empty() {
         draw_button(
             &mut out,
             button_x,
@@ -227,7 +228,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
             button_x,
             button_y,
             18,
-            "[V] REVIEW DIFF",
+            "[V] PREVIEW",
             black(),
             yellow(),
         )?;
@@ -255,11 +256,13 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     let modal_width = width
         .saturating_mul(9)
         .saturating_div(10)
-        .clamp(60, width.saturating_sub(2));
+        .max(60)
+        .min(width.saturating_sub(2));
     let modal_height = height
         .saturating_mul(4)
         .saturating_div(5)
-        .clamp(14, height.saturating_sub(2));
+        .max(14)
+        .min(height.saturating_sub(2));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let body_top = y + 5;

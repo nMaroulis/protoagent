@@ -26,6 +26,8 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `EXPLORER_AGENT_URL` | generated | Legacy Explorer URL override. |
 | `PROTOAGENT_CODER_URL` | generated | Coder URL override. |
 | `CODER_AGENT_URL` | generated | Legacy Coder URL override. |
+| `PROTOAGENT_VERIFIER_URL` | generated | Verifier URL override. |
+| `VERIFIER_AGENT_URL` | generated | Legacy Verifier URL override. |
 | `PROTOAGENT_SCOUT_URL` | generated | Optional Scout URL override. |
 | `SCOUT_AGENT_URL` | generated | Legacy Scout URL override. |
 | `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |

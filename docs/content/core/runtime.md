@@ -68,6 +68,7 @@ The top-level run context grants app-level permissions:
 | `agent.delegate` | allow |
 | `workspace.read` | allow |
 | `workspace.write` | allow |
+| `shell.execute` | allow at the run level; Verifier policy still requires command approval |
 | `network.read` | allow at the run level; only enabled Scout's deny-by-default agent policy exposes it |
 
 Agent-specific `CapabilityPolicy` still applies. Coder's `workspace.write`
@@ -75,7 +76,7 @@ policy requires approval even though the top-level context permits the category.
 
 ## URLs And Transports
 
-The runtime resolves URLs for Registry, client, Architect, Explorer, Coder, and
+The runtime resolves URLs for Registry, client, Architect, Explorer, Coder, Verifier, and
 enabled Scout. By default it binds free localhost ports.
 
 Environment overrides:
@@ -88,6 +89,7 @@ Environment overrides:
 | `PROTOAGENT_ARCHITECT_URL` or `ARCHITECT_AGENT_URL` | Architect URL override. |
 | `PROTOAGENT_EXPLORER_URL` or `EXPLORER_AGENT_URL` | Explorer URL override. |
 | `PROTOAGENT_CODER_URL` or `CODER_AGENT_URL` | Coder URL override. |
+| `PROTOAGENT_VERIFIER_URL` or `VERIFIER_AGENT_URL` | Verifier URL override. |
 | `PROTOAGENT_SCOUT_URL` or `SCOUT_AGENT_URL` | Optional Scout URL override. |
 
 Agent transport:
@@ -106,7 +108,7 @@ limits, idempotency, lifecycle health, shutdown, capabilities, and operational
 metrics for the Registry, each agent, and the CLI-side `AgentClient`. The core
 does not maintain a parallel retry, health, or transport-metrics layer.
 
-ProtoLink 0.6.6 also accepts `grpc` when the separate `protolink[grpc]` extra is
+ProtoLink 0.6.9 also accepts `grpc` when the separate `protolink[grpc]` extra is
 installed. It remains opt-in rather than adding `grpcio` to every local CLI
 installation. TLS and multi-interface agent metadata are likewise left to
 networked deployments because ProtoAgent's embedded mesh uses loopback
@@ -126,6 +128,7 @@ sequenceDiagram
   participant Reg as Registry
   participant Exp as Explorer
   participant Cod as Coder
+  participant Ver as Verifier
   participant Scout as Scout (optional)
   participant Arc as Architect
   participant Client as AgentClient
@@ -134,6 +137,7 @@ sequenceDiagram
   Core->>Core: infer RunContract
   Core->>Exp: create stateless worker and start
   Core->>Cod: create stateless worker and start
+  Core->>Ver: create tool-only command worker and start
   opt optional_agents.scout.enabled
     Core->>Scout: create tool-only worker and start
   end
@@ -169,7 +173,7 @@ in response details.
 
 When `optional_agents.scout.enabled` is false, Scout is not constructed,
 started, or registered. When true, runtime adds a tool-only agent with
-ProtoLink 0.6.6 `web_search` and `fetch_url` tools and a deny-by-default policy
+ProtoLink 0.6.9 `web_search` and `fetch_url` tools and a deny-by-default policy
 allowing only `network.read`. Registration performs no outbound request.
 Architect discovery then includes Scout, and the transport report includes its
 transport.
@@ -211,20 +215,20 @@ Environment variables populate `RunBudget`:
 For Ollama, `max_input_tokens` comes from the effective Ollama context window.
 For other providers, it comes from the environment or provider config.
 
-## ProtoLink 0.6.6 Integration Boundaries
+## ProtoLink 0.6.9 Integration Boundaries
 
-The embedded mesh intentionally keeps the Registry on HTTP even when agent
-transport is set to SSE, HTTP, or optional gRPC. In ProtoLink 0.6.6, switching
-this Registry path to the runtime transport exposes an `AgentCard` list
-serialization mismatch in `RegistryClient.discover()`. ProtoAgent keeps the
-working first-party Registry rather than adding a local discovery layer.
+The embedded mesh uses ProtoLink's HTTP Registry and configured agent
+transports. ProtoLink 0.6.9 authorizes direct tool tasks and checks their budgets
+before tool dispatch, including tools on Verifier and optional Scout. The
+application uses those native task paths rather than a second budget engine.
+A runtime budget is checked at dispatch boundaries; Verifier additionally
+bounds each subprocess with its own timeout and output limit.
 
-Direct delegated Scout tool calls still receive ProtoLink capability policy,
-authentication, and cancellation handling. ProtoLink 0.6.6 applies
-`BudgetEnforcer.check_tool_call()` inside the LLM infer-loop tool path, not the
-direct delegated tool path, so `RunBudget.max_tool_calls` does not currently cap
-those Scout calls. Scout remains opt-in while this is tracked upstream; the
-application does not duplicate ProtoLink's budget engine.
+Verifier outcomes are recorded as `verification.result` events through
+`RunRecorder`. The same factual report appears in the response and
+`RunReport.metadata.verification`. Coder changes increment an application
+revision so previously recorded checks become stale. Command approval cannot
+satisfy a required workspace-write contract.
 
 ## Local Trace Telemetry
 

@@ -42,8 +42,8 @@ _WRITE_NOUN_HINTS = (
     "type checking",
 )
 _READ_ONLY_PREFIX = re.compile(
-    r"^\s*(explain|what|why|where|who|when|how\s+(does|do|is|are|can)|"
-    r"identify|find|show|summarize|review)\b",
+    r"^\s*(?:please\s+)?(explain|what|why|where|who|when|how\s+(does|do|is|are|can)|"
+    r"identify|find|show|summarize|review|run|execute|verify|check|build|test|lint)\b",
     re.IGNORECASE,
 )
 _READ_ONLY_WRITE_CLAUSE = re.compile(
@@ -53,6 +53,9 @@ _READ_ONLY_WRITE_CLAUSE = re.compile(
     + "|".join(re.escape(hint) for hint in _WRITE_HINTS)
     + r")\b",
     re.IGNORECASE,
+)
+_VERIFICATION_PREFIX = re.compile(
+    r"^\s*(?:please\s+)?(?:run|execute|verify|check|build|test|lint)\b", re.IGNORECASE
 )
 _GREETING = re.compile(r"^\s*(hi|hello|hey|thanks|thank you)\W*$", re.IGNORECASE)
 _BLOCKER_HINTS = (
@@ -131,10 +134,19 @@ def infer_run_contract(user_prompt: str) -> RunContract:
         )
 
     write_intent = _has_write_intent(prompt)
+    verification_intent = not write_intent and bool(_VERIFICATION_PREFIX.match(prompt))
     expected_workers = ("explorer", "coder") if write_intent else ("explorer",)
+    if verification_intent:
+        expected_workers = ("explorer", "verifier")
     expected_artifacts = ("approval_request", "diff_preview") if write_intent else ()
     return RunContract(
-        task_kind="workspace-change" if write_intent else "repository-question",
+        task_kind=(
+            "workspace-change"
+            if write_intent
+            else "workspace-verification"
+            if verification_intent
+            else "repository-question"
+        ),
         requires_explorer=True,
         requires_coder=write_intent,
         requires_write=write_intent,
@@ -178,7 +190,12 @@ def validate_run_completion(
 
     used_explorer = _used_agent(run_events, "explorer")
     used_coder = _used_agent(run_events, "coder")
-    approval_requested = bool(approval_requests)
+    approval_requested = any(
+        isinstance(request, dict)
+        and isinstance(request.get("action"), dict)
+        and "workspace.write" in (request["action"].get("capabilities") or [])
+        for request in approval_requests
+    )
     diff_present = _has_diff(diff_items)
     explicit_blocker = _has_blocker(answer)
 

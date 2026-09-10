@@ -29,7 +29,25 @@ Manual:
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
 - One-shot task: `proto-cli run "task"`.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
-  task command.
+  task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
+  newline when the terminal reports the modifier. Bracketed paste inserts
+  literal multiline text without submitting or opening the file picker.
+- Tab completes slash commands with a searchable picker; elsewhere it inserts
+  two spaces. Ctrl-R searches recent prompts and recalls without submitting.
+  Up/Down move through multiline text; Ctrl-P/Ctrl-N always browse history.
+- `/checkpoints` lists the latest 50 active Coder file snapshots for this project.
+  `/undo [id]` previews and requests approval to restore one snapshot; no id
+  selects latest. Shell equivalents: `proto-cli checkpoints` and `proto-cli undo`.
+  Recovery needs no model. Undo refuses subsequent file edits, preserves the
+  original bytes/mode, and covers Coder writes only, not command side effects.
+- Verifier runs test/build/lint commands delegated by Architect through ProtoLink.
+  Its `shell.execute` policy requires approval of the exact argv, working
+  directory and timeout. Press V in the approval modal to read the full preview.
+  Commands run with host access and may write files or use the network; the
+  working directory is constrained to the project but is not a sandbox.
+  Output is bounded to 32 KiB and timeout to 1–600 seconds (default 120).
+  Verification reports actual exit codes; later Coder changes invalidate earlier
+  checks. Architect is instructed to stop after two repair attempts or a denial.
 - `/model` opens the provider/model picker. `/models` opens model inventory.
   From the shell, use `proto-cli model`.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
@@ -52,12 +70,12 @@ Manual:
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  RunContract, stateful Architect, stateless Explorer/Coder workers, optional
+  RunContract, stateful Architect, stateless Explorer/Coder/Verifier workers, optional
   Scout, policy gate, completion guard, and current prompt profile.
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
-- Scout exposes ProtoLink 0.6.6's first-party `web_search` and `fetch_url`
+- Scout exposes ProtoLink 0.6.9's first-party `web_search` and `fetch_url`
   tools under the explicit `network.read` policy. Brave search is the default
   and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
   while English Wikipedia is keyless factual search. Web results are external,
@@ -88,6 +106,8 @@ Manual:
 - ProtoLink Architect conversation state is in
   `~/.protoagent/conversations.sqlite`. Explorer and Coder are task-local
   stateless workers. Optional Scout has no model or durable memory.
+- Coder file snapshots are under `~/.protoagent/checkpoints`, separately from
+  ProtoLink conversation memory. `/context reset` does not remove snapshots.
 - Context Loom indexes are under `~/.protoagent/indexes`.
 - Short-lived live progress/control JSONL files are written in the OS temp
   directory while a task is running and are cleaned up after the run.
@@ -101,7 +121,8 @@ Manual:
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
   and builds context as a stateless worker; Coder prepares approval-gated file
-  changes as a stateless worker; optional Scout exposes bounded public-web
+  changes as a stateless worker; Verifier executes approved checks without an
+  LLM; optional Scout exposes bounded public-web
   tools without another model loop. Guide is separate and only answers help
   questions.
 """

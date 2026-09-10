@@ -28,6 +28,8 @@ thin but important adaptation layer around the rest of the Python core.
 | `context_status(workspace)` | `context`, `/context` | Context Loom index status JSON. |
 | `refresh_context(workspace)` | `index refresh`, `/index refresh` | Refreshed Context Loom status JSON. |
 | `context_pack(query, workspace)` | `context QUERY`, `/context QUERY` | Context Pack JSON. |
+| `checkpoint_inventory(workspace)` | `checkpoints`, `/checkpoints` | Project snapshot metadata JSON. |
+| `undo_checkpoint(workspace, checkpoint_id, session_id, progress_path)` | `undo`, `/undo` | Coder recovery result using ProtoLink approval without an LLM. |
 | `process_prompt(prompt, workspace, session_id, progress_path)` | `run`, TUI task loop | Core response JSON. |
 
 Every function returns a JSON string through `_json()`, which normalizes values
@@ -115,6 +117,7 @@ numbers. Paths are resolved by `safe_path()`.
 | `run_report` | Redacted ProtoLink `RunReport`. |
 | `transport_report` | ProtoLink transport capabilities, health/configuration, and per-run metrics. |
 | `run_contract` | Inferred worker/artifact requirements for the original prompt. |
+| `verification` | Additional Python response field: measured command outcomes and current Coder change revision; also in run report metadata. |
 | `completion_validation` | Runtime validation result comparing the trace to the contract. |
 | `provider` | Provider id. |
 | `model` | Model id. |

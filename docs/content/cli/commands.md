@@ -6,6 +6,11 @@ description: Shell commands and TUI slash commands for ProtoAgent.
 This page documents the current command surface in `cli/src/main.rs` and
 `cli/src/terminal_ui.rs`.
 
+See [Verify & Recover](verification-and-recovery.md) for command approvals and file recovery.
+
+TUI recovery commands are `/checkpoints` and `/undo [id]`. Enter submits a prompt;
+Ctrl-J adds a newline, Tab completes slash commands, and Ctrl-R searches history.
+
 ## Shell Commands
 
 Run through Cargo while developing:
@@ -23,6 +28,8 @@ Installed examples use `proto-cli <command>`.
 | `cli` | Alias for fullscreen terminal UI. |
 | `terminal` | Alias for fullscreen terminal UI. |
 | `ui` | Alias for fullscreen terminal UI. |
+| `checkpoints` | List the latest 50 active Coder file snapshots for the selected project. |
+| `undo [id]` | Preview and approve restoring one checkpoint; defaults to latest and needs no model. |
 | `run "task"` | Run one task outside fullscreen mode. Requires an active project. |
 | `dashboard`, `dash`, `status` | Show cockpit status, provider strip, agent graph, and hotkeys. |
 | `models` | Show detected local/API models and validate API keys. |

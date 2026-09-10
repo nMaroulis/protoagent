@@ -200,6 +200,7 @@ fn filtered_files(files: &[String], filter: &str) -> Vec<String> {
         .collect()
 }
 
+/// Collect project text files without following directory cycles or file symlinks.
 fn collect_project_files(root: &Path, limit: usize) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -220,7 +221,7 @@ fn collect_project_files(root: &Path, limit: usize) -> Result<Vec<String>> {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
-            if name.starts_with('.') || ignored_picker_name(name) {
+            if path.is_symlink() || name.starts_with('.') || ignored_picker_name(name) {
                 continue;
             }
             if path.is_dir() {
@@ -295,11 +296,13 @@ fn draw_file_picker_modal(
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
-        .clamp(50, width.saturating_sub(4));
+        .max(50)
+        .min(width.saturating_sub(4));
     let modal_height = height
         .saturating_mul(2)
         .saturating_div(3)
-        .clamp(10, height.saturating_sub(4));
+        .max(10)
+        .min(height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let list_rows = modal_height.saturating_sub(7) as usize;

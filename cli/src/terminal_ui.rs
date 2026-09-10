@@ -14,6 +14,7 @@ use crate::{
 };
 
 mod approval;
+mod commands;
 mod diff_view;
 mod input;
 mod modal;
@@ -34,7 +35,7 @@ use state::{PanelView, Role, TerminalApp};
 use surface::TerminalSurface;
 
 const HEADER_ROWS: u16 = 9;
-const INPUT_ROWS: u16 = 4;
+const INPUT_ROWS: u16 = 6;
 const WHEEL_LINES: usize = 5;
 
 pub(crate) async fn interactive() -> Result<()> {
@@ -196,6 +197,17 @@ async fn handle_command(
             }
             Ok(true)
         }
+        "/checkpoints" => {
+            match crate::checkpoint_inventory_text() {
+                Ok(text) => app.push(Role::Command, "/checkpoints", &text),
+                Err(err) => app.push(Role::Error, "/checkpoints", &err.to_string()),
+            }
+            Ok(true)
+        }
+        "/undo" => {
+            run_task(app, terminal, input).await?;
+            Ok(true)
+        }
         "/diff" => {
             let arg = parts.collect::<Vec<_>>().join(" ");
             let diff = latest_diff_preview(app);
@@ -239,7 +251,7 @@ async fn handle_command(
             Ok(true)
         }
         "/run" => {
-            let query = parts.collect::<Vec<_>>().join(" ");
+            let query = input.strip_prefix(command).unwrap_or("").trim();
             if query.trim().is_empty() {
                 app.push(Role::Error, "/run", "Usage: /run your task");
             } else {

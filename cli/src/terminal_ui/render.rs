@@ -133,30 +133,56 @@ pub(super) fn draw_input(
         out,
         top,
         width,
-        &"-".repeat(width as usize),
+        &composer_hint(editor),
         cyan(),
         input_bg(),
         false,
     )?;
-    write_line(out, top + 1, width, "", text(), input_bg(), false)?;
-    draw_context_usage(out, top + 2, width, app)?;
-    draw_bottom_status(out, top + 3, width, app)?;
+    for row in 1..=3 {
+        write_line(out, top + row, width, "", text(), input_bg(), false)?;
+    }
+    draw_context_usage(out, top + 4, width, app)?;
+    draw_bottom_status(out, top + 5, width, app)?;
 
     let prompt = " > ";
-    let available = width.saturating_sub(prompt.len() as u16 + 4).max(10) as usize;
-    let (visible, cursor) = editor
-        .map(|editor| editor.visible(available))
-        .unwrap_or_else(|| (String::new(), 0));
-    queue!(
-        out,
-        MoveTo(2, top + 1),
-        SetForegroundColor(cyan()),
-        SetBackgroundColor(input_bg()),
-        Print(prompt),
-        SetForegroundColor(text()),
-        Print(clip_plain(&visible, available))
-    )?;
-    Ok((2 + prompt.len() as u16 + cursor as u16, top + 1))
+    let available = width.saturating_sub(prompt.len() as u16 + 4).max(1) as usize;
+    let (lines, cursor, cursor_row) = editor
+        .map(|editor| editor.layout(available, 3))
+        .unwrap_or_else(|| (vec![String::new()], 0, 0));
+    for (row, visible) in lines.iter().enumerate() {
+        queue!(
+            out,
+            MoveTo(2, top + 1 + row as u16),
+            SetForegroundColor(cyan()),
+            SetBackgroundColor(input_bg()),
+            Print(if row == 0 { prompt } else { " · " }),
+            SetForegroundColor(text()),
+            Print(clip_plain(visible, available))
+        )?;
+    }
+    Ok((
+        2 + prompt.len() as u16 + cursor as u16,
+        top + 1 + cursor_row as u16,
+    ))
+}
+
+fn composer_hint(editor: Option<&InputEditor>) -> String {
+    if let Some(editor) = editor {
+        let line = editor.line();
+        if line.starts_with('/') && !line.contains('\n') {
+            let matches = super::commands::matching_commands(&line);
+            return format!(
+                " Tab: {}",
+                matches
+                    .iter()
+                    .take(3)
+                    .map(|item| item.0)
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+        }
+    }
+    " Enter sends · Ctrl-J newline · Tab commands · Ctrl-R history".to_string()
 }
 
 fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
@@ -495,7 +521,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row(
                 "workers",
                 format!(
-                    "Explorer read/{} | Coder write/{}",
+                    "Explorer read/{} | Coder write/{} | Verifier approved checks",
                     agent_state(explorer, "stateless"),
                     agent_state(coder, "stateless"),
                 ),
@@ -657,7 +683,24 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             ));
         }
         PanelView::Help => {
-            rows.push(row("chat", "type any task or /run <task>", cyan(), true));
+            rows.push(row(
+                "compose",
+                "Enter sends | Ctrl-J newline | Tab commands | Ctrl-R history",
+                cyan(),
+                true,
+            ));
+            rows.push(row(
+                "recover",
+                "/checkpoints lists snapshots | /undo [id] reviews recovery",
+                green(),
+                true,
+            ));
+            rows.push(row(
+                "verify",
+                "Verifier runs checks with approval | V shows command preview",
+                yellow(),
+                true,
+            ));
             rows.push(row(
                 "guide",
                 "/help <question> asks isolated Guide with current settings",

@@ -30,6 +30,11 @@ from protoagent_core.runtime_bridge import RuntimeBridge
 
 class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self._config_temp = tempfile.TemporaryDirectory()
+        self._config_patch = patch(
+            "protoagent_core.config.CONFIG_DIR", Path(self._config_temp.name)
+        )
+        self._config_patch.start()
         self._create_architect_llm = architect_module.create_selected_llm
         self._create_selected_llm = coder_module.create_selected_llm
         self._create_explorer_llm = explorer_module.create_selected_llm
@@ -38,6 +43,8 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         explorer_module.create_selected_llm = lambda *_args, **_kwargs: None
 
     def tearDown(self) -> None:
+        self._config_patch.stop()
+        self._config_temp.cleanup()
         architect_module.create_selected_llm = self._create_architect_llm
         coder_module.create_selected_llm = self._create_selected_llm
         explorer_module.create_selected_llm = self._create_explorer_llm

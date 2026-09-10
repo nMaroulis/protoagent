@@ -81,15 +81,23 @@ def refresh_context_index(
 
 
 def _walk_indexable_files(root: Path):
+    """Yield bounded project files without following symlink files or directories."""
     if not root.exists():
         return
     for current, dirs, files in os.walk(root):
-        dirs[:] = sorted(name for name in dirs if _include_dir(name))
+        dirs[:] = sorted(
+            name for name in dirs if _include_dir(name) and not (Path(current) / name).is_symlink()
+        )
         for filename in sorted(files):
             if filename.startswith("."):
                 continue
             path = Path(current) / filename
-            if _looks_binary(path) or _safe_size(path) > MAX_READ_BYTES:
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or _looks_binary(path)
+                or _safe_size(path) > MAX_READ_BYTES
+            ):
                 continue
             yield path
 
