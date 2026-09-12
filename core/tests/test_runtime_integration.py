@@ -25,6 +25,12 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "protoagent_core.config.CONFIG_DIR", Path(self._config_temp.name)
         )
         self._config_patch.start()
+        self.addCleanup(self._config_patch.stop)
+        config_path_patch = patch(
+            "protoagent_core.config.CONFIG_PATH", Path(self._config_temp.name) / "config.json"
+        )
+        config_path_patch.start()
+        self.addCleanup(config_path_patch.stop)
         self._create_architect_llm = architect_module.create_selected_llm
         self._create_selected_llm = coder_module.create_selected_llm
         self._create_explorer_llm = explorer_module.create_selected_llm
@@ -33,7 +39,6 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         explorer_module.create_selected_llm = lambda *_args, **_kwargs: None
 
     def tearDown(self) -> None:
-        self._config_patch.stop()
         self._config_temp.cleanup()
         architect_module.create_selected_llm = self._create_architect_llm
         coder_module.create_selected_llm = self._create_selected_llm
@@ -112,6 +117,30 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget.max_input_tokens, 16000)
         self.assertEqual(budget.max_output_tokens, 2048)
         self.assertEqual(budget.metadata["source"], "protoagent-runtime")
+
+    def test_context_window_does_not_limit_aggregate_run_tokens(self) -> None:
+        from protoagent_core.config import default_config, save_config
+        from protoagent_core.llm import llm_model_profile
+
+        for provider in ("ollama", "openai"):
+            for window in (None, 8192):
+                with (
+                    self.subTest(provider=provider, window=window),
+                    patch.dict("os.environ", {}, clear=True),
+                ):
+                    config = default_config()
+                    config["providers"][provider]["context_window"] = window
+                    save_config(config)
+                    budget = _run_budget(provider, "mock", RunBudget)
+                    self.assertIsNone(budget.max_input_tokens)
+                    profile = llm_model_profile(provider, "mock")
+                    expected = 8192 if provider == "ollama" else window
+                    self.assertEqual(profile.context_window, expected)
+
+    def test_ollama_honors_explicit_aggregate_input_budget(self) -> None:
+        with patch.dict("os.environ", {"PROTOAGENT_RUN_MAX_INPUT_TOKENS": "16000"}):
+            budget = _run_budget("ollama", "mock", RunBudget)
+        self.assertEqual(budget.max_input_tokens, 16000)
 
     def test_uncertain_cli_response_preserves_outcome_without_marking_provider_valid(self):
         from protoagent_core.agent_engine import _model_response

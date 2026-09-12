@@ -24,6 +24,12 @@ class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
         self.config_dir = Path(self.temp.name) / "state"
         self.config_patch = patch("protoagent_core.config.CONFIG_DIR", self.config_dir)
         self.config_patch.start()
+        self.addCleanup(self.config_patch.stop)
+        config_path_patch = patch(
+            "protoagent_core.config.CONFIG_PATH", self.config_dir / "config.json"
+        )
+        config_path_patch.start()
+        self.addCleanup(config_path_patch.stop)
         self.context = RunContext(workspace_uri=self.root.as_uri(), trace_id="test-owned-trace")
         self.authorization = RunAuthorization(self.context)
         self.checkpoints = checkpoint_store(str(self.root))
@@ -51,7 +57,6 @@ class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
             await handle.cancel("Test cleanup")
             await handle.result()
         self.bridge.cleanup()
-        self.config_patch.stop()
         self.temp.cleanup()
 
     def start_tool(self, agent, name, args, *, context=None):

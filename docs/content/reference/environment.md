@@ -60,6 +60,10 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | `max_input_tokens` |
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
 
+Token budgets are optional aggregate limits across model calls, for all providers
+including Ollama. They default to unset and are independent of the model's
+per-request context window.
+
 ## Provider Variables
 
 | Variable | Provider |

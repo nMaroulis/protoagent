@@ -17,7 +17,6 @@ from .agents.common import (
 )
 from .config import load_config, normalize_provider, optional_agent_enabled, provider_config
 from .history import compact_agent_histories_for_run
-from .llm import ollama_context_window
 from .prompt_profiles import prompt_profile_status
 from .run_contracts import infer_run_contract
 from .runtime_bridge import RuntimeBridge
@@ -408,21 +407,14 @@ def _runtime_timeout() -> int:
 
 def _run_budget(provider: str, model: str, budget_type):
     """Build ProtoLink's typed budget carrier for this application run."""
-    cfg = provider_config(provider)
-    context_window = (
-        ollama_context_window(cfg)
-        if provider == "ollama"
-        else _env_or_config_int(
-            "PROTOAGENT_RUN_MAX_INPUT_TOKENS",
-            cfg.get("context_window"),
-        )
-    )
     return budget_type(
         max_steps=_env_int("PROTOAGENT_RUN_MAX_STEPS") or 80,
         max_llm_calls=_env_int("PROTOAGENT_RUN_MAX_LLM_CALLS"),
         max_tool_calls=_env_int("PROTOAGENT_RUN_MAX_TOOL_CALLS") or 80,
         max_runtime_seconds=_env_float("PROTOAGENT_RUN_MAX_SECONDS") or float(_runtime_timeout()),
-        max_input_tokens=context_window,
+        # Native token budgets accumulate across calls; a model's context
+        # window only describes one request and must not cap the whole run.
+        max_input_tokens=_env_int("PROTOAGENT_RUN_MAX_INPUT_TOKENS"),
         max_output_tokens=_env_int("PROTOAGENT_RUN_MAX_OUTPUT_TOKENS"),
         metadata={
             "provider": provider,
@@ -460,10 +452,6 @@ def _env_float(name: str) -> float | None:
     except ValueError:
         return None
     return value if value > 0 else None
-
-
-def _env_or_config_int(name: str, fallback: Any) -> int | None:
-    return _env_int(name) or _optional_int(fallback)
 
 
 def _optional_int(value: Any) -> int | None:

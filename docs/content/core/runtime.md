@@ -124,11 +124,13 @@ reported as potentially effected work, never as an action that was not submitted
 | `PROTOAGENT_RUN_MAX_LLM_CALLS` | `max_llm_calls` |
 | `PROTOAGENT_RUN_MAX_TOOL_CALLS` | `max_tool_calls`; application default 80 |
 | `PROTOAGENT_RUN_MAX_SECONDS` | `max_runtime_seconds`; default agent timeout, 600 seconds |
-| `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | `max_input_tokens` for non-Ollama providers |
+| `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | Aggregate `max_input_tokens` for all providers, including Ollama |
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
 
-Ollama's input budget uses its configured context window. Command execution is
-also bounded by its explicit limits and the remaining native runtime budget.
+Input and output token budgets are optional totals across model calls in a run.
+They are unset unless explicitly configured. A model's context window applies to
+individual requests and does not set the aggregate run budget. Command execution
+is also bounded by its explicit limits and the remaining native runtime budget.
 Native nested flows share budgets; remote workers enforce inherited limits.
 
 `ApplicationRunStore` adds mandatory output redaction to native persistence and
