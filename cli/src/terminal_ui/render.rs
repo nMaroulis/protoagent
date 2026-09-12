@@ -88,6 +88,23 @@ pub(super) fn draw_transcript(
 }
 
 fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> Result<()> {
+    if line.footnote {
+        let value = clip_plain(&line.text, width as usize);
+        let padding = width as usize - unicode_width::UnicodeWidthStr::width(value.as_str());
+        // Keep metadata uniformly subdued, including any backticks in its values.
+        queue!(
+            out,
+            MoveTo(0, y),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            SetForegroundColor(line.color),
+            SetAttribute(Attribute::Dim),
+            Print(value),
+            Print(" ".repeat(padding)),
+            SetAttribute(Attribute::Reset)
+        )?;
+        return Ok(());
+    }
     write_line(out, y, width, "", line.color, bg(), false)?;
     let mut x = 0u16;
     for segment in inline_code_segments(&line.text) {
@@ -1197,17 +1214,11 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
         text: format!("  {:<10}", message.label.to_uppercase()),
         color,
         bold: true,
+        footnote: false,
     });
     append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
     if !message.meta.is_empty() {
-        append_wrapped_render_line(
-            lines,
-            "  | ",
-            &format!("[{}]", message.meta.join("] [")),
-            muted(),
-            false,
-            width,
-        );
+        append_footnote_lines(lines, &format!("[{}]", message.meta.join("] [")), width);
     }
     if !message.details.is_empty() {
         let labels = message
@@ -1231,14 +1242,19 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
         } else {
             ""
         };
-        append_wrapped_render_line(
-            lines,
-            "  | ",
-            &format!("details: {labels}{hint}"),
-            yellow(),
-            false,
-            width,
-        );
+        append_footnote_lines(lines, &format!("details: {labels}{hint}"), width);
+    }
+}
+
+fn append_footnote_lines(lines: &mut Vec<RenderLine>, value: &str, width: usize) {
+    let prefix = "  | ";
+    for line in wrap_lines(value, width.saturating_sub(prefix.len()).max(1)) {
+        lines.push(RenderLine {
+            text: format!("{prefix}{line}"),
+            color: Color::Grey,
+            bold: false,
+            footnote: true,
+        });
     }
 }
 
@@ -1257,6 +1273,7 @@ fn append_wrapped_render_line(
             text: format!("{prefix}{line}"),
             color,
             bold,
+            footnote: false,
         });
     }
 }
@@ -1265,6 +1282,7 @@ struct RenderLine {
     text: String,
     color: Color,
     bold: bool,
+    footnote: bool,
 }
 
 impl RenderLine {
@@ -1273,6 +1291,7 @@ impl RenderLine {
             text: String::new(),
             color: muted(),
             bold: false,
+            footnote: false,
         }
     }
 }

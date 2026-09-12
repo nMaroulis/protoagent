@@ -17,6 +17,11 @@ alternate screen, raw mode, mouse capture, and fixed layout regions.
 The shell scrollback is not used during fullscreen mode. The transcript owns
 its own scroll offset.
 
+Response metadata and detail labels appear directly beneath the answer in
+faint, light-gray text, aligned with the answer. This uses standard terminal
+styling, with gray as the fallback when faint text is unsupported. The answer
+keeps its existing formatting; metadata uses the terminal's normal font size.
+
 ## Panels
 
 The pinned panel is a compact status dashboard at the top of the screen.
