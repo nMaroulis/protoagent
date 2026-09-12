@@ -6,14 +6,12 @@ import asyncio
 import os
 import socket
 from contextlib import suppress
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from .agents import create_agent_deck
 from .agents.common import (
     RUNTIME_SCOPES,
-    AgentRuntimeAuth,
     create_configured_transport,
     create_runtime_auth,
 )
@@ -21,9 +19,9 @@ from .config import load_config, normalize_provider, optional_agent_enabled, pro
 from .history import compact_agent_histories_for_run
 from .llm import ollama_context_window
 from .prompt_profiles import prompt_profile_status
-from .run_contracts import infer_run_contract, validate_run_completion
+from .run_contracts import infer_run_contract
 from .runtime_bridge import RuntimeBridge
-from .verification import VerificationEvidence, verification_summary
+from .verification import validate_completion, verification_summary
 
 _FALLBACK_PORT = 19100
 TransportName = Literal["http", "websocket", "sse", "json-rpc", "sse-json-rpc", "grpc", "runtime"]
@@ -38,9 +36,9 @@ def run_selected_model(
 ) -> dict[str, Any]:
     """Run the selected model through the ProtoLink Architect agent.
 
-    The CLI enters the core by sending a Task to Architect through ProtoLink's
-    AgentClient. Architect owns orchestration and resolves the core workers,
-    plus optional Scout when enabled, by querying the Registry.
+    AgentGroup owns the embedded lifecycle. A native RunHandle executes a
+    bounded application Graph; Architect delegates through the configured
+    ProtoLink transports and Registry.
     """
     config = load_config()
     provider = normalize_provider(config.get("active_provider", "ollama"))
@@ -51,6 +49,7 @@ def run_selected_model(
     profile = prompt_profile_status(config, provider=provider, model=str(model))
 
     bridge = RuntimeBridge(progress_path)
+    run_state = {}
     try:
         return asyncio.run(
             _run_agent_deck(
@@ -63,7 +62,32 @@ def run_selected_model(
                 profile,
                 user_prompt=user_prompt,
                 scout_enabled=optional_agent_enabled("scout", config),
+                run_state=run_state,
             )
+        )
+    except Exception as exc:
+        handle = run_state.get("handle")
+        if handle is None:
+            raise
+        # A failure in application validation/presentation or cleanup after
+        # submission cannot establish that the effects did not happen.
+        report = handle.report
+        return bridge.redaction.redact(
+            {
+                "provider": provider,
+                "model": model,
+                "responder": "architect",
+                "status": "uncertain",
+                "answer": f"Run interrupted after submission: {exc}. Inspect effects before requesting new work.",
+                "events": [],
+                "run_events": [event.to_dict() for event in report.events],
+                "run_report": report.to_dict(),
+                "run_context": handle.context.to_dict(),
+                "approval_requests": bridge.approval_requests,
+                "approval_decisions": bridge.approval_decisions,
+                "diffs": [],
+                "targets": [],
+            }
         )
     finally:
         bridge.cleanup()
@@ -79,28 +103,30 @@ async def _run_agent_deck(
     prompt_profile: dict[str, Any],
     user_prompt: str | None = None,
     scout_enabled: bool = False,
+    run_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Start the local ProtoLink mesh and send the prompt to Architect."""
+    """Own the embedded mesh with AgentGroup and consume native RunHandle results."""
     from protolink import (
-        DEFAULT_REDACTION_POLICY,
+        Agent,
+        AgentGroup,
+        ApprovalBroker,
+        CapabilityPolicy,
         RunBudget,
         RunContext,
-        RunEvent,
-        RunRecorder,
+        RunReport,
         Task,
     )
-    from protolink.client import AgentClient
     from protolink.discovery import Registry
+    from protolink.storage import SQLiteStorage
 
-    urls = _runtime_urls()
-    agent_transport = _agent_transport()
-    streaming = _streaming_enabled(agent_transport)
-    events: list[str] = []
-    recorder = RunRecorder()
-    verification = VerificationEvidence()
+    from . import config
+    from .checkpoints import checkpoint_store, workspace_writer
+    from .runtime_policy import AttemptState, RunAuthorization
+    from .runtime_storage import ApplicationRunStore, output_redaction
+    from .workflow import CodingWorkflow
+
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
     contract = infer_run_contract(user_prompt or prompt)
-    task = Task.create_infer(prompt=prompt)
     context = RunContext(
         session_id=session_id,
         workspace_uri=Path(project).as_uri(),
@@ -114,291 +140,223 @@ async def _run_agent_deck(
         },
     )
     context.trace_id = context.run_id
-    context.attach_to_task(task)
-    recorder.context = context
+    authorization = RunAuthorization(context)
+    auth = create_runtime_auth()
+    redaction = output_redaction(auth.credentials)
+    bridge.redaction = redaction
+    events: list[str] = []
+    live_updates = _streaming_enabled(_agent_transport())
 
-    def emit(message: str) -> None:
+    def emit(message):
         events.append(message)
         bridge.emit(message)
 
-    def canceled_before_execution() -> dict[str, Any] | None:
-        return _preflight_cancellation_result(
-            bridge=bridge,
-            context=context,
-            task=task,
-            recorder=recorder,
-            events=events,
-            emit=emit,
-            provider=provider,
-            model=model,
+    async def observe(handle):
+        async for event in handle.events():
+            data = event.to_dict(redaction_policy=redaction)
+            summary = _run_event_summary(data)
+            if data["type"] == "process.output":
+                summary = f"Verifier {data['payload'].get('channel', 'output')}: {data['payload'].get('text', '')}"
+            if summary:
+                _append_event(events, summary, bridge if live_updates else None, run_event=data)
+
+    with workspace_writer(project):
+        store = ApplicationRunStore(
+            config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite", redaction
         )
-
-    emit(f"Registry prepared at {urls['registry']}.")
-    emit(f"All LLM-capable agents configured with {provider} / {model}.")
-    emit(
-        "Agent prompt profile: "
-        f"{prompt_profile['label']} "
-        f"(configured {prompt_profile['configured']}, resolved {prompt_profile['resolved']})."
-    )
-    emit(f"Optional Scout web research: {'enabled' if scout_enabled else 'disabled'}.")
-    emit(
-        f"Agent transport: {agent_transport} ({'streaming enabled' if streaming else 'request/response mode'})."
-    )
-    emit(f"Active project workspace: {project}.")
-    emit(f"Conversation session: {session_id or 'task-local'}.")
-    emit(f"Run contract: {contract.task_kind}; {contract.completion_rule}")
-    if provider == "ollama":
-        emit(f"Ollama context window: {ollama_context_window()} tokens.")
-    emit(f"Run context: {context.run_id}.")
-    auth = create_runtime_auth()
-    emit("Agent auth: ProtoLink API-key auth enabled for the local mesh.")
-    registry = None
-    registry_transport = None
-    client = None
-    deck: dict[str, Any] = {}
-    started_agents: list[Any] = []
-    cancellation_monitor: asyncio.Task[None] | None = None
-
-    try:
-        if canceled := canceled_before_execution():
-            return canceled
+        broker = ApprovalBroker(
+            storage=SQLiteStorage(store.db_path, table_name="approvals", namespace=context.run_id),
+            timeout_seconds=float(_runtime_timeout()),
+        )
+        bridge.bind(broker, authorization, redaction)
+        task = Task.create_tool_call(tool_name="run_workflow", args={})
+        context.attach_to_task(task)
+        if reason := bridge.cancel_reason():
+            context.cancel(reason).attach_to_task(task)
+            task.cancel(reason)
+            report = RunReport.from_task(task)
+            store.save_report(report)
+            return {
+                "provider": provider,
+                "model": model,
+                "responder": "architect",
+                "answer": f"Task canceled before model execution: {reason}",
+                "status": "canceled",
+                "events": events,
+                "run_events": [],
+                "run_report": report.to_dict(),
+                "run_context": RunContext.from_task(task).to_dict(),
+                "diffs": [],
+                "targets": [],
+                "approval_requests": [],
+                "approval_decisions": [],
+            }
+        checkpoints = checkpoint_store(project)
+        attempt = AttemptState(project, checkpoints, authorization)
+        urls = _runtime_urls()
+        transport = _agent_transport()
         registry_transport = create_configured_transport(
-            "http",
+            "runtime" if transport == "runtime" else "http",
             urls["registry"],
             timeout=_runtime_timeout(),
         )
-        if registry_transport is None:  # pragma: no cover - concrete name cannot return None
-            raise RuntimeError("ProtoLink could not construct the Registry transport")
+        assert registry_transport is not None
         registry = Registry(transport=registry_transport, verbosity=0)
-        registry.start(background=True)
-        if not registry_transport.health().get("ready"):
-            raise RuntimeError("ProtoLink Registry transport did not become ready")
-        emit("Registry started with ProtoLink transport limits and metrics enabled.")
-        if canceled := canceled_before_execution():
-            return canceled
-
-        telemetry = _trace_telemetry()
         deck = create_agent_deck(
             registry=registry,
             provider=provider,
             model=model,
-            workspace=workspace,
-            urls={
-                "explorer": urls["explorer"],
-                "coder": urls["coder"],
-                "architect": urls["architect"],
-                "scout": urls["scout"],
-                "verifier": urls["verifier"],
-            },
-            transport=agent_transport,
-            approval_handler=bridge.approval_handler,
-            telemetry=telemetry,
+            workspace=project,
+            urls=urls,
+            transport=transport,
+            approval_handler=broker,
+            telemetry=_trace_telemetry(redaction),
             prompt_profile=str(prompt_profile["resolved"]),
             scout_enabled=scout_enabled,
             auth=auth,
-            evidence=verification,
-            on_command_output=lambda text: bridge.emit(f"Verifier output: {text}"),
+            checkpoints=checkpoints,
+            authorization=authorization,
+            attempt=attempt,
         )
+        for agent in deck.values():
+            agent.run_store = store
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
             if report.get("changed"):
-                emit(
-                    "ProtoLink compacted "
-                    f"{str(report['agent']).title()} history: removed "
-                    f"{report['removed_messages']} message(s); "
-                    f"{report['after_tokens']} estimated token(s) remain."
-                )
-        if canceled := canceled_before_execution():
-            return canceled
-
-        for name, agent in deck.items():
-            agent.start(background=True)
-            started_agents.append(agent)
-            transport_health = agent.transport.health()
-            if not transport_health.get("ready"):
-                raise RuntimeError(f"ProtoLink {name} transport did not become ready")
-            emit(f"{name.title()} registered at {agent.card.url}; transport ready.")
-            if canceled := canceled_before_execution():
-                return canceled
-
-        discovered = await deck["architect"].discover_agents()
-        names = ", ".join(sorted(card.name for card in discovered)) or "none"
-        emit(f"Architect discovery sees: {names}.")
-        if canceled := canceled_before_execution():
-            return canceled
-
-        client = AgentClient(
-            transport=_authenticated_client_transport(
-                agent_transport,
-                urls["client"],
-                auth,
-                timeout=_runtime_timeout(),
-            )
-        )
-        cancellation_monitor = asyncio.create_task(
-            _monitor_cancellation(
-                bridge=bridge,
-                client=client,
-                agent=deck["architect"],
-                agent_url=deck["architect"].card.url,
-                task_id=task.id,
-                emit=emit,
-            )
-        )
-        if streaming:
-            emit("AgentClient opened a streaming task channel to Architect.")
-            emit("Architect is processing the user task stream.")
-            try:
-                delivery = await _send_task_streaming(
-                    client=client,
-                    agent_url=deck["architect"].card.url,
-                    task=task,
-                    context=context,
-                    recorder=recorder,
-                    events=events,
-                    bridge=bridge,
-                )
-            except NotImplementedError as exc:
-                emit(f"Streaming unavailable for {agent_transport}: {exc}")
-                emit("Falling back to request/response task execution.")
-                delivery = await _send_task_once(client, deck["architect"].card.url, task)
-        else:
-            emit("AgentClient sent the user task to Architect.")
-            emit("Architect is processing the request/response task.")
-            delivery = await _send_task_once(client, deck["architect"].card.url, task)
-
-        status = str(delivery.get("status") or "completed")
-        transport_task_status = status
-        raw_answer = delivery.get("content")
-        final_context = _context_from_delivery(delivery) or context
-        emit("Architect returned a final task response.")
-
-        answer = _content_to_text(raw_answer)
-        if not answer:
-            answer = (
-                f"Task canceled: {final_context.cancel_reason or bridge.cancel_reason() or 'canceled by user'}"
-                if status == "canceled"
-                else "(model returned an empty response)"
-            )
-
-        previews = _approval_previews(bridge.approval_requests)
-        events.extend(
-            _approval_event_summaries(bridge.approval_requests, bridge.approval_decisions)
-        )
-        verification_report = verification.report()
-        for result in verification_report["results"]:
-            await recorder.emit(
-                RunEvent(
-                    type="verification.result",
-                    run_id=context.run_id,
-                    task_id=task.id,
-                    agent_name="verifier",
-                    summary=f"{result['command']}: exit {result['exit_code']}",
-                    payload=result,
-                )
-            )
-        run_events = _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY)
-        completion = validate_run_completion(
-            contract,
-            answer=answer,
-            status=status,
-            run_events=run_events,
-            approval_requests=bridge.approval_requests,
-            diff_items=previews["diffs"],
-        )
-        if completion.outcome == "incomplete":
-            missing = " ".join(completion.missing)
-            emit(f"Run contract incomplete: {missing}")
-            answer = (
-                "Runtime completion guard: the model ended before satisfying the "
-                f"required worker/artifact contract. {missing}\n\n{answer}"
-            )
-            status = "incomplete"
-        elif completion.outcome == "blocked":
-            emit("Run contract blocked: model reported an explicit blocker before writing.")
-            status = "blocked"
-        elif completion.outcome == "satisfied":
-            emit("Run contract satisfied by Coder delegation or write artifact.")
-
-        if (
-            contract.requires_write
-            or contract.task_kind == "workspace-verification"
-            or verification_report["results"]
-            or any(
-                "shell.execute" in request.get("action", {}).get("capabilities", [])
-                for request in bridge.approval_requests
-            )
-        ):
-            answer += "\n\n" + verification_summary(verification_report)
-
-        run_report = _run_report_to_dict(
-            recorder,
-            context=final_context,
-            final_task=delivery.get("task"),
-            provider=provider,
-            model=model,
-            metadata={
-                "transport_task_status": transport_task_status,
-                "application_status": status,
-                "run_contract": contract.to_dict(),
-                "completion_validation": completion.to_dict(),
-                "verification": verification_report,
+                emit(f"Compacted {report['agent']} conversation history.")
+        emit(f"Runtime: ProtoLink AgentGroup; {transport} worker transport; {provider} / {model}.")
+        emit(f"Project: {project}. Run: {context.run_id}. Repair limit: 2.")
+        coordinator = Agent(
+            card={
+                "name": "protoagent-workflow",
+                "description": "Application coding workflow",
+                "url": "runtime://protoagent-workflow",
             },
-            redaction_policy=DEFAULT_REDACTION_POLICY,
+            policy=CapabilityPolicy({"workflow.execute": "allow"}, default_effect="deny"),
+            expose_chat=False,
+            verbosity=0,
+            run_store=store,
         )
-        transport_report = _transport_report(client, deck, registry_transport)
-        client_metrics = transport_report.get("client", {}).get("metrics", {})
-        emit(
-            "ProtoLink transport metrics: "
-            f"{client_metrics.get('requests_started', 0)} request(s), "
-            f"{client_metrics.get('streams_started', 0)} stream(s), "
-            f"{client_metrics.get('retries', 0)} retry attempt(s)."
-        )
+        # The mesh owns its registry and agents. The workflow group owns only its
+        # controller and declares the already-running mesh as external resources.
+        async with AgentGroup(list(deck.values()), registry=registry, own_registry=True):
+            async with AgentGroup([coordinator], external_agents=list(deck.values())) as group:
+                workflow = CodingWorkflow(
+                    group=group,
+                    contract=contract,
+                    attempt=attempt,
+                    broker=broker,
+                    store=store,
+                    observe=observe,
+                    redaction=redaction,
+                    prompt=prompt,
+                )
 
-        return {
-            "provider": provider,
-            "model": model,
-            "responder": "architect",
-            "answer": answer,
-            "status": status,
-            "events": events,
-            "run_events": run_events,
-            "run_report": run_report,
-            "diffs": previews["diffs"],
-            "targets": previews["targets"],
-            "approval_requests": bridge.approval_requests,
-            "approval_decisions": bridge.approval_decisions,
-            "run_context": final_context.to_dict(),
-            "prompt_profile": prompt_profile,
-            "run_contract": contract.to_dict(),
-            "completion_validation": completion.to_dict(),
-            "transport_report": transport_report,
-            "verification": verification_report,
-        }
-    finally:
-        if cancellation_monitor is not None:
-            cancellation_monitor.cancel()
-            with suppress(asyncio.CancelledError):
-                await cancellation_monitor
-        if client is not None:
-            transport = client.transport
-            if transport is not None and hasattr(transport, "stop"):
-                with suppress(Exception):
-                    await transport.stop()
-        for agent in reversed(started_agents):
-            with suppress(Exception):
-                agent.stop()
-        if registry is not None:
-            with suppress(Exception):
-                registry.stop()
+                @coordinator.tool(capabilities=["workflow.execute"])
+                async def run_workflow() -> str:
+                    """Execute the application's bounded coding Graph once."""
+                    return await workflow.execute(context)
+
+                if reason := bridge.cancel_reason():
+                    context.cancel(reason).attach_to_task(task)
+                    task.cancel(reason)
+                handle = group.run(coordinator, task, redaction_policy=redaction)
+                if run_state is not None:
+                    run_state["handle"] = handle
+                controls = asyncio.create_task(bridge.serve(handle))
+                try:
+                    await observe(handle)
+                    result = await handle.result()
+                finally:
+                    controls.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await controls
+                native_report = result.report
+                evidence_task = workflow.task or result.task or task
+                evidence_report = store.trace_report(evidence_task, observed=native_report.events)
+                acceptance = await validate_completion(
+                    contract, evidence_task, evidence_report, attempt, broker
+                )
+                status = result.status
+                if workflow.uncertain or acceptance.completion["outcome"] == "uncertain":
+                    status = "uncertain"
+                elif status == "completed" and not acceptance.completion["satisfied"]:
+                    status = acceptance.completion["outcome"]
+                if result.error and status == "completed":
+                    status = "failed"
+                answer = _content_to_text(result.output) or workflow.answer
+                if status != "completed":
+                    detail = str(
+                        result.error
+                        or (
+                            result.task.metadata.get(
+                                "cancel_reason" if status == "canceled" else "error"
+                            )
+                            if result.task
+                            else None
+                        )
+                        or acceptance.completion["message"]
+                        or status
+                    )
+                    answer = f"Run {status}: {detail}\n\n{answer}".strip()
+                if (
+                    contract.requires_write
+                    or contract.task_kind == "workspace-verification"
+                    or acceptance.verification["results"]
+                ):
+                    answer += "\n\n" + verification_summary(acceptance.verification)
+                # Keep the handle's normalized terminal task; combine native child
+                # receipts for application inspection, without parsing wire events.
+                combined = store.trace_report(evidence_task, observed=native_report.events)
+                report = RunReport.from_events(
+                    combined.events,
+                    context=context,
+                    final_task=native_report.final_task,
+                    metadata={
+                        "application": "protoagent",
+                        "provider": provider,
+                        "model": model,
+                        "transport_task_status": result.status,
+                        "application_status": status,
+                        "run_contract": contract.to_dict(),
+                        "completion_validation": acceptance.completion,
+                        "verification": acceptance.verification,
+                    },
+                )
+                store.save_report(report, run_id=context.run_id, agent_name="architect")
+                transport_report = _transport_report(deck, registry_transport)
+        previews = _approval_previews(bridge.approval_requests)
+        return redaction.redact(
+            {
+                "provider": provider,
+                "model": model,
+                "responder": "architect",
+                "answer": answer or "(model returned an empty response)",
+                "status": status,
+                "events": events,
+                "run_events": [event.to_dict() for event in report.events],
+                "run_report": report.to_dict(),
+                "diffs": previews["diffs"],
+                "targets": previews["targets"],
+                "approval_requests": bridge.approval_requests,
+                "approval_decisions": bridge.approval_decisions,
+                "run_context": (
+                    RunContext.from_task(result.task) if result.task else context
+                ).to_dict(),
+                "prompt_profile": prompt_profile,
+                "run_contract": contract.to_dict(),
+                "completion_validation": acceptance.completion,
+                "verification": acceptance.verification,
+                "transport_report": transport_report,
+            }
+        )
 
 
 def _runtime_urls() -> dict[str, str]:
-    """Resolve runtime URLs for the Registry, client, and agents."""
+    """Resolve runtime URLs for the Registry and owned agents."""
     host = os.getenv("PROTOAGENT_RUNTIME_HOST", "127.0.0.1")
     return {
         "registry": _env_url("PROTOAGENT_REGISTRY_URL", "REGISTRY_URL") or _local_url(host),
-        "client": _env_url("PROTOAGENT_CLIENT_URL", "CLIENT_URL") or _local_url(host),
         "architect": _env_url("PROTOAGENT_ARCHITECT_URL", "ARCHITECT_AGENT_URL")
         or _local_url(host),
         "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
@@ -418,7 +376,11 @@ def _env_url(*names: str) -> str | None:
 
 
 def _local_url(host: str) -> str:
-    """Build a localhost URL with an available port."""
+    """Allocate an in-process identity or a localhost URL for the selected mesh."""
+    if _agent_transport() == "runtime":
+        import uuid
+
+        return f"runtime://protoagent-{uuid.uuid4().hex}"
     return f"http://{host}:{_free_port(host)}"
 
 
@@ -456,9 +418,9 @@ def _run_budget(provider: str, model: str, budget_type):
         )
     )
     return budget_type(
-        max_steps=_env_int("PROTOAGENT_RUN_MAX_STEPS"),
+        max_steps=_env_int("PROTOAGENT_RUN_MAX_STEPS") or 80,
         max_llm_calls=_env_int("PROTOAGENT_RUN_MAX_LLM_CALLS"),
-        max_tool_calls=_env_int("PROTOAGENT_RUN_MAX_TOOL_CALLS"),
+        max_tool_calls=_env_int("PROTOAGENT_RUN_MAX_TOOL_CALLS") or 80,
         max_runtime_seconds=_env_float("PROTOAGENT_RUN_MAX_SECONDS") or float(_runtime_timeout()),
         max_input_tokens=context_window,
         max_output_tokens=_env_int("PROTOAGENT_RUN_MAX_OUTPUT_TOKENS"),
@@ -470,7 +432,7 @@ def _run_budget(provider: str, model: str, budget_type):
     )
 
 
-def _trace_telemetry():
+def _trace_telemetry(redaction=None):
     """Create ProtoLink local telemetry when explicitly requested."""
     if os.getenv("PROTOAGENT_TRACE", "0").strip().lower() not in {"1", "true", "yes", "on"}:
         return None
@@ -478,10 +440,14 @@ def _trace_telemetry():
         from protolink import LocalTraceTelemetry
     except Exception:
         return None
-    raw_dir = os.getenv("PROTOAGENT_CONFIG_DIR")
-    config_dir = Path(raw_dir).expanduser() if raw_dir else Path.home() / ".protoagent"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    return LocalTraceTelemetry(path=config_dir / "traces.jsonl")
+    from .checkpoints import private_file
+    from .config import CONFIG_DIR
+    from .runtime_storage import output_redaction
+
+    policy = redaction or output_redaction()
+    return LocalTraceTelemetry(
+        path=private_file(CONFIG_DIR / "traces.jsonl"), redactor=policy.redact
+    )
 
 
 def _env_int(name: str) -> int | None:
@@ -541,31 +507,11 @@ def _streaming_enabled(transport: TransportName) -> bool:
     return transport != "http"
 
 
-def _authenticated_client_transport(
-    transport: TransportName,
-    url: str,
-    auth: AgentRuntimeAuth,
-    *,
-    timeout: int,
-):
-    """Create a ProtoLink client transport with the deck's runtime auth."""
-    configured = create_configured_transport(
-        transport,
-        url,
-        timeout=timeout,
-        authenticator=auth.authenticator,
-        credentials=auth.credentials,
-    )
-    if configured is None:  # pragma: no cover - concrete name cannot return None
-        raise RuntimeError(f"ProtoLink could not construct the {transport} client transport")
-    return configured
-
-
-def _transport_report(client, deck: dict[str, Any], registry_transport) -> dict[str, Any]:
+def _transport_report(deck: dict[str, Any], registry_transport) -> dict[str, Any]:
     """Return ProtoLink's structured transport configuration and live counters."""
     return {
         "registry": _transport_snapshot(registry_transport),
-        "client": _transport_snapshot(client.transport if client is not None else None),
+        "entry": "local RunHandle",
         "agents": {
             name: _transport_snapshot(getattr(agent, "transport", None))
             for name, agent in deck.items()
@@ -594,141 +540,10 @@ def _transport_snapshot(transport) -> dict[str, Any]:
     }
 
 
-async def _send_task_once(client, agent_url: str, task) -> Any:
-    """Send a task through ProtoLink's request/response client path."""
-    result_task = await client.send_task(agent_url=agent_url, task=task)
-    return {
-        "content": _normalize(result_task.get_last_part_content()),
-        "status": getattr(result_task.state, "value", result_task.state),
-        "task": _normalize(result_task),
-    }
-
-
-async def _send_task_streaming(
-    *,
-    client,
-    agent_url: str,
-    task,
-    context,
-    recorder,
-    events: list[str],
-    bridge: RuntimeBridge,
-) -> Any:
-    """Consume ProtoLink streaming events and return the final answer payload."""
-    from protolink import DEFAULT_REDACTION_POLICY
-
-    final_task: dict[str, Any] | None = None
-    final_content: Any = None
-    artifact_content: Any = None
-    final_status = "completed"
-
-    async for event in client.send_task_streaming(agent_url=agent_url, task=task):
-        payload = _normalize(event)
-        if not isinstance(payload, dict):
-            _append_event(events, f"Stream event: {_content_to_text(payload)}", bridge)
-            continue
-
-        if _is_llm_chunk_payload(payload):
-            continue
-
-        run_event = await recorder.record_task_event(event, context=context)
-        run_event_data = run_event.to_dict(redaction_policy=DEFAULT_REDACTION_POLICY)
-        summary = _run_event_summary(run_event_data)
-        if summary:
-            _append_event(events, summary, bridge, run_event=run_event_data)
-
-        event_type = payload.get("type")
-        if event_type == "task_error":
-            raise RuntimeError(payload.get("error_message") or "Agent stream returned an error")
-
-        if event_type == "task_status_update":
-            final_status = str(payload.get("new_state") or final_status)
-            metadata = payload.get("metadata", {})
-            if (
-                payload.get("final")
-                and isinstance(metadata, dict)
-                and isinstance(metadata.get("task"), dict)
-            ):
-                final_task = metadata["task"]
-            continue
-
-        if event_type == "task_artifact_update":
-            artifact = payload.get("artifact")
-            artifact_content = _item_last_part_content(artifact)
-            continue
-
-        if event_type == "task_llm_stream":
-            content = payload.get("content")
-            if payload.get("llm_event_type") == "llm_final" or payload.get("final"):
-                final_content = content
-
-    content = final_content
-    if final_task:
-        final_status = str(final_task.get("state") or final_status)
-        if final_status == "canceled":
-            content = None
-        else:
-            task_content = _task_last_part_content(final_task)
-            if task_content is not None:
-                content = task_content
-    elif artifact_content is not None:
-        content = artifact_content
-    return {"content": _normalize(content), "status": final_status, "task": final_task}
-
-
-def _normalize(value: Any) -> Any:
-    """Convert dataclasses and ProtoLink objects into plain containers."""
-    if hasattr(value, "to_dict"):
-        return _normalize(value.to_dict())
-    if is_dataclass(value):
-        return asdict(value)
-    if isinstance(value, dict):
-        return {key: _normalize(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_normalize(item) for item in value]
-    return value
-
-
-def _run_events_to_list(recorder, *, redaction_policy=None) -> list[dict[str, Any]]:
-    """Serialize recorded RunEvents for the Rust UI."""
-    return [event.to_dict(redaction_policy=redaction_policy) for event in recorder.events]
-
-
-def _run_report_to_dict(
-    recorder,
-    *,
-    context,
-    final_task: dict[str, Any] | None,
-    provider: str,
-    model: str,
-    metadata: dict[str, Any] | None = None,
-    redaction_policy=None,
-) -> dict[str, Any]:
-    """Build ProtoLink's durable application-facing run report."""
-    report_metadata = {
-        "application": "protoagent",
-        "interface": "rust-cli",
-        "provider": provider,
-        "model": model,
-    }
-    report_metadata.update(metadata or {})
-    report = recorder.to_report(
-        context=context,
-        final_task=final_task,
-        metadata=report_metadata,
-    )
-    return report.to_dict(redaction_policy=redaction_policy)
-
-
-def _is_llm_chunk_payload(payload: dict[str, Any]) -> bool:
-    """Return true for raw token chunks that should not become UI trace rows."""
-    return payload.get("type") == "task_llm_stream" and payload.get("llm_event_type") == "llm_chunk"
-
-
 def _append_event(
     events: list[str],
     message: str,
-    bridge: RuntimeBridge,
+    bridge: RuntimeBridge | None,
     *,
     run_event: dict[str, Any] | None = None,
 ) -> None:
@@ -740,13 +555,15 @@ def _append_event(
         limit = 120
     if len(events) < limit:
         events.append(message)
-        bridge.emit(message, run_event=run_event)
+        if bridge is not None:
+            bridge.emit(message, run_event=run_event)
     elif not events[-1].startswith("Stream trace limit reached"):
         limit_message = (
             f"Stream trace limit reached ({limit}); suppressing further event summaries."
         )
         events.append(limit_message)
-        bridge.emit(limit_message)
+        if bridge is not None:
+            bridge.emit(limit_message)
 
 
 def _run_event_summary(event: dict[str, Any]) -> str:
@@ -756,146 +573,6 @@ def _run_event_summary(event: dict[str, Any]) -> str:
     if payload.get("llm_event_type") == "llm_chunk":
         return ""
     return str(event.get("summary") or event.get("type") or "runtime event")
-
-
-def _context_from_delivery(delivery: dict[str, Any]):
-    """Read the final serialized RunContext returned by Protolink."""
-    from protolink import RunContext
-
-    task = delivery.get("task")
-    if not isinstance(task, dict):
-        return None
-    metadata = task.get("metadata")
-    if not isinstance(metadata, dict) or not isinstance(metadata.get("run_context"), dict):
-        return None
-    return RunContext.from_dict(metadata["run_context"])
-
-
-async def _monitor_cancellation(
-    *,
-    bridge: RuntimeBridge,
-    client,
-    agent=None,
-    agent_url: str,
-    task_id: str,
-    emit,
-) -> None:
-    """Forward a Rust cancellation signal through Protolink's control plane."""
-    from protolink import TaskCancellationRequest, TaskNotCancelableError, TaskNotFoundError
-
-    while True:
-        reason = bridge.cancel_reason()
-        if not reason:
-            await asyncio.sleep(0.08)
-            continue
-        request = TaskCancellationRequest(
-            id=task_id,
-            reason=reason,
-            metadata={"requested_by": "protoagent-tui"},
-        )
-        accepted = False
-        if agent is not None:
-            try:
-                await agent.cancel_task(request)
-                accepted = True
-            except TaskNotCancelableError:
-                emit(f"Cancellation arrived after task {task_id} reached a terminal state.")
-                return
-            except TaskNotFoundError:
-                pass
-            except Exception:
-                pass
-        try:
-            if not accepted:
-                await client.cancel_task(
-                    agent_url=agent_url,
-                    task_id=task_id,
-                    reason=reason,
-                    metadata=request.metadata,
-                )
-                accepted = True
-        except TaskNotCancelableError:
-            emit(f"Cancellation arrived after task {task_id} reached a terminal state.")
-            return
-        except Exception:
-            await asyncio.sleep(0.08)
-            continue
-        if accepted:
-            emit(f"Cancellation accepted for task {task_id}: {reason}.")
-            return
-
-
-def _preflight_cancellation_result(
-    *,
-    bridge: RuntimeBridge,
-    context,
-    task,
-    recorder,
-    events: list[str],
-    emit,
-    provider: str,
-    model: str,
-) -> dict[str, Any] | None:
-    """Return a canceled result when the application canceled before task submission."""
-    from protolink import DEFAULT_REDACTION_POLICY
-
-    reason = bridge.cancel_reason()
-    if not reason:
-        return None
-    canceled_context = context.cancel(reason)
-    canceled_context.attach_to_task(task)
-    task.cancel(reason)
-    emit(f"Task canceled before model execution: {reason}.")
-    return {
-        "provider": provider,
-        "model": model,
-        "responder": "architect",
-        "answer": f"Task canceled: {reason}",
-        "status": "canceled",
-        "events": events,
-        "run_events": _run_events_to_list(recorder, redaction_policy=DEFAULT_REDACTION_POLICY),
-        "run_report": _run_report_to_dict(
-            recorder,
-            context=canceled_context,
-            final_task=task.to_dict(),
-            provider=provider,
-            model=model,
-            metadata={
-                "transport_task_status": "canceled",
-                "application_status": "canceled",
-            },
-            redaction_policy=DEFAULT_REDACTION_POLICY,
-        ),
-        "diffs": [],
-        "targets": [],
-        "approval_requests": bridge.approval_requests,
-        "approval_decisions": bridge.approval_decisions,
-        "run_context": canceled_context.to_dict(),
-    }
-
-
-def _task_last_part_content(task_payload: dict[str, Any]) -> Any:
-    """Extract the last part content from a serialized ProtoLink Task."""
-    for collection in ("artifacts", "messages"):
-        items = task_payload.get(collection, [])
-        if items:
-            content = _item_last_part_content(items[-1])
-            if content is not None:
-                return content
-    return None
-
-
-def _item_last_part_content(item: Any) -> Any:
-    """Extract the last part content from a serialized Message or Artifact."""
-    if not isinstance(item, dict):
-        return None
-    parts = item.get("parts", [])
-    if not parts:
-        return None
-    last_part = parts[-1]
-    if isinstance(last_part, dict):
-        return last_part.get("content")
-    return None
 
 
 def _content_to_text(content: Any) -> str:
@@ -929,11 +606,24 @@ def _approval_previews(requests: list[dict[str, Any]]) -> dict[str, list[Any]]:
         payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
         raw_arguments = payload.get("arguments")
         arguments: dict[str, Any] = raw_arguments if isinstance(raw_arguments, dict) else {}
-        path = str(metadata.get("path") or arguments.get("path") or "")
+        recovery = payload.get("recovery", {})
+        before = recovery.get("before", recovery.get("change", {}).get("before", {}))
+        path = str(
+            metadata.get("path")
+            or arguments.get("path")
+            or before.get("revision", {}).get("resource_id")
+            or ""
+        )
         if path:
             targets.append(path)
         for artifact in action.get("artifacts") or []:
-            if not isinstance(artifact, dict) or artifact.get("media_type") != "text/x-diff":
+            if not isinstance(artifact, dict) or not (
+                artifact.get("media_type") == "text/x-diff"
+                or (
+                    artifact.get("kind") == "preview"
+                    and artifact.get("metadata", {}).get("preimage")
+                )
+            ):
                 continue
             for part in artifact.get("parts") or []:
                 if not isinstance(part, dict) or not isinstance(part.get("content"), str):
@@ -942,24 +632,6 @@ def _approval_previews(requests: list[dict[str, Any]]) -> dict[str, list[Any]]:
                 if diff.strip():
                     diffs.append({"path": path, "diff": diff, "source": "coder"})
     return {"targets": sorted(set(targets)), "diffs": _dedupe_diffs(diffs)}
-
-
-def _approval_event_summaries(
-    requests: list[dict[str, Any]],
-    decisions: list[dict[str, Any]],
-) -> list[str]:
-    """Build concise history entries from typed approval records."""
-    by_request = {str(item.get("request_id") or ""): item for item in decisions}
-    summaries = []
-    for request in requests:
-        request_id = str(request.get("request_id") or "")
-        raw_action = request.get("action")
-        action: dict[str, Any] = raw_action if isinstance(raw_action, dict) else {}
-        name = str(action.get("description") or action.get("name") or "runtime action")
-        decision = by_request.get(request_id, {})
-        outcome = "approved" if decision.get("approved") else "denied"
-        summaries.append(f"Approval {outcome}: {name}.")
-    return summaries
 
 
 def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -973,3 +645,111 @@ def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:
         seen.add(key)
         unique.append(item)
     return unique
+
+
+def run_recovery(workspace: str, change_id: str, session_id=None, progress_path=None):
+    """Run an exact approved native restoration without constructing a model."""
+    from protolink import AgentGroup, ApprovalBroker, RunContext, Task
+    from protolink.storage import SQLiteStorage
+
+    from . import config
+    from .agents.coder import create_coder_agent
+    from .checkpoints import checkpoint_store, select_change, workspace_writer
+    from .runtime_policy import RunAuthorization
+    from .runtime_storage import ApplicationRunStore, output_redaction
+
+    bridge = RuntimeBridge(progress_path)
+    submitted = False
+
+    async def restore():
+        nonlocal submitted
+        context = RunContext(
+            session_id=session_id, workspace_uri=Path(workspace).resolve().as_uri()
+        )
+        context.trace_id = context.run_id
+        authorization = RunAuthorization(context)
+        redaction = output_redaction()
+        with workspace_writer(workspace):
+            checkpoints = checkpoint_store(workspace)
+            selected = select_change(checkpoints, change_id, workspace)
+            store = ApplicationRunStore(
+                config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite", redaction
+            )
+            broker = ApprovalBroker(
+                storage=SQLiteStorage(
+                    store.db_path, table_name="approvals", namespace=context.run_id
+                ),
+                timeout_seconds=float(_runtime_timeout()),
+            )
+            bridge.bind(broker, authorization, redaction)
+            agent = create_coder_agent(
+                workspace=workspace,
+                transport=None,
+                tool_only=True,
+                checkpoints=checkpoints,
+                approval_handler=broker,
+                authorization=authorization,
+            )
+            task = Task.create_tool_call(
+                tool_name="restore_change", args={"change_id": selected.change_id}
+            )
+            if reason := bridge.cancel_reason():
+                context.cancel(reason).attach_to_task(task)
+                task.cancel(reason)
+            else:
+                context.attach_to_task(task)
+            async with AgentGroup([agent]) as group:
+                handle = group.run(agent, task, store=store, redaction_policy=redaction)
+                submitted = True
+                controls = asyncio.create_task(bridge.serve(handle))
+                try:
+                    async for event in handle.events():
+                        bridge.emit(_run_event_summary(event.to_dict()), run_event=event.to_dict())
+                    result = await handle.result()
+                finally:
+                    controls.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await controls
+            record = checkpoints.get(selected.change_id)
+            restored = (
+                result.status == "completed" and record is not None and record.state == "restored"
+            )
+            uncertain = record is not None and record.state in {"restoring", "uncertain"}
+            status = (
+                "answered"
+                if restored
+                else "uncertain"
+                if uncertain
+                else result.status
+                if result.status != "completed"
+                else "blocked"
+            )
+            return redaction.redact(
+                {
+                    "status": status,
+                    "answer": f"Restored {selected.before.revision.resource_id} from {selected.change_id}."
+                    if restored
+                    else f"Undo {status}: {result.error or (result.task.metadata.get('error') if result.task else None) or 'inspect the recovery record before requesting new work'}",
+                    "file_target": selected.before.revision.resource_id,
+                    "run_context": (
+                        RunContext.from_task(result.task) if result.task else context
+                    ).to_dict(),
+                    "approval_requests": bridge.approval_requests,
+                    "approval_decisions": bridge.approval_decisions,
+                    "run_report": result.report.to_dict(),
+                    "run_events": [event.to_dict() for event in result.report.events],
+                }
+            )
+
+    try:
+        return asyncio.run(restore())
+    except Exception as exc:
+        return {
+            "status": "uncertain" if submitted else "blocked",
+            "answer": f"Undo interrupted after submission: {exc}. Inspect the resource and checkpoint before requesting new work."
+            if submitted
+            else f"Undo was not submitted: {exc}",
+            "file_target": "",
+        }
+    finally:
+        bridge.cleanup()

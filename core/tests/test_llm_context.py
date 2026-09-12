@@ -79,9 +79,14 @@ class OllamaContextTests(unittest.TestCase):
         self.assertTrue(report["auth_ready"])
         self.assertTrue(report["transport_ready"])
         self.assertTrue(report["web_tools_ready"])
+        self.assertTrue(report["agent_ready"], report["error"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")
         self.assertEqual(auth.authenticator.__class__.__module__, "protolink.security.auth")
+
+    def test_readiness_requires_native_execution_tools_without_running_them(self) -> None:
+        with patch("protolink.tools.builtins.process_tool", None):
+            self.assertFalse(validate_protolink()["agent_ready"])
 
     def test_context_window_honors_protoagent_environment_override(self) -> None:
         with patch.dict(os.environ, {"PROTOAGENT_OLLAMA_NUM_CTX": "16384"}, clear=False):

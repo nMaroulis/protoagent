@@ -58,17 +58,6 @@ _VERIFICATION_PREFIX = re.compile(
     r"^\s*(?:please\s+)?(?:run|execute|verify|check|build|test|lint)\b", re.IGNORECASE
 )
 _GREETING = re.compile(r"^\s*(hi|hello|hey|thanks|thank you)\W*$", re.IGNORECASE)
-_BLOCKER_HINTS = (
-    "blocked",
-    "can't proceed",
-    "cannot proceed",
-    "could not proceed",
-    "need clarification",
-    "need more context",
-    "no path",
-    "not enough context",
-    "unable to proceed",
-)
 
 
 @dataclass(frozen=True)
@@ -89,27 +78,6 @@ class RunContract:
         data = asdict(self)
         data["expected_workers"] = list(self.expected_workers)
         data["expected_artifacts"] = list(self.expected_artifacts)
-        return data
-
-
-@dataclass(frozen=True)
-class CompletionValidation:
-    """Result of comparing a completed ProtoLink run with its contract."""
-
-    outcome: str
-    satisfied: bool
-    used_explorer: bool
-    used_coder: bool
-    approval_requested: bool
-    diff_present: bool
-    explicit_blocker: bool
-    message: str
-    missing: tuple[str, ...] = ()
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serializable validation report."""
-        data = asdict(self)
-        data["missing"] = list(self.missing)
         return data
 
 
@@ -138,7 +106,7 @@ def infer_run_contract(user_prompt: str) -> RunContract:
     expected_workers = ("explorer", "coder") if write_intent else ("explorer",)
     if verification_intent:
         expected_workers = ("explorer", "verifier")
-    expected_artifacts = ("approval_request", "diff_preview") if write_intent else ()
+    expected_artifacts = ("executed_file_change", "resource_revision") if write_intent else ()
     return RunContract(
         task_kind=(
             "workspace-change"
@@ -153,8 +121,8 @@ def infer_run_contract(user_prompt: str) -> RunContract:
         expected_workers=expected_workers,
         expected_artifacts=expected_artifacts,
         completion_rule=(
-            "Workspace changes must reach Coder, a write approval/diff preview, "
-            "or an explicit blocker before the run is terminal."
+            "Workspace changes require an executed native file change at its current "
+            "resource revision; approval alone cannot satisfy completion."
             if write_intent
             else "Repository questions should use evidence, but no write artifact is required."
         ),
@@ -163,93 +131,6 @@ def infer_run_contract(user_prompt: str) -> RunContract:
             if write_intent
             else "Prompt reads as analysis or explanation rather than modification."
         ),
-    )
-
-
-def validate_run_completion(
-    contract: RunContract,
-    *,
-    answer: str,
-    status: str,
-    run_events: list[Any],
-    approval_requests: list[Any],
-    diff_items: list[Any],
-) -> CompletionValidation:
-    """Validate a finished run against a ``RunContract``."""
-    if status == "canceled":
-        return CompletionValidation(
-            outcome="canceled",
-            satisfied=True,
-            used_explorer=False,
-            used_coder=False,
-            approval_requested=False,
-            diff_present=False,
-            explicit_blocker=False,
-            message="Run was canceled before completion validation.",
-        )
-
-    used_explorer = _used_agent(run_events, "explorer")
-    used_coder = _used_agent(run_events, "coder")
-    approval_requested = any(
-        isinstance(request, dict)
-        and isinstance(request.get("action"), dict)
-        and "workspace.write" in (request["action"].get("capabilities") or [])
-        for request in approval_requests
-    )
-    diff_present = _has_diff(diff_items)
-    explicit_blocker = _has_blocker(answer)
-
-    missing: list[str] = []
-    if contract.requires_coder and not (used_coder or approval_requested or diff_present):
-        missing.append(
-            "Coder worker was required but no Coder delegation or write artifact appeared."
-        )
-    if contract.requires_write and not (approval_requested or diff_present):
-        missing.append(
-            "Workspace write was required but no approval request or diff preview appeared."
-        )
-
-    if missing and explicit_blocker:
-        return CompletionValidation(
-            outcome="blocked",
-            satisfied=True,
-            used_explorer=used_explorer,
-            used_coder=used_coder,
-            approval_requested=approval_requested,
-            diff_present=diff_present,
-            explicit_blocker=True,
-            message="Run ended with an explicit blocker instead of a write artifact.",
-            missing=tuple(missing),
-        )
-
-    if missing:
-        return CompletionValidation(
-            outcome="incomplete",
-            satisfied=False,
-            used_explorer=used_explorer,
-            used_coder=used_coder,
-            approval_requested=approval_requested,
-            diff_present=diff_present,
-            explicit_blocker=explicit_blocker,
-            message="Run ended before satisfying the required worker/artifact contract.",
-            missing=tuple(missing),
-        )
-
-    outcome = "satisfied" if contract.requires_write else "not-required"
-    message = (
-        "Run satisfied the required write completion contract."
-        if contract.requires_write
-        else "Run did not require a write completion contract."
-    )
-    return CompletionValidation(
-        outcome=outcome,
-        satisfied=True,
-        used_explorer=used_explorer,
-        used_coder=used_coder,
-        approval_requested=approval_requested,
-        diff_present=diff_present,
-        explicit_blocker=explicit_blocker,
-        message=message,
     )
 
 
@@ -265,41 +146,3 @@ def _has_write_intent(prompt: str) -> bool:
     if tokens.intersection(_WRITE_HINTS):
         return True
     return any(hint in text for hint in _WRITE_NOUN_HINTS)
-
-
-def _used_agent(run_events: list[Any], agent_name: str) -> bool:
-    agent_name = agent_name.lower()
-    for event in run_events:
-        if not isinstance(event, dict):
-            continue
-        raw_payload = event.get("payload")
-        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-        raw_metadata = payload.get("metadata")
-        metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
-        llm_type = str(payload.get("llm_event_type") or "").lower()
-        if (
-            llm_type == "agent_call_start"
-            and str(metadata.get("agent") or "").lower() == agent_name
-        ):
-            return True
-        if str(event.get("agent_name") or "").lower() == agent_name and llm_type in {
-            "tool_start",
-            "llm_step",
-            "llm_final",
-        }:
-            return True
-    return False
-
-
-def _has_diff(diff_items: list[Any]) -> bool:
-    for item in diff_items:
-        if isinstance(item, dict) and str(item.get("diff") or "").strip():
-            return True
-        if isinstance(item, str) and item.strip():
-            return True
-    return False
-
-
-def _has_blocker(answer: str) -> bool:
-    text = answer.lower()
-    return any(hint in text for hint in _BLOCKER_HINTS)

@@ -47,7 +47,7 @@ Reasoning discipline:
 - Do not reveal hidden chain-of-thought; summarize decisions briefly.
 
 Operating style:
-- Use the exact agent names `explorer`, `coder`, and `verifier`. Call Verifier run_command directly; no infer loop.
+- Use the exact agent names `explorer`, `coder`, and `verifier`. Call Verifier execute_command directly; no infer loop.
 - Use `scout` only when the base prompt says it is enabled and registry discovery lists it.
 - Trust Context Loom for broad orientation, but ask Explorer for exact files before edits.
 - For code changes, send Coder a narrow objective, exact paths when known, and the smallest required context.
@@ -67,7 +67,7 @@ Reasoning discipline:
 - If required source context is missing, ask for it instead of guessing.
 
 Operating style:
-- Use `generate_unified_diff` for replacements and `create_new_file` for new files.
+- Use `replace_file` for replacements and `create_file` for new files, with absolute project paths.
 - Preserve existing style and avoid opportunistic refactors.
 - Keep the final note short and name the touched path(s).""",
             "scout": """Prompt profile: Small local model.

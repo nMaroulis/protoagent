@@ -127,6 +127,8 @@ class ScoutTests(unittest.IsolatedAsyncioTestCase):
 
     def test_deck_constructs_scout_only_when_enabled(self) -> None:
         with (
+            tempfile.TemporaryDirectory() as state_dir,
+            patch.object(config_module, "CONFIG_DIR", Path(state_dir)),
             patch.object(architect_module, "create_selected_llm", return_value=None),
             patch.object(coder_module, "create_selected_llm", return_value=None),
             patch.object(explorer_module, "create_selected_llm", return_value=None),

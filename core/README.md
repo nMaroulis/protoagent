@@ -3,25 +3,24 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Current package version: `0.2.1`. The source of truth is
+Current package version: `0.2.2`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.6.9 or newer with the HTTP/SSE transport and LLM extras so
-the embedded Agent runtime can import streaming agents, lifecycle-aware task
-status events, recursive stream serialization, history compaction, metrics,
-state operations, run reports, context manifests, provider clients, and the
-shared transport limits/health/metrics contract. ProtoLink 0.6.9 also provides
-the first-party web tools used by optional Scout:
+Install ProtoLink 0.7.0 or newer with the HTTP and LLM extras:
 
 ```bash
-pip install "protolink[http,llms]>=0.6.9"
+pip install "protolink[http,llms]>=0.7.0"
 ```
+
+Recoverable Coder writes require POSIX. The runtime uses the native execution,
+approval, lifecycle, recovery and completion APIs; ProtoAgent owns coding roles,
+context, configuration, acceptance criteria and terminal presentation.
 
 ## Layout
 
 - `protoagent_core/agent_engine.py` - PyO3-facing functions for prompts, model discovery, config, and doctor checks.
 - `protoagent_core/_version.py` - Runtime version metadata and component version inventory for the CLI.
-- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It attaches `RunContext`/`RunBudget` plus a task `RunContract`, records `RunEvent`s with `RunRecorder`, validates completion, can write local ProtoLink traces, and sends tasks to Architect with `AgentClient`.
+- `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It configures `AgentGroup`, `RunHandle`, native storage, scoped approvals and reports.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic Architect token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
@@ -31,25 +30,33 @@ pip install "protolink[http,llms]>=0.6.9"
 - `protoagent_core/quality_eval.py` - Fixed prompt-profile benchmark tasks and scoring helpers.
 - `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
 - `protoagent_core/agents/` - ProtoLink Architect, Explorer, Coder, Verifier, and optional Scout factories. Architect is the stateful controller; all workers are task-local and stateless.
-- `protoagent_core/run_contracts.py` - Runtime task classification and completion validation for required workers, approval requests, and diff artifacts.
-- `protoagent_core/tools.py` - Workspace-safe exploration, diff preview, and authorized write helpers.
+- `protoagent_core/run_contracts.py` - Application intent classification; native completion checks require execution receipts.
+- `protoagent_core/tools.py` - Application-specific workspace exploration helpers.
 
 ## Verification And File Recovery
 
-`agents/verifier.py` registers `run_command` through ProtoLink with
-`shell.execute: require_approval`. `verification.py` supplies argv-based process
-execution, a 1–600 second timeout (120 default), 32 KiB output retention, and a
-per-run evidence accumulator. It is host execution, not a sandbox. ProtoLink
-owns agent delegation, task lifecycle, policy, budget checks, and cancellation.
-Measured outcomes appear in `verification.result` events and run report metadata.
+Verifier registers ProtoLink `process_tool()` as `execute_command`. Coder
+registers `filesystem_tools()` as `create_file`, `replace_file`, `preview_change`
+and `restore_change`. Both mutations and restoration require broker approval;
+commands require `process.execute` approval of the frozen specification.
 
-`checkpoints.py` retains exact pre-write bytes and modes for Coder mutations in
-private per-project SQLite ledgers. Action builders freeze the preview's target
-and preimage hash; writes and restore operations reject stale content.
-`checkpoint_inventory()` and `undo_checkpoint()` are JSON entrypoints for the
-CLI. Undo uses Coder's ProtoLink policy without an LLM. It covers one Coder file
-write at a time, not command side effects or a whole Git working tree, and is
-separate from ProtoLink conversation state.
+`workflow.py` uses Graph for an initial Architect attempt and at most two
+repairs. `verification.py` supplies native completion predicates over executed
+outcomes and current resource revisions. Approval and diff previews cannot
+satisfy completion. All edits precede checks within an attempt.
+
+`checkpoints.py` configures a private native `StorageCheckpointStore` and a
+single-writer lease. It contains no file mutation implementation. `/undo` needs
+no model. Native recovery requires POSIX and existing parent directories, rejects
+symlinks and changed revisions, and does not roll back command effects. Legacy
+v0.2.1 snapshots remain inspection-only in the original database.
+
+`runtime_storage.py` applies output redaction to native `SQLiteRunStore`
+persistence and composes same-trace worker receipts. ProtoLink 0.7.0 delegation
+does not merge child execution events into its parent report, so persisted native
+worker snapshots supply that evidence. RunReplay is read-only inspection.
+See the [runtime guide](../docs/content/core/runtime.md) and
+[verification/recovery manual](../docs/content/cli/verification-and-recovery.md).
 
 ## Provider Execution
 
@@ -88,9 +95,10 @@ Agent prompts are tuned through a configurable prompt profile:
 provider/model. The profile changes only the role instructions for the enabled
 LLM agents; ProtoLink still owns delegation, tools, memory, policies, runtime
 events, and reports. A ProtoAgent `RunContract` is inferred before the model
-runs, attached to `RunContext.metadata`, and later checked against worker usage,
-approval requests, and diff artifacts. Write tasks that finish without Coder,
-approval/diff artifacts, or an explicit blocker are returned as `incomplete`.
+runs, attached to `RunContext.metadata`, and checked with native
+`CompletionValidator`. Write tasks need an executed native change at its current
+revision. Missing or stale evidence remains incomplete; denials and uncertain
+effects stop repair routing.
 
 Prompt profile quality can be checked with the built-in eval harness:
 `proto-cli eval profiles` runs a scaffold smoke without contacting a model,
@@ -99,7 +107,7 @@ approvals auto-denied.
 
 Useful runtime switches:
 
-- `PROTOAGENT_STREAM=0` disables stream consumption and uses request/response.
+- `PROTOAGENT_STREAM=0` suppresses incremental UI summaries; native handles still consume execution once.
 - `PROTOAGENT_AGENT_TRANSPORT=http` forces the older HTTP-only agent mesh.
 - `PROTOAGENT_STREAM_TRACE_LIMIT=120` controls how many stream summaries are retained for the Rust UI.
 - `PROTOAGENT_TRACE=1` enables `LocalTraceTelemetry` JSONL traces at `~/.protoagent/traces.jsonl`.
@@ -120,19 +128,17 @@ current run.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.6.9's
+apply to the next run. When enabled, Scout receives ProtoLink 0.7.0's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless
 factual search. Registration itself performs no network request, and returned
 content is bounded and marked untrusted.
 
-Coder tools declare `workspace.write` and build `RunAction` objects with
-`Artifact(kind="preview", media_type="text/x-diff")`. ProtoLink policy pauses
-those actions and calls the Rust-owned approval handler before execution. The
-same control bridge forwards TUI cancellation through `AgentClient.cancel_task()`.
-The embedded in-process fast path uses the same typed `TaskCancellationRequest`
-and falls back to the transport control plane when needed.
+Coder tools declare `filesystem.write` and `filesystem.restore`; both require
+approval. The actual handler is `ApprovalBroker`. Rust presents the native
+preview and echoes the exact request ID/fingerprint. Application authentication
+constructs `ApprovalScope`; cancellation goes through `RunHandle.cancel()`.
 Agent policies are deny-by-default: Architect explicitly allows delegation and
 state operations, Explorer allows only read-only workspace capabilities, Coder
 requires approval for workspace writes, and Scout allows only `network.read`.

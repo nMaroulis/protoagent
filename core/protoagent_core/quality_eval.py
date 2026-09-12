@@ -144,7 +144,7 @@ EVAL_TASKS: tuple[EvalTask, ...] = (
         category="test-change",
         prompt=(
             "Add or strengthen a regression test proving a denied Coder "
-            "workspace.write approval leaves the target file unchanged."
+            "filesystem.write approval leaves the target file unchanged."
         ),
         expected_paths=("core/tests/test_runtime_integration.py",),
         requires_coder=True,
@@ -423,9 +423,7 @@ def _observations(response: dict[str, Any], task: EvalTask) -> dict[str, Any]:
     run_events = _list_or_empty(response.get("run_events"))
     return {
         "used_explorer": _used_agent(run_events, "explorer"),
-        "used_coder": _used_agent(run_events, "coder")
-        or bool(response.get("approval_requests"))
-        or bool(str(response.get("diff") or "").strip()),
+        "used_coder": _used_agent(run_events, "coder"),
         "approval_requested": bool(response.get("approval_requests")),
         "diff_present": bool(str(response.get("diff") or "").strip()),
         "docs_touched": any(_is_docs_path(path) for path in paths),
@@ -443,6 +441,11 @@ def _used_agent(run_events: list[Any], agent_name: str) -> bool:
         if not isinstance(event, dict):
             continue
         payload = _dict_or_empty(event.get("payload"))
+        if (
+            str(event.get("agent_name") or "").lower() == agent_name
+            and event.get("type") == "action.completed"
+        ):
+            return True
         metadata = _dict_or_empty(payload.get("metadata"))
         llm_type = str(payload.get("llm_event_type") or "").lower()
         if (
@@ -460,21 +463,19 @@ def _used_agent(run_events: list[Any], agent_name: str) -> bool:
 
 
 def _touched_paths(response: dict[str, Any]) -> set[str]:
+    """Count executed native file edits, never suggested paths or approval previews."""
     paths: set[str] = set()
-    target = str(response.get("file_target") or "")
-    for part in target.split(","):
-        cleaned = part.strip()
-        if cleaned:
-            paths.add(cleaned)
-    for request in _list_or_empty(response.get("approval_requests")):
-        if not isinstance(request, dict):
+    for event in _list_or_empty(response.get("run_events")):
+        if not isinstance(event, dict) or event.get("type") != "action.completed":
             continue
-        action = _dict_or_empty(request.get("action"))
-        metadata = _dict_or_empty(action.get("metadata"))
-        payload = _dict_or_empty(action.get("payload"))
-        arguments = _dict_or_empty(payload.get("arguments"))
-        path = str(metadata.get("path") or arguments.get("path") or "").strip()
-        if path:
+        payload = _dict_or_empty(event.get("payload"))
+        action = _dict_or_empty(payload.get("action"))
+        result = _dict_or_empty(payload.get("result"))
+        if action.get("name") not in {"create_file", "replace_file"}:
+            continue
+        resource = _dict_or_empty(result.get("resource"))
+        path = str(resource.get("resource_id") or "").strip()
+        if result.get("state") == "applied" and path:
             paths.add(path)
     return paths
 

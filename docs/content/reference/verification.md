@@ -21,7 +21,7 @@ repo-level `pyproject.toml`.
 GitHub Actions runs these Python quality checks on every push and pull request
 through `.github/workflows/python-quality.yml`.
 
-Run the Python unit tests:
+Run the provider-free Python integration tests (the SSE mesh test needs localhost binding):
 
 ```bash
 PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
@@ -30,6 +30,9 @@ PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
 Targeted tests:
 
 ```bash
+PYTHONPATH=core .venv/bin/python -m unittest discover -s core/tests -p test_native_runtime.py
+PYTHONPATH=core .venv/bin/python -m unittest discover -s core/tests -p test_checkpoints.py
+PYTHONPATH=core .venv/bin/python -m unittest discover -s core/tests -p test_verification.py
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_runtime_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_history_integration
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_llm_context

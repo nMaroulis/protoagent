@@ -33,6 +33,8 @@ pages that should usually move with them.
 | `core/protoagent_core/runtime.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/runtime_bridge.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/history.py` | `Core / State And Memory`, `CLI / Projects And Sessions` |
+| `core/protoagent_core/workflow.py`, `verification.py` | `Core / Runtime`, `CLI / Verify & Recover` |
+| `core/protoagent_core/runtime_policy.py`, `runtime_storage.py`, `checkpoints.py` | `Core / ProtoLink 0.7 Migration`, `Core / Safety And Tools` |
 | `core/protoagent_core/run_contracts.py` | `Core / Runtime`, `Core / Agent Deck`, `Core / Quality Evals` |
 | `core/protoagent_core/llm.py` | `Core / Config And Models`, `Reference / Environment` |
 | `core/protoagent_core/models.py` | `Core / Config And Models`, `CLI / Models And Config` |

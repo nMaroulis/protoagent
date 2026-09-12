@@ -58,7 +58,8 @@ The check report verifies:
 | Streaming support | `Agent.handle_task_streaming` and `AgentClient.send_task_streaming` |
 | Metrics and context events | `LLM.configure_metrics` and `LLMModelProfile` |
 | State APIs | `describe_state`, `compact_state`, `reset_state` |
-| Cancellation | `TaskCancellationRequest`, `Agent.cancel_task`, `AgentClient.cancel_task` |
+| Cancellation | `RunHandle.cancel` and native agent cancellation |
+| Native execution | `AgentGroup`, `ApprovalBroker`, filesystem/process tools, checkpoints and completion checks; probes do not run tools |
 | First-party web tools | `protolink.tools.web_search`, `fetch_url`, and `web_tools_ready` |
 | Agent manifest | `agents.deck.agent_manifest()` |
 

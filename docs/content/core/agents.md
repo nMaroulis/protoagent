@@ -24,10 +24,11 @@ Context Loom -> RunContract -> Architect -> Explorer/Coder/Verifier/(optional Sc
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
 requests, cancellation, authentication, and run reports. `run_contracts.py` classifies the
-original user request before the model runs and validates the result after the
-task stream finishes. Write tasks are returned as `incomplete` unless the trace
-contains Coder delegation, a write approval/diff artifact, or an explicit
-blocker.
+original user request before the model runs; `verification.py` supplies native
+completion checks after execution. Write tasks are returned as `incomplete` when the trace
+lacks an executed native file change at its current resource revision.
+Approval, preview and model prose never count as execution. Native Graph limits
+allow one initial attempt and at most two repairs after completed failing checks.
 
 ## Deck Assembly
 
@@ -166,42 +167,40 @@ Coder is the stateless worker that can prepare file modifications. It does not
 get Explorer's broad read/search tools. It is expected to receive enough context
 from Architect and Explorer for the current task.
 
-Tools:
+Tools registered directly from `protolink.tools.builtins.filesystem_tools()`:
 
 | Tool | Capability | Purpose |
 | --- | --- | --- |
-| `generate_unified_diff(path, updated_content, original_content=None)` | `workspace.write` | Replace a file after preview and approval. |
-| `restore_checkpoint(checkpoint_id="latest")` | `workspace.write` | Restore one approved checkpoint if the file still matches. |
-| `create_new_file(path, content)` | `workspace.write` | Create a file after preview and approval. |
+| `create_file(path, content)` | `filesystem.write` | Approved creation of an absent file |
+| `replace_file(path, content)` | `filesystem.write` | Approved replacement of an existing file |
+| `preview_change(change_id)` | `filesystem.read` | Inspect native recovery state, conflict and diff |
+| `restore_change(change_id)` | `filesystem.restore` | Separately approved restoration at the exact current revision |
 
-Policy:
+Both write and restore capabilities require approval; read is allowed and the
+default is deny. ProtoLink owns prepared diff artifacts, revision checks, exact
+preimages and checkpoint persistence. Paths must be absolute under the project
+root, without symlinks, with existing parents. These tools require POSIX.
 
-| Capability | Effect |
-| --- | --- |
-| `workspace.write` | require approval |
-| default | deny |
-
-The action builder creates a `RunAction` with a `text/x-diff` preview artifact.
-The write helper only executes after ProtoLink receives an approving
-`ApprovalDecision`. If a write task finishes without Coder, approval/diff
-artifacts, or an explicit blocker, runtime completion validation returns the run
-as `incomplete`.
+The Coder factory's `tool_only=True` mode skips model construction for CLI undo.
+The application supplies a dedicated `StorageCheckpointStore` and an
+`ApprovalBroker` as the actual approval handler.
 
 ## Verifier
 
-Source: `core/protoagent_core/agents/verifier.py`
+Verifier has `llm=None`, `state=[]` and `expose_chat=False`. It registers native
+`process_tool(max_timeout_seconds=600, max_output_bytes=32768)`.
+Architect calls `execute_command` directly with argv, absolute cwd, explicit env,
+timeout_seconds and max_output_bytes. `process.execute` requires approval.
 
-Verifier has `llm=None`, `state=[]`, no storage, and `expose_chat=False`.
-Architect calls `run_command(argv, cwd=".", timeout_seconds=120)` directly
-through ProtoLink. Its deny-by-default policy requires approval for
-`shell.execute`; the action includes the exact command preview. It returns
-actual output, exit status, timeout, truncation, and duration. Approval does not
-sandbox the subprocess or checkpoint its side effects.
+Native results include exit_code, stdout, stderr, timed_out, canceled, truncated,
+duration_seconds and budget_exceeded. ProtoLink owns execution and cleanup;
+commands run on the host without sandbox isolation. No environment is inherited.
 
-An application `VerificationEvidence` accumulator records outcomes by command,
-directory, and Coder change revision. It does not orchestrate agents. ProtoLink
-continues to own delegation, policy, cancellation, budgets, and reporting.
-[Verify & Recover](../cli/verification-and-recovery.md) describes the user flow.
+`verification.py` defines application acceptance using native `CompletionCheck`
+and `CompletionValidator`. `workflow.py` bounds repair attempts with Graph and
+keeps edits before checks in each attempt. No application process runner or
+integer file-change revision counter remains.
+See [Verify & Recover](../cli/verification-and-recovery.md).
 
 ## Scout
 
@@ -235,7 +234,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.6.9 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.7.0 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |
@@ -286,7 +285,7 @@ The CLI doctor and fallback paths use `agent_manifest()`:
 | Architect | stateful controller | stateful | `protoagent-architect` | none |
 | Explorer | stateless context worker | stateless | task-local | Context/read/search/git tools |
 | Coder | stateless write worker | stateless | task-local | diff/create/restore tools |
-| Verifier | tool-only command worker | stateless | none | `run_command` |
+| Verifier | tool-only command worker | stateless | none | `execute_command` |
 | Scout | optional tool-only web worker | stateless | none | `web_search`, `fetch_url` |
 
 The manifest also reports the runtime kernel, stateful pieces, stateless

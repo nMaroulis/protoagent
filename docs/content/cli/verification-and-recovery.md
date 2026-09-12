@@ -1,98 +1,130 @@
 ---
 title: Verify & Recover
-description: Approve real test commands, inspect measured results, and undo Coder changes.
+description: Inspect exact command approvals, native execution evidence, and recoverable file changes.
 ---
 
 ## Edit → verify → inspect
-
-Ask for the change and its acceptance check in one prompt:
 
 ```text
 > Fix the parser and run the relevant tests.
 ```
 
-Architect gathers repository evidence through Explorer, delegates edits to
-Coder, then invokes the tool-only **Verifier** through ProtoLink. It is instructed
-to use the project's actual test/build/lint command and make at most two focused
-repair attempts after failures. This retry limit is a prompt instruction; the
-ProtoLink run budget and each command's timeout bound execution.
+Architect gathers repository evidence, delegates edits to Coder, then calls
+Verifier's native `execute_command` tool. Each command requires a separate
+`process.execute` approval. Press **V** to inspect its argv, absolute working
+directory, explicit environment, timeout, output limit and host execution
+boundary. Scroll with arrows or PageUp/PageDown; return and press **Y** to
+approve or **N/Esc** to deny. The one-shot CLI prints the same preview.
 
-Each command pauses for its own `shell.execute` approval. Press **V** in the TUI
-approval modal to inspect the complete command, directory, and timeout; scroll
-with arrow keys or PageUp/PageDown. Return to the approval screen and press
-**Y** to run or **N/Esc** to deny. The one-shot CLI prints the same preview.
-
-```text
-Command preview
-python -m pytest tests/test_parser.py -q
-Directory: /your/project
-Timeout: 120s
-Runs project code with host access; may write files or use the network.
+```json
+{
+  "argv": ["/your/project/.venv/bin/python", "-m", "pytest", "tests/test_parser.py", "-q"],
+  "cwd": "/your/project",
+  "env": {},
+  "timeout_seconds": 120,
+  "max_output_bytes": 32768
+}
 ```
 
-Arguments are passed directly without shell expansion. Commands inherit the
-host environment and permissions. A project working directory is **not a
-sandbox**: approved project code can write elsewhere or access the network,
-including when Scout is off. Standard input is closed. Timeout is 120 seconds
-by default, adjustable by the tool call from 1 to 600 seconds. Combined output
-is streamed with a 32 KiB retention limit and terminal escape filtering.
+Arguments receive no implicit shell expansion. `env: {}` means an **empty
+environment**, not inherited credentials or PATH. Use an absolute executable
+or explicitly supply the PATH needed by the command. ProtoLink resolves and
+freezes the execution specification before approval. Registration runs nothing.
 
-Esc/Ctrl-C requests ProtoLink task cancellation. On POSIX, cancellation and
-timeout kill the command's process group; on other platforms the direct child
-is killed. Processes that deliberately detach are outside that guarantee.
+The local backend executes on the host, with the user's permissions. It can
+write outside the project or use the network, including with Scout disabled.
+A project working directory does not provide sandbox isolation. Standard input
+is closed. The application sets ceilings of **600 seconds** and **32 KiB combined
+stdout/stderr**. Architect is instructed to pass all limits explicitly, usually
+120 seconds; ProtoLink's tool default is 60 seconds. Native runtime budgets may
+stop execution sooner. Truncation, timeout, cancellation and duration remain in
+the structured result.
 
-## Read the result
+Esc/Ctrl-C goes through `RunHandle.cancel()`. ProtoLink cleans up POSIX process
+groups on cancellation, timeout and normal parent exit. Deliberately detached
+processes can escape this cleanup. Command effects have no automatic rollback.
 
-The final answer includes measured verification evidence for change tasks:
+## Completion and repairs
 
-| Status | Meaning |
+A write task needs an **executed native file change at its current revision**.
+A proposed diff, approval, delegation or model claim cannot satisfy that check.
+A requested verification needs an actual executed command.
+
+| Verification status | Meaning |
 | --- | --- |
-| `passed` | Latest execution of each recorded command passed for the current set of agent changes. |
-| `failed` | A current command failed to launch, timed out, or exited nonzero. |
-| `not-run` | No recorded command covers the current set of agent changes. |
+| `passed` | Latest recorded executions passed and their recorded resource revisions are current. |
+| `failed` | A recorded command failed or its execution evidence cannot be accepted. |
+| `stale` | A resource referenced by a check changed. |
+| `unverified` | No test/build command was executed. |
 
-A later Coder write or restore invalidates earlier checks. A successful retry
-replaces the earlier result for the same command and directory in the summary;
-both executions remain in the report. This tracks Coder mutations within the
-run, not external editors or every file a command might modify. A passing
-command says only that the command exited successfully, not that all behavior
-is correct. Results are emitted as ProtoLink `verification.result` events and
-included in `RunReport.metadata.verification`.
+Checks reference the native revisions of files changed by this run, captured
+when a command is proposed. An external edit to those files also invalidates
+the check. This does not track every repository input, dependency or file a
+command can modify. A passing exit status is evidence for that command, not a
+proof that all behavior is correct. A write can be applied but remain unverified.
+
+All edits happen before checking within an attempt. Once a command is proposed,
+further file mutations are denied for that attempt. A native **Graph** permits
+one initial attempt and at most **two repair attempts** after completed nonzero
+checks. Its limits are enforced in code and share native workflow budgets.
+Denials, stale revisions, timeouts, interrupted effects and missing evidence
+stop repair routing. Transport retries are separate; task submissions are never
+automatically replayed after a lost response.
+
+The report retains every native receipt and each `validation.completed` result.
+A newer execution replaces older evidence only for the same argv, directory
+and environment in the displayed command summary. Inspect `failed`, `blocked`,
+`canceled`, `incomplete` or `uncertain` runs before requesting new work.
 
 ## Recover a file
-
-Every changed file written by Coder receives a checkpoint before its bytes are
-replaced. Checkpoints retain the previous bytes and permission bits, including
-uncommitted content that existed before the agent edit.
 
 ```text
 /checkpoints
 /undo
-/undo <checkpoint-id>
+/undo <change-id>
 ```
-
-Shell equivalents:
 
 ```bash
 proto-cli checkpoints
 proto-cli undo
-proto-cli undo <checkpoint-id>
+proto-cli undo <change-id>
 ```
 
-`/checkpoints` lists the latest 50 active snapshots for the selected project.
-`/undo` selects the latest snapshot and shows the reverse diff. Selection is
-fixed before approval. Recovery uses Coder's ProtoLink `workspace.write` tool
-and approval policy and needs no model or API key. Undoing a newly created file
-removes it; undoing a replacement restores its original content and mode.
+Coder registers ProtoLink's `create_file`, `replace_file`, `preview_change` and
+`restore_change`. Both `filesystem.write` and `filesystem.restore` require
+approval. Native tools save original bytes and mode before mutation, including
+preexisting uncommitted content. Undo needs no model: `/undo` resolves the latest
+applied change before asking for approval of its reverse diff.
 
-If the file changed after the agent write, undo refuses to overwrite it. Review
-and reconcile that file manually before trying recovery. File writes also
-recheck their preimage after approval, so an old preview cannot silently
-overwrite an edit made while the approval screen was open.
+Restoring a new file removes it; restoring a replacement restores its original
+bytes and mode. A changed revision causes a conflict, even if the contents look
+similar. An approval-time edit also invalidates a prepared write or restoration.
+**Chained undo is conservative:** restoring the latest edit changes the file's
+identity, so an older checkpoint for that same file may conflict. Reconcile it
+manually; do not force an overwrite.
 
-Snapshots live in a project-specific SQLite ledger under
-`${PROTOAGENT_CONFIG_DIR:-~/.protoagent}/checkpoints/`. They cover individual
-Coder writes, not entire tasks, Git state, or files modified by commands.
-Undo related writes in reverse order. Snapshots are separate from ProtoLink
-conversation memory and survive `/context reset`. An interrupted or failed
-write can leave a snapshot whose content check prevents restoration.
+`/checkpoints` shows the latest 50 native records with their states, plus retained
+legacy records. `prepared`, `restoring` and `uncertain` require inspection: the
+effect may already have happened. ProtoAgent does not replay them. Applied
+records remain subject to a fresh revision check when restoration is requested.
+
+## Storage and platform boundaries
+
+Native recovery lives under `${PROTOAGENT_CONFIG_DIR:-~/.protoagent}/recovery/`.
+Each canonical project has a dedicated `StorageCheckpointStore` over
+`SQLiteStorage`; one live writer holds a project lease. Storage directories use
+mode 0700 and files use 0600. Native run snapshots, reports and broker records
+are stored separately under `runs/`. Known configured credentials are redacted
+from output and reports; arbitrary secrets printed by project code may remain.
+Approval and recovery storage contains sensitive original data and stays private.
+
+Recoverable filesystem tools require **POSIX**, absolute paths under explicit
+allowed roots, existing parent directories and no symlink components. Native
+new files default to mode 0600. Creating directories requires a separately
+approved host command and a later edit run. Recovery covers individual Coder
+changes, not Git state, whole tasks or command side effects. `/context reset`
+does not delete recovery records.
+
+The old **v0.2.1** database under `checkpoints/` is preserved unchanged. Its
+entries appear as `legacy` and are inspection-only: they lack native resource
+revisions and cannot be safely imported as executed ProtoLink changes.

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import difflib
 import os
 import re
 import subprocess
@@ -194,67 +193,6 @@ def get_git_status(workspace: str | None = None) -> dict[str, Any]:
         "success": result.returncode == 0,
         "status": result.stdout.splitlines(),
         "error": result.stderr.strip(),
-    }
-
-
-def generate_unified_diff(
-    path: str,
-    updated_content: str,
-    original_content: str | None = None,
-    workspace: str | None = None,
-) -> dict[str, Any]:
-    """Generate a unified-diff preview for a file replacement."""
-    target = safe_path(path, workspace)
-    if original_content is None:
-        if target.exists():
-            original = read_file(str(target), workspace, with_line_numbers=False)
-            if not original.get("success"):
-                return original
-            original_content = original.get("raw_content", "")
-        else:
-            original_content = ""
-
-    rel = to_relative(target, workspace)
-    diff = "".join(
-        difflib.unified_diff(
-            original_content.splitlines(True),
-            updated_content.splitlines(True),
-            fromfile=f"a/{rel}",
-            tofile=f"b/{rel}",
-        )
-    )
-    return {
-        "success": True,
-        "path": rel,
-        "diff": diff,
-    }
-
-
-def create_new_file(path: str, content: str, workspace: str | None = None) -> dict[str, Any]:
-    """Prepare a unified-diff preview for creating a new file."""
-    target = safe_path(path, workspace)
-    if target.exists():
-        return {"success": False, "error": f"File already exists: {path}"}
-    return generate_unified_diff(path, content, original_content="", workspace=workspace)
-
-
-def write_file(
-    path: str,
-    content: str,
-    workspace: str | None = None,
-    *,
-    overwrite: bool = True,
-) -> dict[str, Any]:
-    """Write a UTF-8 file after the caller has authorized the operation."""
-    target = safe_path(path, workspace)
-    if target.exists() and not overwrite:
-        raise FileExistsError(f"File already exists: {path}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
-    return {
-        "success": True,
-        "path": to_relative(target, workspace),
-        "bytes_written": len(content.encode("utf-8")),
     }
 
 

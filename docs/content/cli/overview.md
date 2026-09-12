@@ -109,7 +109,7 @@ The CLI presents the runtime as an agent deck:
    |
    +-.-> [SCOUT] optional tool-only network worker: web_search, fetch_url
    |
-   +--> [CODER] stateless write worker: diff preview, create_new_file
+   +--> [CODER] stateless write worker: native create/replace/preview/restore tools
    |
    v
 [POLICY + HUMAN APPROVAL] before writes land on disk

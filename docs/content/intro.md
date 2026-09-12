@@ -15,8 +15,8 @@ The current monorepo has three main product surfaces:
 
 | Surface | Path | Version | Status | Responsibility |
 | --- | --- | --- | --- | --- |
-| Rust CLI and TUI | `cli/` | `0.2.1` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
-| Python core | `core/protoagent_core/` | `0.2.1` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
+| Rust CLI and TUI | `cli/` | `0.2.2` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
+| Python core | `core/protoagent_core/` | `0.2.2` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
 | ACP server | `acp/` | `0.0.0-dev.0` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
 
 The rest of the repo supports those surfaces:
@@ -43,11 +43,10 @@ split into small, inspectable components:
    evidence pack before the model reasons.
 5. **State is deliberate.** Architect keeps durable conversation memory, while
    Explorer, Coder, Verifier, and optional Scout are task-local stateless workers.
-6. **Runs have contracts.** Write tasks must reach Coder, an approval/diff
-   artifact, or an explicit blocker before runtime marks them complete.
-7. **Writes are approval-gated.** Coder prepares `RunAction` objects with
-   `text/x-diff` preview artifacts. The Rust application decides whether the
-   action can execute.
+6. **Runs have contracts.** Write tasks need executed file changes at their
+   current native resource revisions. Approvals cannot satisfy completion.
+7. **Writes are approval-gated.** Native tools prepare exact diff artifacts.
+   Rust resolves scoped broker requests by ID and action fingerprint.
 
 ```mermaid
 flowchart LR

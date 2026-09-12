@@ -64,6 +64,17 @@ class QualityEvalTests(unittest.TestCase):
                         "metadata": {"agent": "coder"},
                     },
                 },
+                {
+                    "type": "action.completed",
+                    "agent_name": "coder",
+                    "payload": {
+                        "action": {"name": "replace_file"},
+                        "result": {
+                            "state": "applied",
+                            "resource": {"resource_id": "core/tests/test_runtime_integration.py"},
+                        },
+                    },
+                },
             ],
             "approval_requests": [
                 {
@@ -83,6 +94,36 @@ class QualityEvalTests(unittest.TestCase):
         self.assertTrue(score["observations"]["used_coder"])
         self.assertTrue(score["observations"]["tests_touched"])
         self.assertEqual(score["score"], 1.0)
+
+    def test_command_approval_is_not_coder_usage_or_an_edit(self) -> None:
+        task = next(item for item in EVAL_TASKS if item.id == "debug-trace-docs")
+        response = {
+            "status": "blocked",
+            "file_target": "docs/content/cli/safety-tracing.md",
+            "approval_requests": [{"action": {"name": "execute_command"}}],
+            "run_events": [{"type": "action.completed", "agent_name": "verifier", "payload": {}}],
+        }
+        observations = score_response(response, task)["observations"]
+        self.assertFalse(observations["used_coder"])
+        self.assertFalse(observations["docs_touched"])
+        self.assertEqual(observations["touched_paths"], [])
+
+    def test_approved_file_preview_does_not_count_as_executed_edit(self) -> None:
+        task = next(item for item in EVAL_TASKS if item.id == "debug-trace-docs")
+        response = {
+            "status": "incomplete",
+            "approval_requests": [
+                {
+                    "action": {
+                        "name": "replace_file",
+                        "metadata": {"path": "docs/content/cli/safety-tracing.md"},
+                    }
+                }
+            ],
+            "approval_decisions": [{"approved": True}],
+            "diff": "--- docs/content/cli/safety-tracing.md\n+++ docs/content/cli/safety-tracing.md",
+        }
+        self.assertFalse(score_response(response, task)["observations"]["docs_touched"])
 
     def test_plan_mode_builds_profile_task_matrix_without_model_calls(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

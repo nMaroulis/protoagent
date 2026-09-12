@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass
-from pathlib import Path
 
 from protolink.logging import QuietLogger
 from protolink.transport import Transport, get_transport
@@ -26,8 +25,10 @@ DEFAULT_AGENT_URLS = {
 RUNTIME_SCOPES = (
     "agent.delegate",
     "workspace.read",
-    "workspace.write",
-    "shell.execute",
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.restore",
+    "process.execute",
     "network.read",
 )
 
@@ -63,8 +64,9 @@ def conversation_storage(agent_name: str):
     except Exception:
         return None
 
-    raw_dir = os.getenv("PROTOAGENT_CONFIG_DIR")
-    config_dir = Path(raw_dir).expanduser() if raw_dir else Path.home() / ".protoagent"
+    from ..config import CONFIG_DIR
+
+    config_dir = CONFIG_DIR
     config_dir.mkdir(parents=True, exist_ok=True)
     return SQLiteStorage(
         db_path=str(config_dir / "conversations.sqlite"),

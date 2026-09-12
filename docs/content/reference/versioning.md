@@ -10,15 +10,15 @@ is no installable root package version.
 
 | Component | Package name | Version | Status | Source of truth |
 | --- | --- | --- | --- | --- |
-| Rust CLI / TUI | `proto-cli` | `0.2.1` | Active | `cli/Cargo.toml` |
-| Python core | `protoagent-core` | `0.2.1` | Active | `core/pyproject.toml` and `protoagent_core.__version__` |
+| Rust CLI / TUI | `proto-cli` | `0.2.2` | Active | `cli/Cargo.toml` |
+| Python core | `protoagent-core` | `0.2.2` | Active | `core/pyproject.toml` and `protoagent_core.__version__` |
 | ACP server | `proto-acp` | `0.0.0-dev.0` | Planned | `acp/VERSION` |
-| Documentation | `protoagent-docs` | `0.2.1` | Active release metadata | `docs/package.json` |
+| Documentation | `protoagent-docs` | `0.2.2` | Active release metadata | `docs/package.json` |
 
 The ACP version is intentionally a development marker. It should not be treated
 as a shipped protocol surface until `acp/` contains server code and tests.
 
-“ProtoAgent 0.2.1” is the coordinated release train for the active CLI and
+“ProtoAgent 0.2.2” is the coordinated release train for the active CLI and
 Python core. It does not imply that ACP has shipped. Dated user-visible release
 notes live in the root
 [CHANGELOG.md](https://github.com/nMaroulis/protoagent/blob/main/CHANGELOG.md).
@@ -62,9 +62,9 @@ Core version drift is checked by:
 PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 ```
 
-## 0.2.1 Release Order
+## 0.2.2 Release Order
 
-ProtoAgent 0.2.1 requires `protolink>=0.6.9` for Scout and web-tool readiness.
-Publish ProtoLink 0.6.9 to the target package index first, verify that a clean
-environment can resolve it, and only then publish ProtoAgent core/CLI 0.2.1
+ProtoAgent 0.2.2 requires `protolink>=0.7.0` for Scout and web-tool readiness.
+Publish ProtoLink 0.7.0 to the target package index first, verify that a clean
+environment can resolve it, and only then publish ProtoAgent core/CLI 0.2.2
 artifacts. Do not lower the dependency floor to work around release ordering.

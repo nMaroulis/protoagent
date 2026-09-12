@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.2.1`. It is declared in
+The active core package version is `0.2.2`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:
@@ -16,10 +16,10 @@ The core is responsible for:
 3. LLM construction through ProtoLink.
 4. Context Loom indexing and prompt injection.
 5. Agent deck assembly, including opt-in Scout registration.
-6. ProtoLink runtime startup, streaming, budgets, run reports, and tracing.
+6. Configure native lifecycle, streaming, budgets, run reports, and tracing.
 7. Typed approval and cancellation bridge.
 8. ProtoLink conversation state inspection, compaction, reset, and persistence.
-9. Workspace-safe read/search/diff/write helpers.
+9. Workspace read/search helpers and native recoverable file tool registration.
 10. Optional ProtoLink web-search/fetch wiring with an explicit network boundary.
 
 ## Package Map
@@ -30,6 +30,11 @@ The core is responsible for:
 | `_version.py` | Core version, ACP development marker lookup, and component inventory helpers. |
 | `runtime.py` | Embedded ProtoLink mesh runner. |
 | `runtime_bridge.py` | File-based progress, approval, and cancellation bridge. |
+| `runtime_policy.py` | Trusted authorization scope, workspace policy, edit/check phases. |
+| `runtime_storage.py` | Output redaction and persisted native receipt collection. |
+| `workflow.py` | Native Graph with bounded coding and repair attempts. |
+| `verification.py` | Application acceptance through native completion checks. |
+| `checkpoints.py` | Private native checkpoint storage, project lease and inventory. |
 | `history.py` | ProtoLink-owned conversation state controls. |
 | `llm.py` | Provider to ProtoLink LLM wiring and readiness checks. |
 | `models.py` | Local/API model discovery and API key validation. |
@@ -37,7 +42,7 @@ The core is responsible for:
 | `tools.py` | Workspace-safe deterministic tools. |
 | `help_agent.py` | Isolated Guide agent for `/help QUESTION`. |
 | `context/` | Context Loom indexer, SQLite store, packer, schemas. |
-| `agents/` | Architect, Explorer, Coder, optional Scout factories, and deck assembly. |
+| `agents/` | Architect, Explorer, Coder, Verifier, optional Scout factories, and deck assembly. |
 
 ## Core Contract With Rust
 
@@ -62,20 +67,25 @@ ProtoLink objects used by the core include:
 
 | ProtoLink object | How ProtoAgent uses it |
 | --- | --- |
-| `Agent` | Architect, Explorer, Coder, optional Scout, Guide, and state-control facades. |
+| `Agent` | Architect, Explorer, Coder, Verifier, optional Scout, Guide, and state-control facades. |
+| `AgentGroup` | Owned agents, readiness, cleanup and explicitly external resources. |
 | `Registry` | Agent discovery for Architect delegation. |
-| `AgentClient` | Send tasks, stream task events, cancel tasks. |
+| `AgentClient` | Native delegation between agents over the configured transport. |
+| `RunHandle` / `RunResult` | Typed events, live cancellation and normalized final results. |
 | `Task` | User requests and final responses. |
 | `RunContext` | Session id, workspace URI, permissions, budget, metadata, trace id. |
 | `RunBudget` | Runtime limits from environment and provider config. |
 | `RunRecorder` | Normalized runtime event collection. |
 | `RunEvent` | Stable UI trace/timeline input. |
 | `RunReport` | Redacted durable run report returned to Rust. |
-| `RunAction` | Workspace write proposal with preview artifacts. |
+| `RunAction` | Exact prepared commands and file changes with native preview artifacts. |
 | `CapabilityPolicy` | Deny-by-default tool and action permissions. |
-| `ApprovalRequest` | Policy pause before write execution. |
+| `ApprovalBroker` / `ApprovalScope` | Scoped pending requests, correlated decisions and cancellation. |
+| `ApprovalRequest` | Policy pause before command execution, file writes or restoration. |
 | `ApprovalDecision` | Human decision from the Rust app. |
-| `TaskCancellationRequest` | Live cancellation from the TUI. |
+| `StorageCheckpointStore` | Dedicated SQLite-backed native file recovery records. |
+| `CompletionCheck` / `CompletionValidator` | Executed outcomes and revision-dependent acceptance. |
+| `Graph` | One initial attempt and at most two bounded repair attempts. |
 | `ConversationState` | Durable Architect memory and state-control facades. |
 | `Tool` | First-party agent tools, including Scout's bounded `web_search` and `fetch_url`. |
 
@@ -95,10 +105,10 @@ flowchart TD
   D -->|yes| E["fallback diagnostics"]
   D -->|no| F["runtime.run_selected_model"]
   F --> G["create RunContract, RunContext, and RunBudget"]
-  G --> H["start Registry and agent deck"]
+  G --> H["AgentGroup starts Registry and agent deck"]
   H --> HS{"Scout enabled?"}
   HS -->|yes| SR["register Scout + ProtoLink web tools"]
-  HS -->|no| I["send task stream to Architect"]
+  HS -->|no| I["RunHandle executes bounded coding workflow"]
   SR --> I
   I --> J["record RunEvents and approvals"]
   J --> K["validate completion contract"]
@@ -112,8 +122,11 @@ The core tests focus on runtime contracts rather than only prompt text:
 | Test file | Coverage |
 | --- | --- |
 | `core/tests/test_runtime_integration.py` | Policies, approvals, cancellation, streaming, run budgets, event/report behavior. |
+| `core/tests/test_native_runtime.py` | Real native tools, broker correlation, runtime/SSE meshes, uncertainty and bounded repairs without paid models. |
+| `core/tests/test_verification.py` | Native process outcomes, resource revisions and completion evidence. |
+| `core/tests/test_checkpoints.py` | Private storage, native restoration, conflicts and legacy inspection. |
 | `core/tests/test_history_integration.py` | ProtoLink conversation state describe, compact, reset, and top-level turn persistence. |
-| `core/tests/test_run_contracts.py` | Task contract inference and completion validation. |
+| `core/tests/test_run_contracts.py` | Task contract inference and expected evidence. |
 | `core/tests/test_context_indexer.py` | Incremental index refresh and unchanged-file accounting. |
 | `core/tests/test_agent_manifest.py` | Runtime architecture manifest exposed to CLI diagnostics. |
 | `core/tests/test_llm_context.py` | Ollama context window, metrics profile, runtime prompt budget, context continuity ownership. |

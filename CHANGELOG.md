@@ -2,6 +2,55 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.2.2] - 2026-09-12
+
+### Changed
+
+- Require ProtoLink **0.7.0** across the core, CI and installation guidance;
+  align active CLI/core/docs versions to 0.2.2.
+- Register native `process_tool()` on Verifier as `execute_command`. Remove the
+  custom subprocess runner, output drains, timeout and process cleanup code.
+  Commands use explicit argv, cwd, env and limits; the environment is no longer
+  inherited. Keep 600-second and 32-KiB application ceilings and native budgets.
+- Replace manual embedded startup/cleanup and final-event reconstruction with
+  `AgentGroup`, `RunHandle`, normalized `RunResult` and native reports.
+- Use `ApprovalBroker` as the actual handler. Rust previews native JSON command
+  specifications and filesystem diffs, echoes the exact request ID/fingerprint,
+  and uses private temporary controls. Application authorization supplies scope.
+- Register native create/replace/preview/restore filesystem tools with a dedicated
+  `StorageCheckpointStore`, private SQLite storage and one writer per project.
+  Remove custom diff, hash, file mutation and checkpoint execution helpers.
+- Define completion with native `CompletionCheck`/`CompletionValidator` over
+  executed outcomes and current resource revisions. Enforce an initial attempt
+  and at most two repairs with native Graph limits, separate from transport retries.
+- Update docstrings, Guide help, the operator manual and migration/API mapping.
+
+### Fixed
+
+- Approval, previews and delegation no longer count as a completed write.
+- Quality evaluation counts executed native file edits; command approvals are
+  not mistaken for Coder usage. Runtime diagnostics check the required 0.7 APIs.
+- Preserve failed, canceled and uncertain results through the frontend adapter;
+  errors after submission do not imply effects were absent.
+- Reject stale preimages, restoration conflicts and further mutations after an
+  uncertain checkpoint. Never automatically replay interrupted effects.
+- Redact known credential values and recovery bytes from presentation/report
+  copies while retaining protected native recovery and approval storage.
+
+### Migration boundaries
+
+- Recoverable Coder writes now require POSIX, absolute project paths without
+  symlinks and existing parents. New files use native mode 0600. Directory
+  creation requires a separately approved command and a later edit run.
+- Preserve v0.2.1 checkpoint databases as inspection-only legacy records;
+  they cannot establish native revision identities. Chained undo can conflict
+  after a later restoration changes a file's identity.
+- Local commands run on the host without sandbox isolation; recovery covers
+  Coder file effects only. RunReplay remains inspection, not resumption.
+- ProtoLink 0.7.0 delegation does not merge worker receipts into parent reports.
+  Compose same-trace native RunStore snapshots for acceptance. Native snapshot
+  redaction and checkpoint inventory still need small application adapters.
+
 ## [0.2.1] - 2026-09-10
 
 ### Added

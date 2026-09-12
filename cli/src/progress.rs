@@ -40,6 +40,7 @@ pub(crate) struct ProgressBatch {
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeApproval {
     pub(crate) request_id: String,
+    pub(crate) fingerprint: String,
     pub(crate) run_id: String,
     pub(crate) action_name: String,
     pub(crate) description: String,
@@ -51,10 +52,24 @@ pub(crate) struct RuntimeApproval {
 
 impl ProgressFile {
     pub(crate) fn new(token: impl std::fmt::Display) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "protoagent-progress-{}-{token}.jsonl",
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "protoagent-progress-{}-{nonce}-{token}",
             std::process::id()
         ));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&directory)
+            .expect("create private ProtoAgent control directory");
+        let path = directory.join("progress.jsonl");
         let approval_request_path = control_path(&path, "approval-request");
         let approval_decision_path = control_path(&path, "approval-decision");
         let cancel_path = control_path(&path, "cancel");
@@ -126,7 +141,15 @@ impl ProgressFile {
         let text = fs::read_to_string(self.approval_request_path()).ok()?;
         let request = serde_json::from_str::<Value>(&text).ok()?;
         let approval = RuntimeApproval::from_value(request)?;
-        if !self.seen_approvals.insert(approval.request_id.clone()) {
+        let presentation = format!(
+            "{}:{}",
+            approval.request_id,
+            approval
+                .request
+                .get("presentation_id")
+                .unwrap_or(&Value::Null)
+        );
+        if !self.seen_approvals.insert(presentation) {
             return None;
         }
         Some(approval)
@@ -136,6 +159,7 @@ impl ProgressFile {
         let decision = serde_json::json!({
             "approved": approved,
             "request_id": approval.request_id,
+            "fingerprint": approval.fingerprint,
             "reason": if approved { "Approved in ProtoAgent" } else { "Denied in ProtoAgent" },
             "decided_by": "protoagent-user",
             "metadata": {"interface": "rust-cli"}
@@ -158,6 +182,9 @@ impl ProgressFile {
             self.cancel_path(),
         ] {
             let _ = fs::remove_file(candidate);
+        }
+        if let Some(directory) = self.path.parent() {
+            let _ = fs::remove_dir(directory);
         }
     }
 
@@ -226,12 +253,24 @@ impl RuntimeApproval {
         if request_id.is_empty() {
             return None;
         }
+        let fingerprint = value_string(&request, &["fingerprint"]);
+        if fingerprint.is_empty() {
+            return None;
+        }
         let action = request.get("action")?;
         let payload = action.get("payload").unwrap_or(&Value::Null);
         let arguments = payload.get("arguments").unwrap_or(&Value::Null);
         let metadata = action.get("metadata").unwrap_or(&Value::Null);
-        let target =
-            value_string(metadata, &["path"]).if_empty_then(|| value_string(arguments, &["path"]));
+        let target = value_string(metadata, &["path"])
+            .if_empty_then(|| value_string(arguments, &["path"]))
+            .if_empty_then(|| value_string(arguments, &["cwd"]))
+            .if_empty_then(|| {
+                payload
+                    .pointer("/recovery/before/revision/resource_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            });
         let diff = action
             .get("artifacts")
             .and_then(Value::as_array)
@@ -239,6 +278,7 @@ impl RuntimeApproval {
             .flatten()
             .filter(|artifact| {
                 artifact.get("media_type").and_then(Value::as_str) == Some("text/x-diff")
+                    || artifact.pointer("/metadata/preimage").is_some()
             })
             .flat_map(|artifact| {
                 artifact
@@ -257,6 +297,8 @@ impl RuntimeApproval {
             .flatten()
             .filter(|artifact| {
                 artifact.get("media_type").and_then(Value::as_str) == Some("text/plain")
+                    || (artifact.get("kind").and_then(Value::as_str) == Some("preview")
+                        && artifact.pointer("/metadata/preimage").is_none())
             })
             .flat_map(|artifact| {
                 artifact
@@ -265,11 +307,18 @@ impl RuntimeApproval {
                     .into_iter()
                     .flatten()
             })
-            .filter_map(|part| part.get("content").and_then(Value::as_str))
+            .filter_map(|part| part.get("content"))
+            .map(|content| {
+                content
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| serde_json::to_string_pretty(content).unwrap_or_default())
+            })
             .collect::<Vec<_>>()
             .join("\n");
         Some(Self {
             request_id,
+            fingerprint,
             run_id: value_string(&request, &["run_id"]),
             action_name: value_string(action, &["name"]),
             description: value_string(action, &["description"]),
@@ -320,8 +369,22 @@ fn write_json_atomic(path: &PathBuf, value: &Value) -> std::io::Result<()> {
         path.to_string_lossy(),
         std::process::id()
     ));
-    fs::write(&temporary, serde_json::to_vec(value)?)?;
-    fs::rename(temporary, path)
+    use std::io::Write;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        options
+            .open(&temporary)?
+            .write_all(&serde_json::to_vec(value)?)?;
+        fs::rename(&temporary, path)
+    })();
+    let _ = fs::remove_file(&temporary);
+    result
 }
 
 fn run_event_summary(value: &Value) -> Option<String> {
@@ -847,21 +910,32 @@ fn clip_activity(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn extracts_complete_command_preview_from_a_typed_approval() {
+    fn extracts_native_json_command_preview() {
         let approval = super::RuntimeApproval::from_value(serde_json::json!({
-            "request_id": "command-approval",
+            "request_id": "command-approval", "fingerprint": "exact-command-fingerprint",
             "action": {
-                "name": "run_command", "capabilities": ["shell.execute"],
-                "metadata": {"path": "/project"},
-                "artifacts": [{"media_type": "text/plain", "parts": [{"content": "cargo test\nDirectory: /project\nTimeout: 120s\nHost access"}]}]
+                "name": "execute_command", "capabilities": ["process.execute"],
+                "payload": {"arguments": {"cwd": "/project"}},
+                "artifacts": [{"kind": "preview", "media_type": null, "parts": [{"type": "json", "content": {
+                    "argv": ["cargo", "test"], "cwd": "/project", "env": {},
+                    "timeout_seconds": 120, "max_output_bytes": 32768, "boundary": "host process; no sandbox"
+                }}]}]
             }
         })).unwrap();
         assert!(approval.diff.is_empty());
-        assert_eq!(
-            approval.preview,
-            "cargo test\nDirectory: /project\nTimeout: 120s\nHost access"
-        );
-        assert_eq!(approval.capabilities(), "shell.execute");
+        assert!(approval.preview.contains("cargo"));
+        assert!(approval.preview.contains("max_output_bytes"));
+        assert!(approval.preview.contains("no sandbox"));
+        assert_eq!(approval.target, "/project");
+        assert_eq!(approval.capabilities(), "process.execute");
+    }
+
+    #[test]
+    fn rejects_approval_without_exact_fingerprint() {
+        assert!(super::RuntimeApproval::from_value(serde_json::json!({
+            "request_id": "request", "action": {"name": "execute_command"}
+        }))
+        .is_none());
     }
 
     use super::{format_live_progress, latest_progress_message, ContextUsage, ProgressFile};
@@ -1126,16 +1200,17 @@ mod tests {
     fn exchanges_typed_approval_and_cancel_controls() {
         let mut progress = ProgressFile::new("runtime-control-test");
         let request = json!({
-            "request_id": "approval_123",
+            "request_id": "approval_123", "fingerprint": "exact-file-fingerprint",
             "run_id": "run_123",
             "action": {
                 "name": "replace_file",
                 "description": "Replace src/lib.rs",
-                "capabilities": ["workspace.write"],
+                "capabilities": ["filesystem.write"],
                 "payload": {"arguments": {"path": "src/lib.rs"}},
                 "metadata": {"path": "src/lib.rs"},
                 "artifacts": [{
-                    "media_type": "text/x-diff",
+                    "kind": "preview", "media_type": null,
+                    "metadata": {"preimage": {"resource_id": "src/lib.rs", "version": "version-one"}},
                     "parts": [{"type": "text", "content": "--- a/src/lib.rs\n+++ b/src/lib.rs\n"}]
                 }]
             }
@@ -1148,7 +1223,7 @@ mod tests {
 
         let approval = progress.take_approval_request().unwrap();
         assert_eq!(approval.target, "src/lib.rs");
-        assert_eq!(approval.capabilities(), "workspace.write");
+        assert_eq!(approval.capabilities(), "filesystem.write");
         assert!(approval.diff.contains("+++ b/src/lib.rs"));
         progress.decide(&approval, true).unwrap();
         progress.request_cancel("test cancellation").unwrap();
@@ -1158,6 +1233,7 @@ mod tests {
         let cancellation: Value =
             serde_json::from_slice(&fs::read(progress.cancel_path()).unwrap()).unwrap();
         assert_eq!(decision["request_id"], "approval_123");
+        assert_eq!(decision["fingerprint"], "exact-file-fingerprint");
         assert_eq!(decision["approved"], true);
         assert_eq!(cancellation["reason"], "test cancellation");
         progress.cleanup();

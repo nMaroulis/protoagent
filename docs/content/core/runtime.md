@@ -1,263 +1,143 @@
 ---
 title: Runtime
-description: ProtoLink runtime startup, transports, streaming events, budgets, reports, tracing, and cancellation.
+description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-`runtime.py` starts the local ProtoLink mesh for a single run. It is the main
-runtime integration point between ProtoAgent and ProtoLink.
+ProtoAgent 0.2.2 requires **ProtoLink 0.7.0**. `runtime.py` configures an embedded
+mesh; `workflow.py` defines coding acceptance and repair routing. Native agents,
+tools, policies, budgets, storage and cancellation execute the work.
 
-## Entry Point
+## Entry and ownership
 
 ```python
 run_selected_model(prompt, workspace=None, session_id=None, progress_path=None, user_prompt=None)
 ```
 
-Steps:
+The application loads model configuration, builds a trusted `RunContext`, leases
+the project's checkpoint namespace, and constructs its agents. Each LLM-capable
+role gets its own configured LLM instance. Verifier and optional Scout have no
+LLM. Architect retains its conversation state; workers remain task-local.
 
-1. Load config and selected provider/model.
-2. Resolve the prompt profile and optional Scout setting.
-3. Create a `RuntimeBridge` for progress, approvals, and cancellation.
-4. Run `_run_agent_deck()` in an asyncio event loop.
-5. Clean up bridge control files.
-
-If no model is selected for the active provider, runtime startup raises an
-error and `agent_engine.process_prompt()` returns fallback diagnostics.
-
-## Runtime Objects
-
-Inside `_run_agent_deck()`:
-
-| Object | Purpose |
+| Native object | Application configuration |
 | --- | --- |
-| `Registry` | Local HTTP registry used for agent discovery. |
-| `AgentClient` | Sends task to Architect and streams events. |
-| `Task` | User request task. |
-| `RunContext` | Session id, workspace URI, permissions, budget, metadata, run id, trace id. |
-| `RunBudget` | Typed runtime budget from environment/provider settings. |
-| ProtoAgent `RunContract` | Task kind, required workers, required write artifacts, and completion rule derived from the original user prompt. |
-| `RunRecorder` | Captures normalized `RunEvent`s and builds a redacted `RunReport`. |
-| `RuntimeBridge` | Emits CLI progress, handles approvals, watches cancellation. |
+| `AgentGroup` | Owns the Registry and enabled mesh agents; readiness, partial-start rollback and shutdown are native. |
+| Second `AgentGroup` | Owns a local workflow controller, declaring the running mesh as external resources. |
+| `RunHandle` | Executes the workflow and Architect attempts; supplies typed events, cancellation, normalized `RunResult` and `RunReport`. |
+| `ApprovalBroker` | Actual approval handler on Coder/Verifier, with per-run durable records and expiration. |
+| `StorageCheckpointStore` | Dedicated per-project `SQLiteStorage` namespace under `recovery/`. |
+| `SQLiteRunStore` | Native task/report persistence in a private per-run database under `runs/`. |
+| `Graph` | One initial attempt, two repair visits, three acceptance visits, seven total visits maximum. |
+| `CompletionValidator` | Application predicates over native execution receipts and resource revisions. |
 
-## Run Contracts
+The tool-only workflow controller exposes an application `run_workflow` tool to
+its local handle. It has no model and is not advertised in worker discovery.
+There is no application subprocess launcher or transport-final-event parser.
 
-`run_contracts.py` derives a contract before the model receives the prompt.
-Runtime attaches it to:
-
-```python
-RunContext.metadata["run_contract"]
-```
-
-Read-only repository questions do not require write artifacts. Workspace-change
-tasks require one of these terminal signals:
-
-1. Coder delegation in the normalized run events.
-2. A write approval request or diff preview artifact.
-3. An explicit blocker in the model answer.
-
-After Architect returns, runtime calls `validate_run_completion()`. If a write
-task ended as prose without Coder, approval/diff artifacts, or blocker, the
-runtime changes the status to `incomplete` and prefixes the answer with a
-completion-guard message.
-
-## RunContext Permissions
-
-The top-level run context grants app-level permissions:
-
-| Permission | Effect |
-| --- | --- |
-| `agent.delegate` | allow |
-| `workspace.read` | allow |
-| `workspace.write` | allow |
-| `shell.execute` | allow at the run level; Verifier policy still requires command approval |
-| `network.read` | allow at the run level; only enabled Scout's deny-by-default agent policy exposes it |
-
-Agent-specific `CapabilityPolicy` still applies. Coder's `workspace.write`
-policy requires approval even though the top-level context permits the category.
-
-## URLs And Transports
-
-The runtime resolves URLs for Registry, client, Architect, Explorer, Coder, Verifier, and
-enabled Scout. By default it binds free localhost ports.
-
-Environment overrides:
-
-| Variable | Purpose |
-| --- | --- |
-| `PROTOAGENT_RUNTIME_HOST` | Host used for generated local URLs. Defaults to `127.0.0.1`. |
-| `PROTOAGENT_REGISTRY_URL` or `REGISTRY_URL` | Registry URL override. |
-| `PROTOAGENT_CLIENT_URL` or `CLIENT_URL` | Client URL override. |
-| `PROTOAGENT_ARCHITECT_URL` or `ARCHITECT_AGENT_URL` | Architect URL override. |
-| `PROTOAGENT_EXPLORER_URL` or `EXPLORER_AGENT_URL` | Explorer URL override. |
-| `PROTOAGENT_CODER_URL` or `CODER_AGENT_URL` | Coder URL override. |
-| `PROTOAGENT_VERIFIER_URL` or `VERIFIER_AGENT_URL` | Verifier URL override. |
-| `PROTOAGENT_SCOUT_URL` or `SCOUT_AGENT_URL` | Optional Scout URL override. |
-
-Agent transport:
-
-```bash
-PROTOAGENT_AGENT_TRANSPORT=sse
-PROTOAGENT_AGENT_TRANSPORT=http
-```
-
-Aliases such as `jsonrpc`, `json-rpc`, `sse-jsonrpc`, and `sse-json-rpc` map to
-`sse`.
-
-ProtoAgent constructs concrete transports through ProtoLink's shared
-`TransportConfig` contract. ProtoLink therefore owns payload and concurrency
-limits, idempotency, lifecycle health, shutdown, capabilities, and operational
-metrics for the Registry, each agent, and the CLI-side `AgentClient`. The core
-does not maintain a parallel retry, health, or transport-metrics layer.
-
-ProtoLink 0.6.9 also accepts `grpc` when the separate `protolink[grpc]` extra is
-installed. It remains opt-in rather than adding `grpcio` to every local CLI
-installation. TLS and multi-interface agent metadata are likewise left to
-networked deployments because ProtoAgent's embedded mesh uses loopback
-HTTP/SSE by default.
-
-Streaming can be disabled independently:
-
-```bash
-PROTOAGENT_STREAM=0
-```
-
-## Startup Sequence
+## Bounded application workflow
 
 ```mermaid
-sequenceDiagram
-  participant Core as runtime.py
-  participant Reg as Registry
-  participant Exp as Explorer
-  participant Cod as Coder
-  participant Ver as Verifier
-  participant Scout as Scout (optional)
-  participant Arc as Architect
-  participant Client as AgentClient
-
-  Core->>Reg: start(background=True)
-  Core->>Core: infer RunContract
-  Core->>Exp: create stateless worker and start
-  Core->>Cod: create stateless worker and start
-  Core->>Ver: create tool-only command worker and start
-  opt optional_agents.scout.enabled
-    Core->>Scout: create tool-only worker and start
-  end
-  Core->>Arc: create and start
-  Core->>Arc: discover_agents()
-  Core->>Client: send_task_streaming(Architect, Task)
-  Client-->>Core: task stream events
-  Core->>Core: validate RunContract
-  Core->>Core: record RunEvents and build RunReport
+flowchart LR
+  I[Initial Architect attempt] --> A[Native completion validation]
+  A -->|Satisfied or requires inspection| D[Return result]
+  A -->|Completed nonzero check| R[Repair: at most 2 visits]
+  R --> A
 ```
 
-## Streaming Event Handling
+Architect receives repository context and delegates through normal ProtoLink
+`agent_call` execution. All edits precede command checks within one attempt.
+The application policy prevents further file changes after checking starts.
+Only Graph dispatch opens a new repair attempt. Graph limits and shared native
+budgets bound repair work independently of `RetryPolicy`.
 
-`_send_task_streaming()` consumes `AgentClient.send_task_streaming()`.
+`run_contracts.py` classifies the original prompt. Write contracts require a
+native applied-file receipt at its current revision; verification requests
+require executed commands. Approval, previews, delegation and blocker prose
+cannot satisfy execution checks. Structured denials and blockers are preserved
+as unsuccessful outcomes. A write without any command is explicitly unverified.
 
-It suppresses raw token chunks, records useful events with `RunRecorder`, emits
-summary rows to the Rust progress bridge, and extracts final content from:
+Command acceptance records the revisions of this run's changed files at
+preparation and rechecks them through `CompletionCheck.read_revision`. It detects
+later changes to those resources, including external edits. It does not capture
+all repository inputs. See [Verify & Recover](../cli/verification-and-recovery.md)
+for the exact acceptance and restoration boundaries.
 
-1. Final task metadata.
-2. Final LLM stream content.
-3. Artifact content fallback.
+## Authorization and controls
 
-If streaming is unavailable for a transport, runtime falls back to one-shot
-`send_task()`.
+The top-level context grants `agent.delegate`, `workspace.read`,
+`filesystem.read`, `filesystem.write`, `filesystem.restore`, `process.execute`
+and `network.read`. Each agent still applies a restrictive native capability
+policy. Coder requires approval for writes and restoration; Verifier requires
+approval for command execution. Native policies otherwise allow actions by
+default, so these requirements are explicitly configured.
 
-Each completed core response includes a `transport_report` containing the
-first-party configuration, capabilities, and `TransportMetricsSnapshot` for
-the Registry, client, and all enabled agent transports. The shell CLI summarizes
-client request, stream, retry, and byte counters; the TUI keeps the full report
-in response details.
+`RunAuthorization` admits descendant run IDs from this owned, API-key-authenticated
+mesh's trace and workspace. It constructs `ApprovalScope` server-side.
+`RuntimeBridge` presents one pending broker request at a time and resolves the
+exact request ID and prepared-action fingerprint. UI JSON cannot enlarge the
+scope. Multiple pending requests remain in the broker. Malformed or stale
+decisions do not release execution. Cancellation is sent once to `RunHandle`;
+the application does not retry task submission to recover an uncertain effect.
 
-## Optional Scout Startup
+Controls use short-lived private files shared with Rust. Without an interactive
+bridge, pending approvals are denied. The per-run broker namespace has one live
+writer; reopening stored pending records is inspection-only uncertainty, never
+execution resumption.
 
-When `optional_agents.scout.enabled` is false, Scout is not constructed,
-started, or registered. When true, runtime adds a tool-only agent with
-ProtoLink 0.6.9 `web_search` and `fetch_url` tools and a deny-by-default policy
-allowing only `network.read`. Registration performs no outbound request.
-Architect discovery then includes Scout, and the transport report includes its
-transport.
+## Transports and events
 
-## Run Reports
+The mesh defaults to loopback SSE with an HTTP Registry. Set
+`PROTOAGENT_AGENT_TRANSPORT=http`, `websocket`, `grpc` or `runtime` as needed.
+The `grpc` transport requires ProtoLink's optional extra. `runtime` uses an
+in-process Registry and transport identities. JSON-RPC aliases map to SSE.
 
-After delivery, runtime builds a redacted `RunReport`:
+`PROTOAGENT_RUNTIME_HOST` defaults to `127.0.0.1`. Registry and worker URLs can
+be overridden with `PROTOAGENT_REGISTRY_URL`, `PROTOAGENT_ARCHITECT_URL`,
+`PROTOAGENT_EXPLORER_URL`, `PROTOAGENT_CODER_URL`, `PROTOAGENT_VERIFIER_URL` and
+`PROTOAGENT_SCOUT_URL`; the corresponding older `*_AGENT_URL` aliases remain.
+The entry handle invokes owned agents locally; there is no separate CLI task
+client to configure.
 
-```python
-recorder.to_report(
-    context=final_context,
-    final_task=final_task,
-    metadata={
-        "application": "protoagent",
-        "interface": "rust-cli",
-        "provider": provider,
-        "model": model,
-    },
-)
-```
+ProtoLink handles task streams and final-result normalization. ProtoAgent only
+formats typed events for the UI, suppresses token chunks, and limits visible
+summaries with `PROTOAGENT_STREAM_TRACE_LIMIT` (default 120).
+`PROTOAGENT_STREAM=0` suppresses incremental UI summaries; native handles still
+consume execution to completion. It does not resubmit work on another transport.
 
-Rust stores this in `CoreResponse.run_report` so users can inspect structured
-diagnostics. `CoreResponse.status` can be `answered`, `blocked`, `canceled`, or
-`incomplete`.
+**0.7.0 integration gap:** model delegation returns a worker output without
+merging that worker's native receipts into the parent report. The application
+composes native task snapshots from the same trace in its `SQLiteRunStore` by
+event ID. It never turns model tool-result prose into evidence. Delegated process
+output may therefore be available only once the worker snapshot is persisted;
+direct native process handles expose live `process.output` events.
 
-## Run Budgets
+Responses retain native transport diagnostics for the Registry and each worker.
+The final report keeps the handle's normalized terminal task plus application
+status, completion validation and verification metadata. Failed and uncertain
+results remain failed and uncertain in the CLI. Errors after submission are
+reported as potentially effected work, never as an action that was not submitted.
 
-Environment variables populate `RunBudget`:
+## Budgets and persistence
 
-| Variable | Budget field |
+| Environment variable | Native budget |
 | --- | --- |
-| `PROTOAGENT_RUN_MAX_STEPS` | `max_steps` |
+| `PROTOAGENT_RUN_MAX_STEPS` | `max_steps`; application default 80 |
 | `PROTOAGENT_RUN_MAX_LLM_CALLS` | `max_llm_calls` |
-| `PROTOAGENT_RUN_MAX_TOOL_CALLS` | `max_tool_calls` |
-| `PROTOAGENT_RUN_MAX_SECONDS` | `max_runtime_seconds` |
-| `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | `max_input_tokens` |
+| `PROTOAGENT_RUN_MAX_TOOL_CALLS` | `max_tool_calls`; application default 80 |
+| `PROTOAGENT_RUN_MAX_SECONDS` | `max_runtime_seconds`; default agent timeout, 600 seconds |
+| `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | `max_input_tokens` for non-Ollama providers |
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
 
-For Ollama, `max_input_tokens` comes from the effective Ollama context window.
-For other providers, it comes from the environment or provider config.
+Ollama's input budget uses its configured context window. Command execution is
+also bounded by its explicit limits and the remaining native runtime budget.
+Native nested flows share budgets; remote workers enforce inherited limits.
 
-## ProtoLink 0.6.9 Integration Boundaries
+`ApplicationRunStore` adds mandatory output redaction to native persistence and
+composes same-trace receipts. Known credential values and keys, recovery
+`data_base64`, and terminal controls are removed from presentation snapshots.
+The complete recovery and approval records live only in protected storage.
+RunReplay remains read-only inspection, not task resumption.
 
-The embedded mesh uses ProtoLink's HTTP Registry and configured agent
-transports. ProtoLink 0.6.9 authorizes direct tool tasks and checks their budgets
-before tool dispatch, including tools on Verifier and optional Scout. The
-application uses those native task paths rather than a second budget engine.
-A runtime budget is checked at dispatch boundaries; Verifier additionally
-bounds each subprocess with its own timeout and output limit.
-
-Verifier outcomes are recorded as `verification.result` events through
-`RunRecorder`. The same factual report appears in the response and
-`RunReport.metadata.verification`. Coder changes increment an application
-revision so previously recorded checks become stale. Command approval cannot
-satisfy a required workspace-write contract.
-
-## Local Trace Telemetry
-
-Enable ProtoLink local trace telemetry:
-
-```bash
-PROTOAGENT_TRACE=1 proto-cli run "task"
-```
-
-Trace file:
-
-```text
-~/.protoagent/traces.jsonl
-```
-
-or:
-
-```text
-${PROTOAGENT_CONFIG_DIR}/traces.jsonl
-```
-
-## Cancellation
-
-The runtime starts `_monitor_cancellation()` while the task is active. It polls
-the bridge's cancel file and sends a `TaskCancellationRequest`:
-
-1. First to the in-process Architect agent, if available.
-2. Then through `AgentClient.cancel_task()`.
-
-The preflight cancellation path handles the case where the user cancels before
-agent startup finishes. It cancels the `RunContext` and `Task`, then returns a
-normal canceled result.
+`PROTOAGENT_TRACE=1` enables native `LocalTraceTelemetry` at
+`${PROTOAGENT_CONFIG_DIR:-~/.protoagent}/traces.jsonl`, using the same redactor.
+Private directories use 0700 and storage files use 0600. Source diffs and unknown
+secrets printed by project code can still be sensitive.

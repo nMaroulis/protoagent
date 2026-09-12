@@ -506,7 +506,8 @@ def _model_response(
     if runtime_status == "canceled":
         targets = []
     else:
-        remember_valid_provider(result["provider"], result["model"])
+        if runtime_status == "completed":
+            remember_valid_provider(result["provider"], result["model"])
         context = build_context_map(workspace)
         targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
@@ -543,9 +544,14 @@ def _model_response(
     )
     return {
         "status": runtime_status
-        if runtime_status in {"blocked", "canceled", "incomplete"}
+        if runtime_status
+        in {"blocked", "canceled", "incomplete", "failed", "uncertain", "input_required"}
         else "answered",
-        "headline": "Architect completed the ProtoLink run.",
+        "headline": (
+            "Architect completed the ProtoLink run."
+            if runtime_status == "completed"
+            else f"ProtoLink run status: {runtime_status.replace('_', ' ')}."
+        ),
         "answer": answer,
         "thought_process": (
             f"Request: {prompt}\n\n"
@@ -840,49 +846,16 @@ def undo_checkpoint(
     This deterministic recovery path needs no model. The same Rust progress
     bridge displays the undo diff and returns a correlated approval decision.
     """
-    import asyncio
-
-    from protolink import ActionDeniedError, RunContext
-
-    from .agents.coder import create_coder_agent
-    from .runtime_bridge import RuntimeBridge
+    from .runtime import run_recovery
 
     started = time.monotonic()
-    bridge = RuntimeBridge(progress_path)
-    context = RunContext(session_id=session_id, workspace_uri=Path(workspace).resolve().as_uri())
-    agent = create_coder_agent(
-        workspace=workspace,
-        transport="runtime",
-        tool_only=True,
-        approval_handler=bridge.approval_handler,
-    )
-    try:
-        result = asyncio.run(
-            agent.call_tool_in_context(
-                "restore_checkpoint",
-                context,
-                checkpoint_id=checkpoint_id,
-            )
-        )
-        answer = f"Restored {result['path']} from checkpoint {result['checkpoint_id']}."
-        status = "answered"
-    except (ActionDeniedError, ValueError, OSError) as exc:
-        result = {}
-        answer = f"Undo was not applied: {exc}"
-        status = "canceled" if bridge.cancel_reason() else "blocked"
-    finally:
-        bridge.cleanup()
+    result = run_recovery(workspace, checkpoint_id, session_id, progress_path)
     return _json(
         {
-            "status": status,
-            "answer": answer,
+            **result,
             "headline": "Checkpoint recovery",
-            "file_target": result.get("path", ""),
             "workspace": workspace,
             "responder": "coder",
-            "run_context": context.to_dict(),
-            "approval_requests": bridge.approval_requests,
-            "approval_decisions": bridge.approval_decisions,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
         }
     )

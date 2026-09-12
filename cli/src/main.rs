@@ -2840,6 +2840,29 @@ pub(crate) fn response_actor(response: &CoreResponse) -> String {
 }
 
 pub(crate) fn transport_metrics_summary(report: &Value) -> Option<String> {
+    if let Some(agents) = report.get("agents").and_then(Value::as_object) {
+        let first = agents.values().next()?;
+        let transport = first
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let total = |key: &str| -> u64 {
+            agents
+                .values()
+                .filter_map(|agent| agent.get("metrics")?.get(key)?.as_u64())
+                .sum()
+        };
+        return Some(format!(
+            "{} mesh, {} request(s), {} stream(s), {} retry attempt(s), {}/{} bytes sent/received",
+            transport,
+            total("requests_started"),
+            total("streams_started"),
+            total("retries"),
+            total("bytes_sent"),
+            total("bytes_received")
+        ));
+    }
+    // Keep older saved response diagnostics readable.
     let client = report.get("client")?;
     let metrics = client.get("metrics")?;
     let transport = client
@@ -2946,13 +2969,14 @@ fn checkpoint_inventory_text() -> Result<String> {
     let mut lines = vec!["FILE CHECKPOINTS — newest first".to_string()];
     for row in rows {
         lines.push(format!(
-            "{}  {}",
+            "{}  [{}]  {}",
             row["id"].as_str().unwrap_or(""),
+            row["state"].as_str().unwrap_or("unknown"),
             row["path"].as_str().unwrap_or("")
         ));
     }
     lines.push(
-        "Use /undo [id] to review and restore one file write. Later file edits cause a conflict."
+        "Use /undo [id] to review an applied change. Changed revisions conflict; uncertain and legacy records require inspection."
             .to_string(),
     );
     Ok(lines.join("\n"))

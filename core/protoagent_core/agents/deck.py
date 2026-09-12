@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from protolink.transport import Transport
@@ -10,7 +9,6 @@ from protolink.types import TransportType
 
 from ..config import normalize_provider
 from ..prompt_profiles import prompt_profile_status
-from ..verification import VerificationEvidence
 from .architect import create_architect_agent
 from .coder import create_coder_agent
 from .common import AgentRuntimeAuth, create_runtime_auth
@@ -31,8 +29,9 @@ def create_agent_deck(
     prompt_profile: str = "auto",
     scout_enabled: bool = False,
     auth: AgentRuntimeAuth | None = None,
-    evidence: VerificationEvidence | None = None,
-    on_command_output: Callable[[str], None] | None = None,
+    checkpoints=None,
+    authorization=None,
+    attempt=None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -58,7 +57,9 @@ def create_agent_deck(
         credentials=auth.credentials,
     )
     coder = create_coder_agent(
-        evidence=evidence,
+        checkpoints=checkpoints,
+        authorization=authorization,
+        attempt=attempt,
         registry=registry,
         provider=provider,
         model=model,
@@ -111,8 +112,8 @@ def create_agent_deck(
             telemetry=telemetry,
             authenticator=auth.authenticator,
             credentials=auth.credentials,
-            evidence=evidence,
-            on_output=on_command_output,
+            authorization=authorization,
+            attempt=attempt,
         ),
     }
     if scout is not None:
@@ -150,8 +151,7 @@ def agent_manifest(
             "optional": ["scout"],
             "contract": (
                 "RunContract classifies each request and marks write tasks "
-                "incomplete unless Coder, a write approval/diff artifact, or "
-                "an explicit blocker appears."
+                "incomplete unless native execution receipts satisfy the application checks."
             ),
             "flow": [
                 "Context Loom evidence",
@@ -202,7 +202,7 @@ def agent_manifest(
                 "persistence": "no durable conversation state",
                 "state": "stateless",
                 "contract": "prepares RunAction diff artifacts behind approval",
-                "tools": ["generate_unified_diff", "create_new_file", "restore_checkpoint"],
+                "tools": ["create_file", "replace_file", "preview_change", "restore_change"],
                 "enabled": True,
                 "optional": False,
                 **profile_fields,
@@ -213,8 +213,8 @@ def agent_manifest(
                 "memory": "none",
                 "persistence": "no model or durable conversation state",
                 "state": "stateless",
-                "contract": "approved shell.execute with bounded output and timeout",
-                "tools": ["run_command"],
+                "contract": "approved process.execute with native budgets, output limits and cancellation",
+                "tools": ["execute_command"],
                 "enabled": True,
                 "optional": False,
                 "prompt_profile": "not-applicable",

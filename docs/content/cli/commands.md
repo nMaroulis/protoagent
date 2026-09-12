@@ -28,7 +28,7 @@ Installed examples use `proto-cli <command>`.
 | `cli` | Alias for fullscreen terminal UI. |
 | `terminal` | Alias for fullscreen terminal UI. |
 | `ui` | Alias for fullscreen terminal UI. |
-| `checkpoints` | List the latest 50 active Coder file snapshots for the selected project. |
+| `checkpoints` | List up to 50 native changes with their recovery states, plus up to 50 inspection-only legacy snapshots. |
 | `undo [id]` | Preview and approve restoring one checkpoint; defaults to latest and needs no model. |
 | `run "task"` | Run one task outside fullscreen mode. Requires an active project. |
 | `dashboard`, `dash`, `status` | Show cockpit status, provider strip, agent graph, and hotkeys. |

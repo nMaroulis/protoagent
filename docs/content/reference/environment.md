@@ -18,8 +18,6 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `PROTOAGENT_RUNTIME_HOST` | `127.0.0.1` | Host used when generating local runtime URLs. |
 | `PROTOAGENT_REGISTRY_URL` | generated | Registry URL override. |
 | `REGISTRY_URL` | generated | Legacy registry URL override. |
-| `PROTOAGENT_CLIENT_URL` | generated | Client URL override. |
-| `CLIENT_URL` | generated | Legacy client URL override. |
 | `PROTOAGENT_ARCHITECT_URL` | generated | Architect URL override. |
 | `ARCHITECT_AGENT_URL` | generated | Legacy Architect URL override. |
 | `PROTOAGENT_EXPLORER_URL` | generated | Explorer URL override. |
@@ -31,8 +29,8 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `PROTOAGENT_SCOUT_URL` | generated | Optional Scout URL override. |
 | `SCOUT_AGENT_URL` | generated | Legacy Scout URL override. |
 | `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |
-| `PROTOAGENT_STREAM` | `1` | Set to `0` to disable streaming consumption. |
-| `PROTOAGENT_AGENT_TIMEOUT` | `600` | AgentClient timeout seconds. |
+| `PROTOAGENT_STREAM` | `1` | Set to `0` to suppress incremental UI summaries; RunHandle still consumes execution once. |
+| `PROTOAGENT_AGENT_TIMEOUT` | `600` | Native run/approval timeout default in seconds. |
 
 ## Tracing And Progress
 

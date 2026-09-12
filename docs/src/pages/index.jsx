@@ -54,7 +54,7 @@ function TerminalPreview() {
           <div><span aria-hidden="true">├─ </span><b>explorer</b><span>read + search</span></div>
           <div><span aria-hidden="true">└─ </span><b>coder</b><span>prepare diff</span></div>
         </div>
-        <div className={styles.approval}><span aria-hidden="true">◇</span><span>workspace.write <b>requires your approval</b></span></div>
+        <div className={styles.approval}><span aria-hidden="true">◇</span><span>filesystem.write <b>requires your approval</b></span></div>
       </div>
       <div className={styles.terminalPrompt}><span aria-hidden="true">❯</span><span>Your next move<span className={styles.cursor} aria-hidden="true">▋</span></span></div>
       <div className={styles.terminalStatus}><span>LOCAL-FIRST / HUMAN IN CONTROL</span><span>Rust + Python</span></div>
@@ -68,7 +68,7 @@ export default function Home() {
       <main className={styles.workspace}>
         <div className={styles.pathBar}>
           <span><span className={styles.pathRoot}>~/protoagent</span> / docs</span>
-          <span className={styles.version}>v0.2.1 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
+          <span className={styles.version}>v0.2.2 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
         </div>
         <section className={styles.hero} aria-labelledby="home-title">
           <div className={styles.heroCopy}>

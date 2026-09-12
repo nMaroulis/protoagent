@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from protolink import ApprovalDecision, ApprovalRequest, RunContext
+from protolink import ApprovalBroker, ApprovalDecision
+
+from .runtime_policy import RunAuthorization
+from .runtime_storage import output_redaction
 
 
 class RuntimeBridge:
@@ -18,8 +21,9 @@ class RuntimeBridge:
 
     def __init__(self, progress_path: str | None) -> None:
         self.progress_path = Path(progress_path) if progress_path else None
-        self.approval_requests: list[dict[str, Any]] = []
-        self.approval_decisions: list[dict[str, Any]] = []
+        self.broker: ApprovalBroker | None = None
+        self.authorization: RunAuthorization | None = None
+        self.redaction = output_redaction()
         self._write_lock = threading.Lock()
         # Rust owns stale-control cleanup before the worker starts. Preserve a
         # cancellation that may arrive while Python is still assembling context.
@@ -32,56 +36,118 @@ class RuntimeBridge:
         record: dict[str, Any] = {"ts": time.time(), "event": message}
         if run_event is not None:
             record["run_event"] = run_event
+        record = self.redaction.redact(record)
         try:
-            with self._write_lock, self.progress_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(record, ensure_ascii=True) + "\n")
-                handle.flush()
+            with self._write_lock:
+                fd = os.open(
+                    self.progress_path,
+                    os.O_APPEND | os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
+                    0o600,
+                )
+                with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+                    handle.flush()
         except OSError:
             pass
 
-    async def approval_handler(
-        self,
-        request: ApprovalRequest,
-        _context: RunContext,
-    ) -> ApprovalDecision:
-        """Wait for the Rust application to answer a typed approval request."""
-        request_data = request.to_dict()
-        self.approval_requests.append(request_data)
-        if self.progress_path is None:
-            decision = ApprovalDecision(
-                approved=False,
-                request_id=request.request_id,
-                reason="No interactive ProtoAgent approval bridge is available",
-                decided_by="protoagent-core",
-            )
-            self.approval_decisions.append(decision.to_dict())
-            return decision
+    def bind(self, broker: ApprovalBroker, authorization: RunAuthorization, redaction=None) -> None:
+        """Attach the native broker and the application's trusted authorization scope."""
+        self.broker, self.authorization = broker, authorization
+        if redaction is not None:
+            self.redaction = redaction
 
-        self._unlink(self.decision_path)
-        self._write_json(self.request_path, request_data)
-        self.emit(f"Approval required for {request.action.description or request.action.name}.")
+    @property
+    def approval_records(self):
+        """Return detached broker records for this authenticated local runtime."""
+        if self.broker is None or self.authorization is None:
+            return ()
+        return self.broker.records(self.authorization.scope)
 
+    @property
+    def approval_requests(self) -> list[dict[str, Any]]:
+        return [
+            {
+                **self.redaction.redact(record.request.to_dict()),
+                "fingerprint": record.fingerprint,
+                "status": record.status,
+            }
+            for record in self.approval_records
+        ]
+
+    @property
+    def approval_decisions(self) -> list[dict[str, Any]]:
+        return [
+            self.redaction.redact(record.decision.to_dict())
+            for record in self.approval_records
+            if record.decision is not None
+        ]
+
+    async def serve(self, handle) -> None:
+        """Present pending requests one at a time; native broker owns their waits.
+
+        Decisions carry the exact displayed fingerprint and request ID. Scope is
+        never read from the decision file. Cancellation goes to RunHandle once;
+        it is not converted to an approval or a task submission retry.
+        """
+        assert self.broker is not None and self.authorization is not None
+        presented = None
+        generation = 0
         while True:
-            cancel_reason = self.cancel_reason()
-            if cancel_reason:
-                decision = ApprovalDecision(
-                    approved=False,
-                    request_id=request.request_id,
-                    reason=cancel_reason,
-                    decided_by="protoagent-user",
+            if reason := self.cancel_reason():
+                await handle.cancel(reason)
+                self.emit(f"Cancellation requested: {reason}")
+                return
+            scope = self.authorization.scope
+            pending = self.broker.pending(scope)
+            record = pending[0] if pending else None
+            if record is None:
+                self._unlink(self.request_path)
+                presented = None
+            elif self.progress_path is None:
+                self.broker.resolve(
+                    ApprovalDecision(
+                        False,
+                        record.request.request_id,
+                        reason="No interactive ProtoAgent approval bridge is available",
+                        decided_by="protoagent-core",
+                    ),
+                    scope=scope,
+                    fingerprint=record.fingerprint,
                 )
-                break
-
-            data = self._read_json(self.decision_path)
-            if data and data.get("request_id") == request.request_id:
-                decision = ApprovalDecision.from_dict(data)
-                break
+            else:
+                request_id = record.request.request_id
+                if presented != request_id:
+                    self._write_json(
+                        self.request_path,
+                        {
+                            **self.redaction.redact(record.request.to_dict()),
+                            "fingerprint": record.fingerprint,
+                            "presentation_id": generation,
+                        },
+                    )
+                    presented = request_id
+                    self.emit(f"Approval required for {record.request.action.name}.")
+                data = self._read_json(self.decision_path)
+                if data is not None:
+                    self._unlink(self.decision_path)
+                    if isinstance(data.get("approved"), bool) and isinstance(
+                        data.get("fingerprint"), str
+                    ):
+                        resolution = self.broker.resolve(
+                            ApprovalDecision.from_dict(data),
+                            scope=scope,
+                            fingerprint=data["fingerprint"],
+                        )
+                        self.emit(f"Approval decision: {resolution.status}.")
+                    else:
+                        self.emit(
+                            "Approval decision rejected: missing exact ID/fingerprint or boolean decision."
+                        )
+                    # A stale or malformed decision re-presents the same native
+                    # request; only the UI presentation generation changes.
+                    presented = None
+                    generation += 1
             await asyncio.sleep(0.08)
-
-        self.approval_decisions.append(decision.to_dict())
-        self._unlink(self.request_path)
-        self._unlink(self.decision_path)
-        return decision
 
     def cancel_reason(self) -> str | None:
         """Return the application cancellation reason when one was requested."""
@@ -144,5 +210,10 @@ class RuntimeBridge:
         if path is None:
             return
         temporary = Path(f"{path}.{os.getpid()}.tmp")
-        temporary.write_text(json.dumps(value, ensure_ascii=True), encoding="utf-8")
-        os.replace(temporary, path)
+        fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=True)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)

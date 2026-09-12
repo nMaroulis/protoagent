@@ -4,7 +4,7 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.2.1`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.2.2`, sourced from `cli/Cargo.toml`.
 
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.6.9"
+python -m pip install "protolink[http,llms]>=0.7.0"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -60,6 +60,11 @@ Use `/checkpoints` and `/undo [id]` (or `proto-cli checkpoints` / `proto-cli und
 to review and restore individual Coder writes without a model. Undo requires
 approval and refuses files edited after the agent write. Commands' side effects
 are not checkpointed. See [Verify & Recover](../docs/content/cli/verification-and-recovery.md).
+
+Commands run on the host with an explicit environment; they do not inherit the
+CLI environment. Native file recovery requires POSIX and existing parent
+directories. Pre-0.2.2 checkpoints remain available for inspection, while new
+changes use ProtoLink's revision-aware restoration.
 
 ## Agent Controls
 

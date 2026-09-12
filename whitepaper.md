@@ -89,7 +89,7 @@ normal offline-oriented runs.
 
 * **Role:** Expose bounded public-web evidence without giving Explorer or Coder
   ambient network access.
-* **Tools:** ProtoLink 0.6.9 `web_search` and `fetch_url`, both declaring
+* **Tools:** ProtoLink 0.7.0 `web_search` and `fetch_url`, both declaring
   `network.read`.
 * **Logic:** When enabled, Architect discovers Scout and invokes one of its
   tools directly. Brave search uses `BRAVE_SEARCH_API_KEY`; DuckDuckGo is
@@ -109,7 +109,7 @@ receive Explorer's broad read/search tools. It receives a localized objective
 and enough evidence to prepare a patch.
 
 * **Role:** Synthesize code and generate file modifications.
-* **Tools:** `generate_unified_diff`, `create_new_file`, `restore_checkpoint`.
+* **Tools:** native `create_file`, `replace_file`, `preview_change`, `restore_change`.
 * **Logic:** The Architect hands the Coder the user objective and bounded
   Context Pack evidence. The Coder prepares `RunAction` write operations with
   unified-diff preview artifacts, so policy and approval happen before files are
@@ -129,18 +129,12 @@ Before the model runs, ProtoAgent derives a small **Run Contract** from the
 original user request. The contract is attached to `RunContext.metadata` and
 becomes part of the observable trace.
 
-For a read-only repository question, the contract may expect evidence but no
-write artifact. For a workspace-change task, the contract requires the run to
-reach one of three terminal conditions:
-
-1. Coder delegation happened.
-2. A `RunAction` approval request or diff preview artifact exists.
-3. The model reported an explicit blocker.
-
-If a write task ends in prose without Coder, approval, diff, or blocker,
-ProtoAgent marks the run as `incomplete`. This is deliberately outside the
-prompt. The model can suggest a route, but the runtime decides whether the route
-satisfied the contract.
+Read-only questions do not require a write. Workspace-change contracts require
+an executed native file change at its current resource revision. Native
+`CompletionValidator` evaluates application predicates over execution receipts,
+artifacts and resource revisions. An approval, preview, delegation or blocker
+in model prose cannot satisfy that requirement. Structured denials, failure and
+uncertainty remain unsuccessful outcomes.
 
 Example contract:
 
@@ -151,8 +145,8 @@ Example contract:
   "requires_coder": true,
   "requires_write": true,
   "expected_workers": ["explorer", "coder"],
-  "expected_artifacts": ["approval_request", "diff_preview"],
-  "completion_rule": "Workspace changes must reach Coder, a write approval/diff preview, or an explicit blocker before the run is terminal."
+  "expected_artifacts": ["executed_file_change", "resource_revision"],
+  "completion_rule": "Workspace changes require an executed native file change at its current revision."
 }
 ```
 
@@ -216,7 +210,7 @@ The Context Pack format is deliberately structured:
       "path": "core/protoagent_core/runtime.py",
       "role": "runtime mesh",
       "reason": "path and symbol match for streaming task dispatch",
-      "symbols": ["run_selected_model", "_send_task_streaming"],
+      "symbols": ["run_selected_model", "_run_agent_deck"],
       "line_range": "109-132",
       "snippet": "109 | task = Task.create_infer(prompt=prompt) ..."
     }
@@ -435,23 +429,38 @@ access is opt-in, actions are previewed, approvals are explicit, missing write
 artifacts are marked incomplete, and prompt behavior can be evaluated over
 time.
 
-## v0.2.1: Verification And Recovery
+## v0.2.2: Native Execution And Recovery
 
-The runtime target is ProtoLink 0.6.9. Verifier is a tool-only ProtoLink agent
-with no model or conversation state. Architect delegates test/build/lint argv
-through its `run_command` tool. Native `RunAction` policy requires a separate
-`shell.execute` approval displaying the command, working directory, timeout,
-and host access. The command runner closes stdin, retains at most 32 KiB of
-output, and enforces a 1–600 second timeout. It does not sandbox approved code.
+ProtoLink 0.7.0 owns subprocess execution, recoverable file mutation, approval
+lifecycles, agent readiness/cleanup and normalized task results. ProtoAgent
+registers `process_tool()` on Verifier and `filesystem_tools()` on Coder, with
+explicit project roots, dedicated `StorageCheckpointStore` storage and separate
+approval policies for commands, writes and restoration.
 
-An application evidence accumulator ties measured command outcomes to Coder
-change revisions, then publishes them through ProtoLink `RunRecorder` events
-and report metadata. Later agent edits invalidate earlier checks. Architect is
-instructed to stop after two repair attempts or an explicit denial; this is a
-prompt rule, with native runtime budgets and command timeouts providing bounds.
+`AgentGroup` owns the embedded resources. `RunHandle` consumes typed native
+events and normalized `RunResult`/`RunReport`; the application no longer parses
+transport final events or retries uncertain task submissions. An actual
+`ApprovalBroker` handles requests and exact fingerprints; Rust remains the
+presentation adapter and application authorization constructs `ApprovalScope`.
 
-Coder snapshots preserve the pre-write bytes and mode before replacing a file.
-The CLI can list and restore one snapshot through the same ProtoLink write
-policy without a model. Undo refuses files that no longer match the agent's
-write. Snapshots belong to a separate application ledger and cover Coder file
-changes only; they do not replace ProtoLink state or roll back command effects.
+The application Graph permits an initial attempt and at most two repairs after
+completed nonzero checks. All edits precede checking within an attempt. Native
+completion checks bind evidence to resource revisions; external changes to
+referenced files invalidate it. Approvals and previews cannot prove execution.
+The recorded inputs are this run's changed files, not every repository resource.
+
+Native run snapshots and reports remain in `SQLiteRunStore`. ProtoLink 0.7.0
+model delegation does not merge worker receipts into the parent, so ProtoAgent
+composes same-trace native task snapshots for acceptance and inspection. It does
+not turn model prose into evidence. Replay remains read-only.
+
+Local process execution is host execution with explicit argv, cwd, environment
+and limits, without sandbox isolation. Filesystem recovery requires POSIX,
+existing parent directories, symlink-free paths and one live namespace writer.
+Native new files use mode 0600. Changed revisions, including identity changes
+after a restoration, can block chained undo. Legacy v0.2.1 checkpoint databases
+are preserved for inspection rather than imported as proven native effects.
+Uncertain mutations are never automatically replayed.
+
+See the [migration notes](docs/content/core/protolink-migration.md) for the
+old-to-new API mapping and concrete remaining library integration gaps.

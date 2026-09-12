@@ -35,19 +35,26 @@ Manual:
 - Tab completes slash commands with a searchable picker; elsewhere it inserts
   two spaces. Ctrl-R searches recent prompts and recalls without submitting.
   Up/Down move through multiline text; Ctrl-P/Ctrl-N always browse history.
-- `/checkpoints` lists the latest 50 active Coder file snapshots for this project.
-  `/undo [id]` previews and requests approval to restore one snapshot; no id
-  selects latest. Shell equivalents: `proto-cli checkpoints` and `proto-cli undo`.
-  Recovery needs no model. Undo refuses subsequent file edits, preserves the
-  original bytes/mode, and covers Coder writes only, not command side effects.
-- Verifier runs test/build/lint commands delegated by Architect through ProtoLink.
-  Its `shell.execute` policy requires approval of the exact argv, working
-  directory and timeout. Press V in the approval modal to read the full preview.
-  Commands run with host access and may write files or use the network; the
-  working directory is constrained to the project but is not a sandbox.
-  Output is bounded to 32 KiB and timeout to 1–600 seconds (default 120).
-  Verification reports actual exit codes; later Coder changes invalidate earlier
-  checks. Architect is instructed to stop after two repair attempts or a denial.
+- `/checkpoints` lists native Coder changes and their recovery states, plus
+  preserved legacy v0.2.1 records. `/undo [id]` resolves an applied change and
+  requests a separate filesystem.restore approval; no id selects latest.
+  Shell equivalents: `proto-cli checkpoints` and `proto-cli undo`.
+  Recovery needs no model, preserves original bytes/mode, and refuses changed
+  native revisions. Older checkpoints can conflict after a later restoration.
+  Legacy records are inspection-only; they cannot be natively restored.
+- Verifier runs test/build/lint argv through ProtoLink execute_command, with
+  process.execute approval of argv, absolute cwd, explicit env and limits.
+  Use V to inspect the native JSON preview. No environment is inherited.
+  Commands run on the host without sandbox isolation and may write files or
+  use the network. The ceilings are 600 seconds and 32 KiB combined output.
+- Completion requires executed native changes and current resource revisions;
+  approval or preview alone cannot prove execution. Checks report passed,
+  failed, stale or unverified. Graph permits at most two repairs after completed
+  nonzero checks. Edits precede checks within each attempt; denial, timeouts,
+  stale evidence and uncertain effects stop repairs.
+- Recoverable file tools require POSIX, absolute project paths without symlinks
+  and existing parent directories. New files default to mode 0600. Directory
+  creation needs an approved host command and a later edit run.
 - `/model` opens the provider/model picker. `/models` opens model inventory.
   From the shell, use `proto-cli model`.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
@@ -75,7 +82,7 @@ Manual:
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
-- Scout exposes ProtoLink 0.6.9's first-party `web_search` and `fetch_url`
+- Scout exposes ProtoLink's first-party `web_search` and `fetch_url`
   tools under the explicit `network.read` policy. Brave search is the default
   and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
   while English Wikipedia is keyless factual search. Web results are external,
@@ -106,8 +113,10 @@ Manual:
 - ProtoLink Architect conversation state is in
   `~/.protoagent/conversations.sqlite`. Explorer and Coder are task-local
   stateless workers. Optional Scout has no model or durable memory.
-- Coder file snapshots are under `~/.protoagent/checkpoints`, separately from
+- Coder file snapshots are under `~/.protoagent/recovery`, separately from
   ProtoLink conversation memory. `/context reset` does not remove snapshots.
+- Native run snapshots, reports and broker records are under `~/.protoagent/runs`.
+  Recovery and approval storage is private. Replay is inspection, not resumption.
 - Context Loom indexes are under `~/.protoagent/indexes`.
 - Short-lived live progress/control JSONL files are written in the OS temp
   directory while a task is running and are cleaned up after the run.

@@ -8,64 +8,60 @@ terminal string parsing.
 
 ## Approval-Gated Writes
 
-Coder tools declare the `workspace.write` capability. The Coder policy marks
-that capability as `require_approval`. When Coder calls a write tool:
-
-1. Coder builds a `RunAction`.
-2. The action includes a `text/x-diff` preview artifact.
-3. ProtoLink evaluates policy.
-4. ProtoLink calls the application approval handler.
-5. The Python bridge writes an approval request JSON file.
-6. Rust renders a diff and asks the user.
-7. Rust writes an approval decision JSON file.
-8. ProtoLink executes or denies the action.
+Coder registers native `filesystem_tools()` with explicit project roots and
+checkpoint storage. `filesystem.write` and `filesystem.restore` require approval.
+The native tool prepares a `RunAction` with an exact diff and preimage before
+`ApprovalBroker` waits for a decision.
 
 ```mermaid
 sequenceDiagram
-  participant Coder
-  participant PL as ProtoLink policy
-  participant Py as RuntimeBridge
+  participant Tool as Native tool
+  participant Broker as ApprovalBroker
+  participant Bridge as RuntimeBridge
   participant Rust as Rust CLI
   participant FS as Workspace
-
-  Coder->>PL: RunAction(workspace.write, diff artifact)
-  PL->>Py: ApprovalRequest
-  Py->>Rust: approval-request JSON
-  Rust->>Rust: render diff and prompt user
-  Rust->>Py: approval-decision JSON
-  Py->>PL: ApprovalDecision
-  alt approved
-    PL->>FS: execute tool write
-  else denied
-    PL-->>Coder: ActionDeniedError
+  Tool->>Broker: Prepared action / exact fingerprint
+  Bridge->>Broker: Pending records in trusted ApprovalScope
+  Bridge->>Rust: Redacted preview + ID + fingerprint
+  Rust->>Bridge: Decision for exact ID and fingerprint
+  Bridge->>Broker: resolve(decision, scope, fingerprint)
+  alt approved and preimage current
+    Broker-->>Tool: Authorization
+    Tool->>FS: Checkpoint and apply
+  else denied, stale or canceled
+    Broker-->>Tool: Stop without replay
   end
 ```
 
-## Command Approval And Recovery
+## Command approval and recovery
 
-Verifier commands use the same ProtoLink approval bridge with `shell.execute`
-and a `text/plain` command preview. Press V to read the complete preview before
-approving. Approved commands have host access and may write files or use the
-network. Each has bounded output and a timeout.
+Verifier's native `execute_command` requires `process.execute` approval. Its
+JSON preview contains argv, absolute cwd, explicit env, timeout, output cap and
+host execution boundary. Press V to inspect it. Commands run with host access,
+without sandbox isolation; no environment is inherited implicitly.
 
-Coder writes save a per-file checkpoint before replacement. `/checkpoints`
-lists them; `/undo [id]` shows a fresh diff and asks for write approval without
-calling a model. Undo refuses files changed since the agent write. See
-[Verify & Recover](verification-and-recovery.md) for exact scope and limits.
+`/undo [id]` selects an applied native change and asks for a fresh restoration
+approval without a model. Native revision conflicts preserve newer edits.
+Uncertain effects require inspection. See [Verify & Recover](verification-and-recovery.md).
 
-## Temporary Control Files
+## Temporary control files
 
-The progress bridge uses OS temp paths named like:
+Rust creates a private directory under the OS temp directory, with 0700
+permissions on POSIX. Its progress and control files use 0600:
 
 ```text
-protoagent-progress-<pid>-<token>.jsonl
-protoagent-progress-<pid>-<token>.jsonl.approval-request.json
-protoagent-progress-<pid>-<token>.jsonl.approval-decision.json
-protoagent-progress-<pid>-<token>.jsonl.cancel.json
+protoagent-progress-<pid>-<nonce>-<token>/
+  progress.jsonl
+  progress.jsonl.approval-request.json
+  progress.jsonl.approval-decision.json
+  progress.jsonl.cancel.json
 ```
 
-They are cleaned up after a run. The cancellation file is intentionally
-preserved during Python startup so an early Esc press is not lost.
+The directory is removed after the run. Python preserves a cancellation already
+written during startup. Broker state is held natively and persisted in a private
+per-run database; these temporary files are only the UI adapter. Fingerprints
+correlate decisions; authentication comes from the private local control channel
+and the application's trusted mesh authorization, not UI-supplied scopes.
 
 ## Trace Commands
 
@@ -128,17 +124,12 @@ Timeline kinds include:
 
 ## Cancellation
 
-When a task is running, Esc or Ctrl-C writes a cancellation request. The Python
-runtime monitor turns that into a ProtoLink `TaskCancellationRequest`.
-
-Cancellation preference:
-
-1. Call the in-process Architect agent when available.
-2. Fall back to `AgentClient.cancel_task()` through the transport control plane.
-3. Report when cancellation arrived after a terminal state.
-
-If cancellation succeeds, the final response status is `canceled` and the answer
-is a cancellation message rather than the original prompt.
+When a task is running, Esc or Ctrl-C writes a cancellation request.
+`RuntimeBridge` forwards it once through `RunHandle.cancel()`. AgentGroup and
+native cancellation clean up owned work, including active processes. Cancellation
+before submission returns a canceled task without model execution. Lost final
+responses and interrupted mutations remain uncertain; no task is automatically
+resubmitted on another transport.
 
 ## Scaffold Mode
 

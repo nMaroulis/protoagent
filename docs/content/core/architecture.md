@@ -50,7 +50,9 @@ the same component inventory alongside Python, ProtoLink, and provider status.
 6. If `PROTOAGENT_SCAFFOLD=1`, return `_fallback_response()`.
 7. Otherwise call `_model_response()`, which passes the original user prompt to
    runtime contract inference.
-8. If the model path raises, return fallback diagnostics with status `fallback`.
+8. If startup fails before task submission, return fallback diagnostics with status
+   `fallback`. An error after submission preserves the native report and returns
+   `uncertain`; the application cannot assume that no effect occurred.
 
 ## Runtime Prompt
 
@@ -103,7 +105,7 @@ numbers. Paths are resolved by `safe_path()`.
 
 | Field | Meaning |
 | --- | --- |
-| `status` | `answered`, `blocked`, `canceled`, `incomplete`, `ready`, or `fallback`. |
+| `status` | `answered`, `blocked`, `canceled`, `incomplete`, `failed`, `uncertain`, `input_required`, `ready`, or `fallback`. |
 | `headline` | Short run headline. |
 | `answer` | Final readable answer. |
 | `thought_process` | Core diagnostics and runtime notes. |
@@ -117,7 +119,7 @@ numbers. Paths are resolved by `safe_path()`.
 | `run_report` | Redacted ProtoLink `RunReport`. |
 | `transport_report` | ProtoLink transport capabilities, health/configuration, and per-run metrics. |
 | `run_contract` | Inferred worker/artifact requirements for the original prompt. |
-| `verification` | Additional Python response field: measured command outcomes and current Coder change revision; also in run report metadata. |
+| `verification` | Measured native command outcomes and the resource revisions they checked; also in run report metadata. |
 | `completion_validation` | Runtime validation result comparing the trace to the contract. |
 | `provider` | Provider id. |
 | `model` | Model id. |
@@ -137,6 +139,6 @@ numbers. Paths are resolved by `safe_path()`.
 5. Provider config reading.
 6. Agent manifest and tool registration diagnostics.
 
-Fallback mode also uses this response shape when the live ProtoLink run fails.
+Fallback mode also uses this response shape when startup fails before submission.
 That makes the CLI robust enough to show actionable diagnostics even before a
 model/provider is fully configured.

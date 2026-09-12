@@ -134,18 +134,24 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
 
 
 def validate_protolink() -> dict[str, Any]:
-    """Report whether ProtoLink and its agent runtime can be imported."""
+    """Probe required native runtime APIs without starting agents or executing tools."""
     try:
         import protolink
         from protolink import (
+            AgentGroup,
+            ApprovalBroker,
+            ApprovalScope,
+            CompletionCheck,
+            CompletionValidator,
             ContextManifest,
             HistoryCompactor,
             LLMModelProfile,
             RedactionPolicy,
             RetryPolicy,
+            RunHandle,
             RunRecorder,
             StateOperationResult,
-            TaskCancellationRequest,
+            StorageCheckpointStore,
             TransportConfig,
             TransportLimits,
             TransportMetricsSnapshot,
@@ -156,6 +162,7 @@ def validate_protolink() -> dict[str, Any]:
         from protolink.llms.factory import create_llm  # noqa: F401
         from protolink.logging import QuietLogger
         from protolink.security.auth import APIKeyAuth
+        from protolink.tools.builtins import filesystem_tools, process_tool
         from protolink.transport import Transport, TransportCapabilities, TransportRequestContext
         from protolink.transport.http_transport import HTTPTransport
         from protolink.transport.runtime_transport import RuntimeTransport
@@ -176,10 +183,19 @@ def validate_protolink() -> dict[str, Any]:
             and hasattr(Agent, "compact_state")
             and hasattr(AgentClient, "compact_state")
         )
-        cancellation_ready = (
-            hasattr(Agent, "cancel_task")
-            and hasattr(AgentClient, "cancel_task")
-            and TaskCancellationRequest is not None
+        cancellation_ready = hasattr(RunHandle, "cancel") and hasattr(Agent, "cancel_task")
+        execution_ready = all(
+            callable(api)
+            for api in (
+                AgentGroup,
+                ApprovalBroker,
+                ApprovalScope,
+                CompletionCheck,
+                CompletionValidator,
+                StorageCheckpointStore,
+                filesystem_tools,
+                process_tool,
+            )
         )
         logging_ready = QuietLogger is not None
         agent_parameters = inspect.signature(Agent).parameters
@@ -233,6 +249,7 @@ def validate_protolink() -> dict[str, Any]:
                 logging_ready,
                 auth_ready,
                 transport_ready,
+                execution_ready,
             )
         )
 

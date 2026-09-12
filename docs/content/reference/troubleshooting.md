@@ -57,7 +57,7 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.6.9"
+pip install "protolink[http,llms]>=0.7.0"
 proto-cli check
 ```
 
@@ -80,7 +80,7 @@ Enable Scout for the next run:
 proto-cli agents scout on
 ```
 
-If `web_tools_ready` is unavailable, install ProtoLink 0.6.9 or newer. Brave is
+If `web_tools_ready` is unavailable, install ProtoLink 0.7.0 or newer. Brave is
 the default search engine and needs:
 
 ```bash
@@ -93,7 +93,7 @@ factual search. Architect can pass either to `web_search`. Wikipedia only suppor
 nonstandard ports, unsafe redirects, binary content, and oversized responses.
 These rejections are safety behavior, not general network failures.
 
-ProtoLink 0.6.9 applies native budget checks to direct tool tasks. If a call
+ProtoLink 0.7.0 applies native budget checks to direct tool tasks. If a call
 stops at a budget boundary, inspect `/trace` and the configured run budget.
 Verifier also has a separate per-command timeout.
 
@@ -172,10 +172,10 @@ combination as recently valid.
 
 Check:
 
-1. Did the diff modal show a `workspace.write` approval?
+1. Did the diff modal show a `filesystem.write` approval?
 2. Was the request denied?
 3. Did cancellation arrive while waiting for approval?
-4. Did the target path fail `safe_path()`?
+4. Did native preparation reject a symlink, missing parent or stale revision?
 
 Relevant files:
 
@@ -208,11 +208,16 @@ Remember:
 
 ## Verification Or Undo Is Blocked
 
-For a command, inspect the `shell.execute` approval preview with V, confirm the
-working directory, and check the recorded exit code or timeout. An unavailable
-executable is a failed check, not a passing result. Later Coder edits make prior
-checks stale. Commands with no current evidence show `not-run`.
+For a command, inspect the `process.execute` JSON preview with V. The environment
+is explicit: use absolute executables or supply PATH. Check native exit status,
+timeout and truncation; unavailable or interrupted execution cannot pass. Results
+are `passed`, `failed`, `stale` or `unverified`.
 
-For undo, select the same project and run `/checkpoints`. A conflict means the
-current bytes differ from the agent's last write, so recovery leaves them alone.
-Checkpoints cover Coder writes only. See [Verify & Recover](../cli/verification-and-recovery.md).
+For undo, use the same project and inspect `/checkpoints`. A conflict can reflect
+changed resource identity as well as content, including after another restoration.
+Legacy records lack native revisions; prepared/restoring/uncertain records require
+inspection. Nothing is force-overwritten or automatically replayed.
+
+Recoverable file tools require POSIX, paths without symlinks and existing parent
+directories. If another run owns the recovery namespace, finish or cancel that
+run before starting a new one. See [Verify & Recover](../cli/verification-and-recovery.md).
