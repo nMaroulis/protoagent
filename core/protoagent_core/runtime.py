@@ -7,7 +7,7 @@ import os
 import socket
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from .agents import create_agent_deck
 from .agents.common import (
@@ -494,7 +494,7 @@ def _agent_transport() -> TransportName:
         "runtime",
     }:
         return "sse"
-    return cast(TransportName, normalized)
+    return normalized
 
 
 def _streaming_enabled(transport: TransportName) -> bool:

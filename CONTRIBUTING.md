@@ -6,7 +6,7 @@ Rust under `cli/`, and the docs live under `docs/`.
 
 ## Development Setup
 
-Use Python 3.12 or newer and Rust/Cargo 1.85 or newer.
+Use Python 3.12 or newer, the latest version of ruff and ty and Rust/Cargo 1.85 or newer.
 
 ```bash
 python3 -m venv .venv

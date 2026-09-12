@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from protolink import DEFAULT_REDACTION_POLICY, RedactionPolicy, RunReport, Task
+from protolink import DEFAULT_REDACTION_POLICY, RedactionPolicy, RunEvent, RunReport, Task
 from protolink.storage import SQLiteRunStore
 
 from . import config
@@ -75,7 +76,7 @@ class ApplicationRunStore(SQLiteRunStore):
             RunReport.from_dict(self.redaction.redact(report.to_dict())), **kwargs
         )
 
-    def trace_report(self, task: Task, *, observed=()) -> RunReport:
+    def trace_report(self, task: Task, *, observed: Iterable[RunEvent] = ()) -> RunReport:
         """Join native worker receipts from this run's dedicated store by event ID.
 
         ProtoLink 0.7.0 delegation returns outputs without merging worker events.
@@ -85,7 +86,7 @@ class ApplicationRunStore(SQLiteRunStore):
         from protolink import RunContext
 
         context = RunContext.from_task(task)
-        events = {event.event_id: event for event in observed}
+        events: dict[str, RunEvent] = {event.event_id: event for event in observed}
         # This database belongs to one run; a generous finite inspection bound
         # is safe with the application's native execution budgets.
         records = self.list_task_records(limit=10001)
@@ -99,8 +100,9 @@ class ApplicationRunStore(SQLiteRunStore):
             child = RunReport.from_task(Task.from_dict(record.task))
             events.update((event.event_id, event) for event in child.events)
         events.update((event.event_id, event) for event in RunReport.from_task(task).events)
+        ordered_events = sorted(events.values(), key=lambda event: event.timestamp)
         return RunReport.from_events(
-            sorted(events.values(), key=lambda event: event.timestamp),
+            ordered_events,
             context=context,
             final_task=task.to_dict(),
         )
