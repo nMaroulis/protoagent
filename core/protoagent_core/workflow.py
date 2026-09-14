@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 
-from protolink import Graph, Message, Task, TaskState
+from protolink import Graph, Message, RunReport, Task, TaskState
 from protolink.flows import Flow
 
 from .verification import validate_completion
@@ -15,9 +15,9 @@ from .verification import validate_completion
 class CodingWorkflow:
     """Keep coding acceptance and repair instructions outside the execution engine."""
 
-    def __init__(self, *, group, contract, attempt, broker, store, observe, redaction, prompt):
+    def __init__(self, *, group, contract, attempt, broker, observe, redaction, prompt):
         self.group, self.contract, self.attempt = group, contract, attempt
-        self.broker, self.store, self.observe, self.redaction = broker, store, observe, redaction
+        self.broker, self.observe, self.redaction = broker, observe, redaction
         self.prompt = prompt
         self.task = None
         self.acceptance = None
@@ -49,6 +49,15 @@ class CodingWorkflow:
                     await handle.cancel("Enclosing workflow canceled")
                     await handle.result()
                     raise
+                finally:
+                    # Graph nodes exchange Tasks. Carry the handle's complete
+                    # native report, including model stream/metrics events, into
+                    # that task; native Graph merging preserves it across nodes.
+                    task.metadata["run_events"] = [
+                        event.to_dict() for event in handle.report.events
+                    ]
+                if result.task is not None:
+                    result.task.metadata["run_events"] = task.metadata["run_events"]
                 if result.status == "uncertain" or result.task is None:
                     workflow.uncertain = True
                     raise RuntimeError(
@@ -63,10 +72,8 @@ class CodingWorkflow:
 
         class Accept(Flow):
             async def execute(self, task):
-                report = workflow.store.trace_report(task)
-                # These are unchanged native receipts from owned workers. Approval
-                # JSON and model tool-result prose never become execution evidence.
-                task.metadata["run_events"] = [event.to_dict() for event in report.events]
+                # ProtoLink propagates worker receipts into the parent's native task.
+                report = RunReport.from_task(task)
                 workflow.acceptance = await validate_completion(
                     workflow.contract, task, report, workflow.attempt, workflow.broker
                 )

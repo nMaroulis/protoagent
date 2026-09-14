@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "protoagent-core"
-version = "0.2.2"
+version = "0.2.3"
 description = "Shared Python runtime core for ProtoAgent frontends."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "protolink[http,llms]>=0.7.0",
+    "protolink[http,llms]>=0.7.1",
 ]
 
 [project.urls]

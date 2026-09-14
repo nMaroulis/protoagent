@@ -116,12 +116,13 @@ async def _run_agent_deck(
         Task,
     )
     from protolink.discovery import Registry
-    from protolink.storage import SQLiteStorage
+    from protolink.storage import SQLiteRunStore, SQLiteStorage
 
     from . import config
-    from .checkpoints import checkpoint_store, workspace_writer
+    from .checkpoints import checkpoint_store, private_file, workspace_writer
     from .runtime_policy import AttemptState, RunAuthorization
-    from .runtime_storage import ApplicationRunStore, output_redaction
+    from .runtime_storage import output_redaction
+    from .streaming import LiveOutput
     from .workflow import CodingWorkflow
 
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
@@ -144,7 +145,8 @@ async def _run_agent_deck(
     redaction = output_redaction(auth.credentials)
     bridge.redaction = redaction
     events: list[str] = []
-    live_updates = _streaming_enabled(_agent_transport())
+    live_updates = _streaming_enabled()
+    live_output = LiveOutput(bridge, redaction)
 
     def emit(message):
         events.append(message)
@@ -152,16 +154,17 @@ async def _run_agent_deck(
 
     async def observe(handle):
         async for event in handle.events():
+            if live_updates:
+                live_output.emit(event)
             data = event.to_dict(redaction_policy=redaction)
             summary = _run_event_summary(data)
-            if data["type"] == "process.output":
-                summary = f"Verifier {data['payload'].get('channel', 'output')}: {data['payload'].get('text', '')}"
             if summary:
                 _append_event(events, summary, bridge if live_updates else None, run_event=data)
 
     with workspace_writer(project):
-        store = ApplicationRunStore(
-            config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite", redaction
+        store = SQLiteRunStore(
+            private_file(config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite"),
+            redaction_policy=redaction,
         )
         broker = ApprovalBroker(
             storage=SQLiteStorage(store.db_path, table_name="approvals", namespace=context.run_id),
@@ -245,7 +248,6 @@ async def _run_agent_deck(
                     contract=contract,
                     attempt=attempt,
                     broker=broker,
-                    store=store,
                     observe=observe,
                     redaction=redaction,
                     prompt=prompt,
@@ -272,7 +274,7 @@ async def _run_agent_deck(
                         await controls
                 native_report = result.report
                 evidence_task = workflow.task or result.task or task
-                evidence_report = store.trace_report(evidence_task, observed=native_report.events)
+                evidence_report = RunReport.from_task(evidence_task)
                 acceptance = await validate_completion(
                     contract, evidence_task, evidence_report, attempt, broker
                 )
@@ -304,9 +306,9 @@ async def _run_agent_deck(
                     or acceptance.verification["results"]
                 ):
                     answer += "\n\n" + verification_summary(acceptance.verification)
-                # Keep the handle's normalized terminal task; combine native child
-                # receipts for application inspection, without parsing wire events.
-                combined = store.trace_report(evidence_task, observed=native_report.events)
+                # Native Graph tasks already retain parent and delegated receipts.
+                # Preserve the outer handle's normalized terminal task.
+                combined = RunReport.from_task(evidence_task)
                 report = RunReport.from_events(
                     combined.events,
                     context=context,
@@ -485,14 +487,12 @@ def _agent_transport() -> TransportName:
     return normalized
 
 
-def _streaming_enabled(transport: TransportName) -> bool:
-    """Decide whether to consume ProtoLink task streams for this run."""
+def _streaming_enabled() -> bool:
+    """Control live presentation; ProtoLink selects each peer's transport capability."""
     raw = os.getenv("PROTOAGENT_STREAM", "1").strip().lower()
     if raw in {"0", "false", "no", "off"}:
         return False
-    if raw in {"1", "true", "yes", "on"}:
-        return transport != "http"
-    return transport != "http"
+    return True
 
 
 def _transport_report(deck: dict[str, Any], registry_transport) -> dict[str, Any]:
@@ -555,10 +555,10 @@ def _append_event(
 
 
 def _run_event_summary(event: dict[str, Any]) -> str:
-    """Return the stable RunEvent summary while suppressing token chunks."""
+    """Keep model/process text in the live-output channel rather than trace summaries."""
     raw_payload = event.get("payload")
     payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-    if payload.get("llm_event_type") == "llm_chunk":
+    if payload.get("llm_event_type") == "llm_chunk" or event.get("type") == "process.output":
         return ""
     return str(event.get("summary") or event.get("type") or "runtime event")
 
@@ -638,13 +638,13 @@ def _dedupe_diffs(diffs: list[dict[str, str]]) -> list[dict[str, str]]:
 def run_recovery(workspace: str, change_id: str, session_id=None, progress_path=None):
     """Run an exact approved native restoration without constructing a model."""
     from protolink import AgentGroup, ApprovalBroker, RunContext, Task
-    from protolink.storage import SQLiteStorage
+    from protolink.storage import SQLiteRunStore, SQLiteStorage
 
     from . import config
     from .agents.coder import create_coder_agent
-    from .checkpoints import checkpoint_store, select_change, workspace_writer
+    from .checkpoints import checkpoint_store, private_file, select_change, workspace_writer
     from .runtime_policy import RunAuthorization
-    from .runtime_storage import ApplicationRunStore, output_redaction
+    from .runtime_storage import output_redaction
 
     bridge = RuntimeBridge(progress_path)
     submitted = False
@@ -660,8 +660,9 @@ def run_recovery(workspace: str, change_id: str, session_id=None, progress_path=
         with workspace_writer(workspace):
             checkpoints = checkpoint_store(workspace)
             selected = select_change(checkpoints, change_id, workspace)
-            store = ApplicationRunStore(
-                config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite", redaction
+            store = SQLiteRunStore(
+                private_file(config.CONFIG_DIR / "runs" / f"{context.run_id}.sqlite"),
+                redaction_policy=redaction,
             )
             broker = ApprovalBroker(
                 storage=SQLiteStorage(

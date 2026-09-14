@@ -3,7 +3,7 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.2.2 requires **ProtoLink 0.7.0**. `runtime.py` configures an embedded
+ProtoAgent 0.2.3 requires **ProtoLink 0.7.1**. `runtime.py` configures an embedded
 mesh; `workflow.py` defines coding acceptance and repair routing. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
@@ -97,18 +97,31 @@ be overridden with `PROTOAGENT_REGISTRY_URL`, `PROTOAGENT_ARCHITECT_URL`,
 The entry handle invokes owned agents locally; there is no separate CLI task
 client to configure.
 
-ProtoLink handles task streams and final-result normalization. ProtoAgent only
-formats typed events for the UI, suppresses token chunks, and limits visible
-summaries with `PROTOAGENT_STREAM_TRACE_LIMIT` (default 120).
-`PROTOAGENT_STREAM=0` suppresses incremental UI summaries; native handles still
-consume execution to completion. It does not resubmit work on another transport.
+All deck agents advertise streaming. ProtoLink handles provider streaming,
+delegated event propagation and final-result normalization. `streaming.py`
+projects `llm_chunk`, `llm_final` and `process.output` into a separate live-output
+channel for Rust. The TUI retains up to four stream previews, each with the last
+4096 characters; shell output is flushed as deltas arrive. Task/agent/step/channel
+identities keep independent streams separate. `llm_final` replaces its TUI
+preview, while the native terminal task determines the overall run status.
 
-**0.7.0 integration gap:** model delegation returns a worker output without
-merging that worker's native receipts into the parent report. The application
-composes native task snapshots from the same trace in its `SQLiteRunStore` by
-event ID. It never turns model tool-result prose into evidence. Delegated process
-output may therefore be available only once the worker snapshot is persisted;
-direct native process handles expose live `process.output` events.
+JSON-action models produce raw JSON generation fragments. Native-tool models
+produce ordinary text. The application displays both as provisional output and
+does not parse partial actions or execute anything from the preview.
+
+`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) limits summaries, not live text.
+`PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native
+handles still consume execution once. Peer capabilities determine whether
+delegated output arrives live or with the final snapshot. Even an HTTP worker
+mesh can show live output from the locally invoked Architect.
+
+ProtoLink 0.7.1 puts delegated events and receipts directly in parent streams,
+tasks and reports, with native identity preservation and deduplication. Completion
+uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
+handle's complete report events into the Graph task, preserving model metrics
+and stream events along with execution receipts. No stored-task scan or
+application event join is needed, and a worker's terminal event cannot finish
+the parent run.
 
 Responses retain native transport diagnostics for the Registry and each worker.
 The final report keeps the handle's normalized terminal task plus application
@@ -133,9 +146,10 @@ individual requests and does not set the aggregate run budget. Command execution
 is also bounded by its explicit limits and the remaining native runtime budget.
 Native nested flows share budgets; remote workers enforce inherited limits.
 
-`ApplicationRunStore` adds mandatory output redaction to native persistence and
-composes same-trace receipts. Known credential values and keys, recovery
-`data_base64`, and terminal controls are removed from presentation snapshots.
+`SQLiteRunStore(..., redaction_policy=...)` applies native redaction before every
+task, report and caller metadata write. Known credential values use native
+`RedactionPolicy.sensitive_values`; default sensitive keys include recovery
+`data_base64`. ProtoAgent selects credentials and adds terminal-control stripping.
 The complete recovery and approval records live only in protected storage.
 RunReplay remains read-only inspection, not task resumption.
 

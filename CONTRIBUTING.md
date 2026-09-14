@@ -12,7 +12,7 @@ Use Python 3.12 or newer, the latest version of ruff and ty and Rust/Cargo 1.85 
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms]>=0.7.0" ruff ty
+python -m pip install "protolink[http,llms]>=0.7.1" ruff ty
 rustup component add rustfmt clippy
 cargo build --locked --manifest-path cli/Cargo.toml
 ```

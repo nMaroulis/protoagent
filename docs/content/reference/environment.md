@@ -29,7 +29,7 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `PROTOAGENT_SCOUT_URL` | generated | Optional Scout URL override. |
 | `SCOUT_AGENT_URL` | generated | Legacy Scout URL override. |
 | `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |
-| `PROTOAGENT_STREAM` | `1` | Set to `0` to suppress incremental UI summaries; RunHandle still consumes execution once. |
+| `PROTOAGENT_STREAM` | `1` | Set to `0` to suppress live text and incremental UI summaries; RunHandle still consumes execution once. |
 | `PROTOAGENT_AGENT_TIMEOUT` | `600` | Native run/approval timeout default in seconds. |
 
 ## Tracing And Progress
@@ -37,7 +37,7 @@ description: Runtime, model, tracing, context, and config environment variables.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PROTOAGENT_TRACE` | `0` | Enable durable ProtoLink `LocalTraceTelemetry` JSONL traces. |
-| `PROTOAGENT_STREAM_TRACE_LIMIT` | `120` | Max stream summaries retained for UI progress before suppression. |
+| `PROTOAGENT_STREAM_TRACE_LIMIT` | `120` | Max retained trace summaries; live text uses a separate channel and continues beyond this limit. |
 | `PROTOAGENT_SCAFFOLD` | `0` | Set to `1` to return diagnostics without a model call. |
 
 ## Context And Memory

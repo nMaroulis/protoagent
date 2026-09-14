@@ -526,22 +526,32 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     let mut progress_file = ProgressFile::new("run");
     let progress_path = progress_file.path_string();
     let mut progress_events = Vec::new();
+    let mut output_stream = String::new();
+    let mut cancellation_requested = false;
     let mut task = tokio::task::spawn_blocking(move || {
         call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
     });
 
     let json_result: Result<String> = loop {
         tokio::select! {
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                if !cancellation_requested {
+                    progress_file.request_cancel("Canceled from the ProtoAgent CLI")?;
+                    cancellation_requested = true;
+                    pb.set_message("cancellation requested; waiting for native cleanup");
+                }
+            }
             result = &mut task => {
                 let raw = match result {
                     Ok(raw) => raw,
                     Err(err) => break Err(err.into()),
                 };
-                progress_events.extend(progress_file.read_new());
+                ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
                 break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
             }
             _ = tokio::time::sleep(Duration::from_millis(140)) => {
-                progress_events.extend(progress_file.read_new());
+                ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
                 if let Some(approval) = progress_file.take_approval_request() {
                     let approved = pb.suspend(|| -> Result<bool> {
                         render_runtime_approval(&approval);
@@ -566,12 +576,20 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
             }
         }
     };
-    progress_events.extend(progress_file.read_new());
+    ingest_shell_progress(
+        &pb,
+        &mut progress_events,
+        &mut output_stream,
+        progress_file.read_new_batch(),
+    )?;
+    if !output_stream.is_empty() {
+        println!();
+    }
     progress_file.cleanup();
     let json = match json_result {
         Ok(json) => {
             pb.finish_with_message(format!(
-                "completed with {} trace event(s)",
+                "run ended with {} trace event(s)",
                 progress_events.len()
             ));
             json
@@ -592,6 +610,36 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
     render_response(&response)?;
 
     Ok(response)
+}
+
+fn ingest_shell_progress(
+    spinner: &ProgressBar,
+    events: &mut Vec<String>,
+    current_stream: &mut String,
+    batch: progress::ProgressBatch,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    events.extend(batch.events);
+    spinner.suspend(|| {
+        let mut output = std::io::stdout().lock();
+        for update in batch.output {
+            // llm_final replaces the TUI preview; render_response prints the
+            // authoritative final answer after the enclosing task terminates.
+            if update.replace {
+                continue;
+            }
+            if *current_stream != update.id {
+                write!(
+                    output,
+                    "\n[{} / {} — live preview]\n",
+                    update.agent, update.channel
+                )?;
+                *current_stream = update.id;
+            }
+            write!(output, "{}", update.text)?;
+        }
+        output.flush()
+    })
 }
 
 fn render_response(response: &CoreResponse) -> Result<()> {

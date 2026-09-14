@@ -234,7 +234,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.7.0 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.7.1 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |

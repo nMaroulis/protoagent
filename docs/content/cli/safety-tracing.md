@@ -63,6 +63,21 @@ per-run database; these temporary files are only the UI adapter. Fingerprints
 correlate decisions; authentication comes from the private local control channel
 and the application's trusted mesh authorization, not UI-supplied scopes.
 
+## Live output
+
+Live generation is enabled by default in `proto-cli run` and the TUI. Each
+preview identifies its agent and channel. Model text and command stdout/stderr
+arrive while work is running; worker completion does not complete the whole run.
+The final response and status come from the native task result.
+
+JSON-action models can show raw JSON fragments during generation. Models using
+native tools show ordinary text. The TUI replaces a generation preview with the
+complete model answer on `llm_final` and keeps the last 4096 characters of up to
+four active previews. The full final answer remains available afterward.
+
+Use `PROTOAGENT_STREAM=0` to hide live previews. Esc/Ctrl-C cancels in the TUI;
+Ctrl-C in shell mode also requests native cancellation and waits for cleanup.
+
 ## Trace Commands
 
 | Surface | Command | Output |

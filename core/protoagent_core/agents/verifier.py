@@ -35,6 +35,7 @@ def create_verifier_agent(
             "description": "Execute an approved test/build command. Call execute_command directly with argv, absolute cwd, explicit env, timeout_seconds and max_output_bytes; no infer loop.",
             "url": agent_url,
             "capabilities": {
+                "streaming": True,
                 "delegation": False,
                 "tool_calling": True,
                 "multi_step_reasoning": False,

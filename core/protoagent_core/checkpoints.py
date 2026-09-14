@@ -41,7 +41,7 @@ def workspace_key(workspace: str | None) -> str:
 def checkpoint_store(workspace: str | None = None) -> StorageCheckpointStore:
     """Configure a dedicated native Storage namespace, separate from conversations."""
     if os.name != "posix":
-        raise NotImplementedError("Recoverable Coder writes require POSIX with ProtoLink 0.7.0")
+        raise NotImplementedError("Recoverable Coder writes require POSIX with ProtoLink 0.7.1")
     database = private_file(config.CONFIG_DIR / "recovery" / f"{workspace_key(workspace)}.sqlite")
     return StorageCheckpointStore(
         SQLiteStorage(str(database), table_name="recovery", namespace="file-changes")
@@ -67,11 +67,6 @@ def workspace_writer(workspace: str | None):
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def changes(store: StorageCheckpointStore) -> list[ResourceChange]:
-    """Inspect native records through the backing Storage's public load contract."""
-    return [ResourceChange.from_dict(value) for value in (store.storage.load() or {}).values()]
-
-
 def legacy_checkpoints(workspace: str | None) -> list[dict[str, Any]]:
     """Read legacy inventory without modifying its database or exposing file bytes."""
     database = config.CONFIG_DIR / "checkpoints" / f"{workspace_key(workspace)}.sqlite"
@@ -88,7 +83,7 @@ def legacy_checkpoints(workspace: str | None) -> list[dict[str, Any]]:
 
 def list_checkpoints(workspace: str | None = None) -> list[dict[str, Any]]:
     """List native recovery states and retained legacy snapshots without contents."""
-    records = changes(checkpoint_store(workspace))
+    records = checkpoint_store(workspace).list_changes(limit=50)
     return [
         {
             "id": change.change_id,
@@ -97,14 +92,14 @@ def list_checkpoints(workspace: str | None = None) -> list[dict[str, Any]]:
             "restorable": change.state == "applied",
             "error": change.error,
         }
-        for change in reversed(records[-50:])
+        for change in records
     ] + legacy_checkpoints(workspace)
 
 
 def select_change(store: StorageCheckpointStore, change_id: str, workspace: str) -> ResourceChange:
     """Resolve latest before submitting the exact native restore tool call."""
     if change_id == "latest":
-        record = next((item for item in reversed(changes(store)) if item.state == "applied"), None)
+        record = next(iter(store.list_changes(state="applied", limit=1)), None)
     else:
         record = store.get(change_id)
     if record is None:

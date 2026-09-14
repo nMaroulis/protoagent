@@ -7,13 +7,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from protolink import ApprovalBroker, ApprovalDecision, RunContext, RunHandle, Task
+from protolink.storage import SQLiteRunStore
 
 from protoagent_core.agents.coder import create_coder_agent
 from protoagent_core.agents.verifier import create_verifier_agent
-from protoagent_core.checkpoints import checkpoint_store
+from protoagent_core.checkpoints import checkpoint_store, private_file
 from protoagent_core.runtime_bridge import RuntimeBridge
 from protoagent_core.runtime_policy import AttemptState, RunAuthorization
-from protoagent_core.runtime_storage import ApplicationRunStore, output_redaction
+from protoagent_core.runtime_storage import output_redaction
 
 
 class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
@@ -37,7 +38,9 @@ class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
         self.attempt.begin()
         self.broker = ApprovalBroker(timeout_seconds=3)
         self.redaction = output_redaction()
-        self.store = ApplicationRunStore(self.config_dir / "runs" / "test.sqlite", self.redaction)
+        self.store = SQLiteRunStore(
+            private_file(self.config_dir / "runs" / "test.sqlite"), redaction_policy=self.redaction
+        )
         common = dict(
             workspace=str(self.root),
             transport=None,

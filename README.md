@@ -10,7 +10,7 @@ Its runtime is designed to give smaller models narrow roles, bounded evidence,
 and deterministic completion checks instead of one large prompt with every
 tool attached.
 
-Release `0.2.2` covers the active `proto-cli` and `protoagent-core`
+Release `0.2.3` covers the active `proto-cli` and `protoagent-core`
 components. The ACP editor bridge remains a planned `0.0.0-dev.0` component.
 See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -30,17 +30,17 @@ See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 - **Operator-visible behavior:** the Rust CLI exposes provider, model, context,
   agent, readiness, timeline, trace, diff, and session state.
 
-## New in 0.2.2
+## New in 0.2.3
 
-- Move command execution and recoverable file changes to ProtoLink 0.7.0's
-  native tools, with scoped broker approvals and exact action fingerprints.
-- Manage the embedded mesh with `AgentGroup` and consume normalized outcomes
-  with `RunHandle`, preserving failure, cancellation and uncertainty.
-- Validate executed effects using native completion checks and resource
-  revisions; enforce the two-repair ceiling with Graph limits.
-- Keep `/checkpoints` and model-free `/undo`, with explicit native recovery
-  states. Legacy 0.2.1 snapshots remain inspection-only. Recoverable writes now
-  require POSIX, existing parents and paths without symlinks.
+- Show model generation and delegated command output live in the shell and TUI.
+  Previews remain provisional until the native task finishes; Ctrl-C cancels
+  shell runs through the same native runtime as the TUI.
+- Consume delegated receipts directly from native parent reports, removing the
+  stored-worker event join.
+- Configure automatic task/report/metadata redaction on native `SQLiteRunStore`,
+  and use native checkpoint filters and pagination instead of reading Storage.
+- Require ProtoLink 0.7.1 while preserving scoped approvals, recovery conflicts,
+  cancellation, native budgets and the two-repair ceiling.
 
 The multiline composer and terminal-styled operator manual remain available.
 Read [Verify & Recover](docs/content/cli/verification-and-recovery.md) for explicit
@@ -50,8 +50,8 @@ environments, host execution, output bounds and recovery limitations.
 
 | Surface | Status | Responsibility |
 | --- | --- | --- |
-| `cli/` | Active, `0.2.2` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
-| `core/` | Active, `0.2.2` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
+| `cli/` | Active, `0.2.3` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
+| `core/` | Active, `0.2.3` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
 | `acp/` | Planned, `0.0.0-dev.0` | Future editor-facing Agent Client Protocol adapter. |
 
 The default coding deck is intentionally asymmetric:
@@ -94,7 +94,7 @@ Requirements:
 - Rust toolchain with Cargo 1.85 or newer
 - a supported local or API model provider
 
-ProtoAgent 0.2.2 requires ProtoLink 0.7.0 or newer with the HTTP and LLM extras.
+ProtoAgent 0.2.3 requires ProtoLink 0.7.1 or newer with the HTTP and LLM extras.
 
 ```bash
 git clone https://github.com/nMaroulis/protoagent.git
@@ -102,7 +102,7 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.7.0"
+python -m pip install "protolink[http,llms]>=0.7.1"
 python -m pip install -e core
 
 cargo build --release --locked --manifest-path cli/Cargo.toml
@@ -148,7 +148,7 @@ ProtoLink trace output is opt-in through `PROTOAGENT_TRACE=1`.
 
 ## Project Status
 
-The Rust CLI and Python core are the supported surfaces in `0.2.2`. The
+The Rust CLI and Python core are the supported surfaces in `0.2.3`. The
 [ACP directory](acp/README.md) is a roadmap placeholder; it is not currently an
 installable editor server. Contributions should keep code, CLI help, readiness
 output, docs, tests, and the changelog aligned.

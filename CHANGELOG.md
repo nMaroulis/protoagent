@@ -2,6 +2,53 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.2.3] - Unreleased
+
+### Added
+
+- Live model generation and delegated command stdout/stderr in shell and TUI,
+  using native `RunHandle.events()` and explicit streaming Agent capabilities.
+  TUI previews retain up to four streams with the last 4096 characters each;
+  `llm_final` replaces its generation preview. The terminal task establishes
+  overall completion, including failure, cancellation and uncertainty.
+- Shell Ctrl-C requests native cancellation and waits for runtime cleanup.
+- Provider-free gated streaming tests for early HTTP model delivery, JSON-action
+  and native-tool modes, cancellation, cleanup, live delegated process output,
+  receipt deduplication, redacted persistence and checkpoint pagination.
+
+### Changed
+
+- Require ProtoLink 0.7.1; coordinate CLI/core/docs versions at 0.2.3.
+- Consume propagated worker receipts directly from native parent/Graph tasks.
+  Remove `ApplicationRunStore.trace_report()` and stored-worker evidence scans.
+- Configure `SQLiteRunStore(..., redaction_policy=...)` for automatic task,
+  report and caller metadata writes. Remove save overrides and custom credential
+  replacement in favor of native `RedactionPolicy.sensitive_values`.
+- Use native checkpoint `list_changes()` with state/run filters and pagination.
+  Remove the application inventory reader over the raw Storage namespace.
+- Read progress JSONL incrementally by byte offset, retaining partial writes for
+  the next poll. Live output is separate from the bounded trace-summary channel.
+- Update docstrings, runtime readiness checks, Guide help and documentation.
+
+### Fixed
+
+- Stop dropping model chunks before they reach the Rust frontend. An HTTP worker
+  mesh no longer disables live output from the locally invoked Architect.
+- Keep worker/step previews separate, replace final text without duplication and
+  retain valid UTF-8 when bounding previews or reading partial progress lines.
+- Mask configured secrets split across live output chunks and strip terminal
+  controls from presentation. Unknown secrets still require application handling.
+- Preserve failed, uncertain and input-required labels in the TUI.
+
+### Boundaries
+
+- JSON-action models can show raw JSON generation fragments. These previews are
+  provisional; actions remain assembled, authorized and executed by ProtoLink.
+- `PROTOAGENT_STREAM=0` hides previews without changing execution or replaying work.
+- Existing approvals, budgets, POSIX recovery constraints, legacy inspection and
+  bounded repairs remain. Native inventory includes original recovery bytes;
+  ProtoAgent exposes metadata only and keeps recovery storage private.
+
 ## [0.2.2] - 2026-09-12
 
 ### Changed

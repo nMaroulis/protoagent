@@ -121,7 +121,7 @@ const config = {
             ],
           },
         ],
-        copyright: `protoagent_ / v0.2.2 / MIT · © ${new Date().getFullYear()} ProtoAgent`,
+        copyright: `protoagent_ / v0.2.3 / MIT · © ${new Date().getFullYear()} ProtoAgent`,
       },
       prism: {
         theme: lightCodeTheme,

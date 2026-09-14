@@ -58,6 +58,7 @@ def create_explorer_agent(
             ),
             "url": agent_url,
             "capabilities": {
+                "streaming": True,
                 "delegation": False,
                 "tool_calling": True,
                 "multi_step_reasoning": True,

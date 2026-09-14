@@ -1,6 +1,6 @@
 [package]
 name = "proto-cli"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 rust-version = "1.85"
 description = "Local-first coding-agent CLI and TUI powered by ProtoLink."

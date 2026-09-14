@@ -1,13 +1,14 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const MAX_VISIBLE_EVENTS: usize = 8;
 
 pub(crate) struct ProgressFile {
     path: PathBuf,
-    seen_lines: usize,
+    offset: u64,
     seen_approvals: HashSet<String>,
 }
 
@@ -35,6 +36,58 @@ pub(crate) struct ContextSample {
 pub(crate) struct ProgressBatch {
     pub(crate) events: Vec<String>,
     pub(crate) context_samples: Vec<ContextSample>,
+    pub(crate) output: Vec<OutputUpdate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct OutputUpdate {
+    pub(crate) id: String,
+    pub(crate) agent: String,
+    pub(crate) channel: String,
+    pub(crate) text: String,
+    pub(crate) replace: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct LiveOutput {
+    streams: Vec<OutputUpdate>,
+}
+
+impl LiveOutput {
+    pub(crate) fn observe(&mut self, update: OutputUpdate) {
+        let position = self.streams.iter().position(|item| item.id == update.id);
+        let mut item = position
+            .map(|index| self.streams.remove(index))
+            .unwrap_or_else(|| OutputUpdate {
+                text: String::new(),
+                ..update.clone()
+            });
+        if update.replace {
+            item.text.clear();
+        }
+        item.text.push_str(&update.text);
+        // Keep the live view bounded; the native final response remains complete.
+        if let Some((start, _)) = item.text.char_indices().rev().nth(4095) {
+            item.text = item.text[start..].to_string();
+        }
+        self.streams.push(item);
+        if self.streams.len() > 4 {
+            self.streams.remove(0);
+        }
+    }
+
+    pub(crate) fn render(&self) -> String {
+        self.streams
+            .iter()
+            .map(|item| {
+                format!(
+                    "[{} / {} — live preview]\n{}",
+                    item.agent, item.channel, item.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +136,7 @@ impl ProgressFile {
         }
         Self {
             path,
-            seen_lines: 0,
+            offset: 0,
             seen_approvals: HashSet::new(),
         }
     }
@@ -92,20 +145,23 @@ impl ProgressFile {
         self.path.to_string_lossy().to_string()
     }
 
-    pub(crate) fn read_new(&mut self) -> Vec<String> {
-        self.read_new_batch().events
-    }
-
     pub(crate) fn read_new_batch(&mut self) -> ProgressBatch {
-        let Ok(text) = fs::read_to_string(&self.path) else {
+        let Ok(mut file) = fs::File::open(&self.path) else {
             return ProgressBatch::default();
         };
-
+        if file.seek(SeekFrom::Start(self.offset)).is_err() {
+            return ProgressBatch::default();
+        }
+        let mut reader = BufReader::new(file);
         let mut batch = ProgressBatch::default();
-        for line in text.lines().skip(self.seen_lines) {
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || !line.ends_with('\n') {
+                break; // Retry a partially written JSON/UTF-8 line on the next poll.
+            }
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                self.seen_lines += 1;
+                self.offset += line.len() as u64;
                 continue;
             }
 
@@ -113,6 +169,11 @@ impl ProgressFile {
                 break;
             };
             let run_event = value.get("run_event");
+            if let Some(output) = value.get("live_output") {
+                if let Ok(update) = serde_json::from_value::<OutputUpdate>(output.clone()) {
+                    batch.output.push(update);
+                }
+            }
             if let Some(sample) = run_event.and_then(context_sample_from_run_event) {
                 batch.context_samples.push(sample);
             }
@@ -132,7 +193,7 @@ impl ProgressFile {
             {
                 batch.events.push(event);
             }
-            self.seen_lines += 1;
+            self.offset += line.len() as u64;
         }
         batch
     }
@@ -910,6 +971,53 @@ fn clip_activity(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn live_preview_keeps_streams_separate_and_replaces_final_text() {
+        let mut output = super::LiveOutput::default();
+        let update = |id: &str, text: &str, replace| super::OutputUpdate {
+            id: id.into(),
+            agent: id.into(),
+            channel: "generation".into(),
+            text: text.into(),
+            replace,
+        };
+        output.observe(update("architect", "Hel", false));
+        assert!(output.render().contains("Hel"));
+        output.observe(update("worker", "other", false));
+        output.observe(update("architect", "lo", false));
+        assert!(output.render().contains("Hello"));
+        assert!(output.render().contains("other"));
+        output.observe(update("architect", "Final answer", true));
+        assert!(!output.render().contains("Hello"));
+        assert!(output.render().contains("Final answer"));
+        output.observe(update("architect", &"🎉".repeat(5000), true));
+        assert_eq!(output.streams.last().unwrap().text.chars().count(), 4096);
+    }
+
+    #[test]
+    fn partial_utf8_progress_line_is_retried_without_losing_or_repeating_output() {
+        use std::io::Write;
+        let mut progress = super::ProgressFile::new("partial-output");
+        let record = serde_json::json!({"live_output": {
+            "id": "worker-1", "agent": "worker", "channel": "stdout", "text": "café", "replace": false
+        }}).to_string() + "\n";
+        let split = record.find('é').unwrap() + 1;
+        std::fs::write(&progress.path, &record.as_bytes()[..split]).unwrap();
+        assert!(progress.read_new_batch().output.is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&progress.path)
+            .unwrap()
+            .write_all(&record.as_bytes()[split..])
+            .unwrap();
+        let batch = progress.read_new_batch();
+        assert_eq!(batch.output.len(), 1);
+        assert_eq!(batch.output[0].text, "café");
+        assert!(batch.events.is_empty());
+        assert!(progress.read_new_batch().output.is_empty());
+        progress.cleanup();
+    }
+
+    #[test]
     fn extracts_native_json_command_preview() {
         let approval = super::RuntimeApproval::from_value(serde_json::json!({
             "request_id": "command-approval", "fingerprint": "exact-command-fingerprint",
@@ -981,12 +1089,13 @@ mod tests {
                     "summary": "Action started: replace_file"
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
         assert_eq!(
-            progress.read_new(),
+            progress.read_new_batch().events,
             vec!["coder: Action started: replace_file"]
         );
         progress.cleanup();
@@ -1009,11 +1118,12 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
-        let events = progress.read_new();
+        let events = progress.read_new_batch().events;
         assert_eq!(events, vec!["Architect: delegating to Explorer (infer)."]);
         assert!(latest_progress_message(&events).contains("[Architect -> Explorer]"));
         assert!(latest_progress_message(&events).contains("[Explorer]"));
@@ -1037,11 +1147,12 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
-        assert!(progress.read_new().is_empty());
+        assert!(progress.read_new_batch().events.is_empty());
         progress.cleanup();
     }
 
@@ -1075,7 +1186,8 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
@@ -1112,7 +1224,8 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 

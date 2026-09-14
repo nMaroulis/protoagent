@@ -5,7 +5,6 @@ import json
 import sys
 
 from protolink import (
-    Agent,
     AgentGroup,
     ApprovalDecision,
     ApprovalScope,
@@ -20,7 +19,6 @@ from runtime_support import NativeRuntimeCase
 from protoagent_core.run_contracts import infer_run_contract
 from protoagent_core.runtime_storage import output_redaction
 from protoagent_core.verification import validate_completion
-from protoagent_core.workflow import CodingWorkflow
 
 
 class NativeRuntimeTests(NativeRuntimeCase):
@@ -120,7 +118,9 @@ class NativeRuntimeTests(NativeRuntimeCase):
 
     async def test_passed_check_becomes_stale_after_external_edit(self):
         target = self.root / "one"
-        await self.tool(self.coder, "create_file", {"path": str(target), "content": "one"})
+        written = await self.tool(
+            self.coder, "create_file", {"path": str(target), "content": "one"}
+        )
         checked = await self.tool(
             self.verifier,
             "execute_command",
@@ -133,7 +133,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
             },
         )
         task = checked.task
-        report = self.store.trace_report(task)
+        report = RunReport.from_events((*written.report.events, *checked.report.events))
         contract = infer_run_contract("update a file")
         before = await validate_completion(contract, task, report, self.attempt, self.broker)
         self.assertTrue(before.completion["satisfied"])
@@ -146,7 +146,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
 
     async def test_redaction_protects_native_snapshots_and_free_text_output(self):
         policy = output_redaction("a-known-private-value")
-        self.store.redaction = policy
+        self.store.redaction_policy = policy
         task = Task.create_infer(prompt="a-known-private-value")
         self.context.attach_to_task(task)
         task.metadata["recovery"] = {"data_base64": "original-bytes"}
@@ -154,12 +154,18 @@ class NativeRuntimeTests(NativeRuntimeCase):
             "stdout": "a-known-private-value\x1b[2J",
             "api_key": "another-value",
         }
-        self.store.save_task(task)
+        self.store.save_task(task, metadata={"error": "a-known-private-value"})
+        self.store.save_report(
+            RunReport.from_task(task), metadata={"error": "a-known-private-value"}
+        )
         saved = self.store.get_task(task.id).to_dict()
         self.assertNotIn("a-known-private-value", json.dumps(saved))
         self.assertNotIn("original-bytes", json.dumps(saved))
         self.assertNotIn("another-value", json.dumps(saved))
         self.assertEqual(task.metadata["recovery"]["data_base64"], "original-bytes")
+        from pathlib import Path
+
+        self.assertNotIn(b"a-known-private-value", Path(self.store.db_path).read_bytes())
 
     async def test_runhandle_normalizes_missing_final_as_uncertain_without_retry(self):
         calls = []
@@ -207,73 +213,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
         self.assertEqual((await handle.result()).status, "canceled")
 
     async def test_graph_enforces_two_repairs_with_real_native_receipts(self):
-        responses = []
-        for _ in range(3):
-            responses.extend(
-                [
-                    json.dumps({"type": "tool_call", "tool": "perform_attempt", "args": {}}),
-                    json.dumps({"type": "final", "content": "check failed"}),
-                ]
-            )
-        architect = Agent(
-            {
-                "name": "architect",
-                "description": "scripted test",
-                "url": "runtime://test-architect",
-            },
-            llm=create_llm("mock", sequential_responses=responses),
-            verbosity=0,
-        )
-        architect.run_store = self.store
-        calls = []
-
-        @architect.tool
-        async def perform_attempt() -> str:
-            calls.append(1)
-            target = self.root / "one"
-            result = await self.tool(
-                self.coder,
-                "replace_file" if target.exists() else "create_file",
-                {"path": str(target), "content": f"attempt {len(calls)}"},
-            )
-            self.assertEqual(result.status, "completed")
-            result = await self.tool(
-                self.verifier,
-                "execute_command",
-                {
-                    "argv": [sys.executable, "-c", "raise SystemExit(7)"],
-                    "cwd": str(self.root),
-                    "env": {},
-                    "timeout_seconds": 3,
-                    "max_output_bytes": 1024,
-                },
-            )
-            self.assertEqual(result.output["exit_code"], 7)
-            return "check failed"
-
-        self.attempt.attempt = 0
-
-        async def observe(handle):
-            async for _ in handle.events():
-                pass
-
-        async with AgentGroup([architect]) as group:
-            workflow = CodingWorkflow(
-                group=group,
-                contract=infer_run_contract("update a file"),
-                attempt=self.attempt,
-                broker=self.broker,
-                store=self.store,
-                observe=observe,
-                redaction=self.redaction,
-                prompt="update a file",
-            )
-            from protolink.flows.limits import WorkflowLimitError
-
-            with self.assertRaises(WorkflowLimitError):
-                await workflow.execute(self.context)
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(workflow.task.metadata["blockers"][-1]["code"], "workflow_limit")
+        await self.exercise_embedded_mesh("runtime", repairs=True)
 
     async def test_embedded_mesh_uses_broker_and_persists_delegated_receipts(self):
         await self.exercise_embedded_mesh("runtime")
@@ -281,12 +221,14 @@ class NativeRuntimeTests(NativeRuntimeCase):
     async def test_sse_mesh_preserves_delegated_native_receipts(self):
         await self.exercise_embedded_mesh("sse")
 
-    async def exercise_embedded_mesh(self, transport):
+    async def exercise_embedded_mesh(self, transport, repairs=False):
         from unittest.mock import patch
 
         from protoagent_core.runtime import _run_agent_deck
 
         target = self.root / "actual.txt"
+        release_file = self.root / "release-process"
+        saw_live_process = False
         responses = [
             {
                 "type": "agent_call",
@@ -301,7 +243,11 @@ class NativeRuntimeTests(NativeRuntimeCase):
                 "action": "tool_call",
                 "tool": "execute_command",
                 "args": {
-                    "argv": [sys.executable, "-c", "print('verified')"],
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        "import pathlib,time\nprint('verified', flush=True)\nwhile not pathlib.Path('release-process').exists(): time.sleep(0.01)",
+                    ],
                     "cwd": str(self.root),
                     "env": {},
                     "timeout_seconds": 3,
@@ -310,9 +256,17 @@ class NativeRuntimeTests(NativeRuntimeCase):
             },
             {"type": "final", "content": "Applied the file and checked it."},
         ]
+        if repairs:
+            import copy
+
+            responses[1]["args"]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
+            repair = copy.deepcopy(responses)
+            repair[0]["tool"] = "replace_file"
+            responses += copy.deepcopy(repair) + copy.deepcopy(repair)
         llm = create_llm("mock", sequential_responses=responses)
 
         async def resolve_ui():
+            nonlocal saw_live_process
             seen = set()
             while True:
                 if self.bridge.request_path.exists():
@@ -328,6 +282,16 @@ class NativeRuntimeTests(NativeRuntimeCase):
                                 }
                             )
                         )
+                if not repairs and self.bridge.progress_path.exists():
+                    records = [
+                        json.loads(line)
+                        for line in self.bridge.progress_path.read_text().splitlines()
+                    ]
+                    if any(
+                        item.get("live_output", {}).get("text") == "verified\n" for item in records
+                    ):
+                        saw_live_process = True
+                        release_file.write_text("release")
                 await asyncio.sleep(0.01)
 
         controls = asyncio.create_task(resolve_ui())
@@ -337,6 +301,10 @@ class NativeRuntimeTests(NativeRuntimeCase):
                 patch("protoagent_core.agents.architect.create_selected_llm", return_value=llm),
                 patch("protoagent_core.agents.coder.create_selected_llm", return_value=None),
                 patch("protoagent_core.agents.explorer.create_selected_llm", return_value=None),
+                patch(
+                    "protolink.storage.SQLiteRunStore.list_task_records",
+                    side_effect=AssertionError("Parent evidence must not scan stored worker tasks"),
+                ),
             ):
                 result = await asyncio.wait_for(
                     _run_agent_deck(
@@ -353,7 +321,16 @@ class NativeRuntimeTests(NativeRuntimeCase):
         finally:
             controls.cancel()
             await asyncio.gather(controls, return_exceptions=True)
+        if repairs:
+            self.assertEqual(result["status"], "failed", result["answer"])
+            self.assertEqual(result["verification"]["attempts"], 3)
+            self.assertEqual(len(result["verification"]["results"]), 3)
+            self.assertEqual(len(result["approval_decisions"]), 6)
+            return
         self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertTrue(
+            saw_live_process, "Worker stdout must arrive while the process is still running"
+        )
         self.assertEqual(target.read_text(), "native edit")
         self.assertEqual(
             result["verification"]["status"], "passed", result["completion_validation"]
@@ -362,11 +339,22 @@ class NativeRuntimeTests(NativeRuntimeCase):
         self.assertTrue(any(event["type"] == "resource.changed" for event in result["run_events"]))
         self.assertTrue(result["run_report"]["validations"])
         self.assertEqual(result["run_report"]["final_task"]["state"], "completed")
+        events = result["run_events"]
+        self.assertEqual(len(events), len({event["event_id"] for event in events}))
+        receipts = [
+            event
+            for event in events
+            if event["type"] == "action.completed"
+            and isinstance(event["payload"].get("action"), dict)
+            and event["payload"].get("action", {}).get("name") in {"create_file", "execute_command"}
+        ]
+        self.assertEqual(len(receipts), 2)
+        self.assertTrue(
+            all(event["delegation_id"] and event["parent_action_id"] for event in receipts)
+        )
 
     async def test_uncertain_checkpoint_stops_further_mutation_without_replay(self):
         from unittest.mock import patch
-
-        from protoagent_core.checkpoints import changes
 
         save = self.checkpoints.save
 
@@ -382,7 +370,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
             )
         self.assertEqual(result.status, "failed")
         self.assertEqual(target.read_text(), "effect happened")
-        self.assertEqual(changes(self.checkpoints)[0].state, "uncertain")
+        self.assertEqual(self.checkpoints.list_changes(limit=1)[0].state, "uncertain")
         accepted = await validate_completion(
             infer_run_contract("update a file"),
             result.task,

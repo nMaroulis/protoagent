@@ -16,6 +16,40 @@ from protoagent_core.checkpoints import (
 
 
 class CheckpointTests(NativeRuntimeCase):
+    def test_inventory_pagination_latest_and_uncertainty_preserve_private_bytes(self):
+        from dataclasses import replace
+
+        from protolink.core.resources import ResourceChange, ResourceRevision, ResourceSnapshot
+
+        for index in range(105):
+            record = ResourceChange(
+                before=ResourceSnapshot(
+                    ResourceRevision(str(self.root / str(index)), "before"),
+                    b"private original",
+                    0o600,
+                ),
+                after=None,
+                state="uncertain" if index == 0 else "applied",
+                action_id=str(index),
+                run_id=self.context.run_id,
+                change_id=str(index),
+            )
+            self.checkpoints.save(record)
+        self.assertEqual(len(list(self.attempt.file_changes())), 105)
+        self.assertTrue(self.attempt.has_uncertain_changes())
+        self.assertEqual(select_change(self.checkpoints, "latest", str(self.root)).change_id, "104")
+        inventory = list_checkpoints(str(self.root))
+        self.assertEqual(len(inventory), 50)
+        self.assertEqual(inventory[0]["id"], "104")
+        self.assertNotIn("private original", str(inventory))
+        self.assertNotIn("data_base64", str(inventory))
+        self.checkpoints.save(replace(record, state="restored"))
+        self.assertEqual(select_change(self.checkpoints, "latest", str(self.root)).change_id, "103")
+        self.assertEqual(self.checkpoints.get("0").before.data, b"private original")
+        self.assertEqual(
+            list(self.root.iterdir()), [], "Inventory must never access or mutate resources"
+        )
+
     async def test_restore_preserves_dirty_bytes_modes_and_other_files(self):
         target = self.root / "file.txt"
         target.write_bytes(b"user changes\r\n")

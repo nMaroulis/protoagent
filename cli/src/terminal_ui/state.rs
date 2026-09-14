@@ -2,8 +2,9 @@ use std::collections::VecDeque;
 
 use crate::{
     empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
-    load_visible_config, progress::ContextUsage, AgentSettings, CoreResponse, DoctorReport,
-    ModelInventory, INPUT_HISTORY_CAPACITY,
+    load_visible_config,
+    progress::{ContextUsage, LiveOutput},
+    AgentSettings, CoreResponse, DoctorReport, ModelInventory, INPUT_HISTORY_CAPACITY,
 };
 
 pub(super) struct TerminalApp {
@@ -20,6 +21,7 @@ pub(super) struct TerminalApp {
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
     pub(super) context_usage: ContextUsage,
+    pub(super) live_output: LiveOutput,
     pub(super) models_loading: bool,
 }
 
@@ -39,6 +41,7 @@ impl TerminalApp {
             activity: "idle".to_string(),
             scroll_offset: 0,
             context_usage: ContextUsage::default(),
+            live_output: LiveOutput::default(),
             models_loading: false,
         };
         app.refresh(None);

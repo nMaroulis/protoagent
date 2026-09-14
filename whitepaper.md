@@ -89,7 +89,7 @@ normal offline-oriented runs.
 
 * **Role:** Expose bounded public-web evidence without giving Explorer or Coder
   ambient network access.
-* **Tools:** ProtoLink 0.7.0 `web_search` and `fetch_url`, both declaring
+* **Tools:** ProtoLink 0.7.1 `web_search` and `fetch_url`, both declaring
   `network.read`.
 * **Logic:** When enabled, Architect discovers Scout and invokes one of its
   tools directly. Brave search uses `BRAVE_SEARCH_API_KEY`; DuckDuckGo is
@@ -429,9 +429,9 @@ access is opt-in, actions are previewed, approvals are explicit, missing write
 artifacts are marked incomplete, and prompt behavior can be evaluated over
 time.
 
-## v0.2.2: Native Execution And Recovery
+## v0.2.3: Native Execution And Recovery
 
-ProtoLink 0.7.0 owns subprocess execution, recoverable file mutation, approval
+ProtoLink 0.7.1 owns subprocess execution, recoverable file mutation, approval
 lifecycles, agent readiness/cleanup and normalized task results. ProtoAgent
 registers `process_tool()` on Verifier and `filesystem_tools()` on Coder, with
 explicit project roots, dedicated `StorageCheckpointStore` storage and separate
@@ -449,10 +449,16 @@ completion checks bind evidence to resource revisions; external changes to
 referenced files invalidate it. Approvals and previews cannot prove execution.
 The recorded inputs are this run's changed files, not every repository resource.
 
-Native run snapshots and reports remain in `SQLiteRunStore`. ProtoLink 0.7.0
-model delegation does not merge worker receipts into the parent, so ProtoAgent
-composes same-trace native task snapshots for acceptance and inspection. It does
-not turn model prose into evidence. Replay remains read-only.
+Native run snapshots and reports remain in `SQLiteRunStore`, with a configured
+redaction policy applied at every write. ProtoLink 0.7.1 propagates delegated
+worker events and receipts into the parent task and report. Completion consumes
+that evidence directly; no stored-worker join remains. Checkpoint inventory uses
+native filters and pagination. Replay remains read-only.
+
+Live model text and delegated command output reach the CLI through native events.
+The TUI keeps bounded generation previews, while shell mode flushes deltas as
+they arrive. Final model text replaces its preview; the native terminal task
+result determines completion. JSON-action fragments remain provisional.
 
 Local process execution is host execution with explicit argv, cwd, environment
 and limits, without sandbox isolation. Filesystem recovery requires POSIX,

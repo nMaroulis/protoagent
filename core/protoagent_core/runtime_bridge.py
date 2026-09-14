@@ -31,11 +31,18 @@ class RuntimeBridge:
 
     def emit(self, message: str, *, run_event: dict[str, Any] | None = None) -> None:
         """Append a progress record, preserving the normalized event envelope."""
-        if self.progress_path is None:
-            return
         record: dict[str, Any] = {"ts": time.time(), "event": message}
         if run_event is not None:
             record["run_event"] = run_event
+        self._append(record)
+
+    def emit_output(self, output: dict[str, Any]) -> None:
+        """Send provisional text independently of the bounded trace-summary channel."""
+        self._append({"ts": time.time(), "live_output": output})
+
+    def _append(self, record: dict[str, Any]) -> None:
+        if self.progress_path is None:
+            return
         record = self.redaction.redact(record)
         try:
             with self._write_lock:

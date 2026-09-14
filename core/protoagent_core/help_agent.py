@@ -28,6 +28,11 @@ Manual:
   Python core through PyO3. ProtoLink is the agent runtime engine.
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
 - One-shot task: `proto-cli run "task"`.
+- Live model generation and delegated command output appear by default in shell
+  and TUI. JSON-action models can show provisional JSON fragments; native-tool
+  models show ordinary text. Final task status determines completion.
+  `PROTOAGENT_STREAM=0` hides live previews without changing execution.
+  Ctrl-C in shell mode requests native cancellation and waits for cleanup.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts

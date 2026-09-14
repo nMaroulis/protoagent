@@ -15,8 +15,8 @@ The current monorepo has three main product surfaces:
 
 | Surface | Path | Version | Status | Responsibility |
 | --- | --- | --- | --- | --- |
-| Rust CLI and TUI | `cli/` | `0.2.2` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
-| Python core | `core/protoagent_core/` | `0.2.2` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
+| Rust CLI and TUI | `cli/` | `0.2.3` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
+| Python core | `core/protoagent_core/` | `0.2.3` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
 | ACP server | `acp/` | `0.0.0-dev.0` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
 
 The rest of the repo supports those surfaces:

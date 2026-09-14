@@ -1,9 +1,9 @@
 ---
-title: ProtoLink 0.7 Migration
-description: ProtoAgent 0.2.2 migration mapping, removed plumbing and remaining integration boundaries.
+title: ProtoLink 0.7 Integrations
+description: ProtoAgent 0.2.3 native delegation, redaction, checkpoint inventory and live streaming integrations.
 ---
 
-## Old → new
+## Execution migration in 0.2.2
 
 | ProtoAgent 0.2.1 plumbing | ProtoAgent 0.2.2 integration |
 | --- | --- |
@@ -29,21 +29,45 @@ timeout and output limits. Recovery storage uses private permissions and a
 single-writer project lease. Existing conversation/state APIs, native transport
 configuration, budgets, RunStore and read-only replay remain in use.
 
-## Concrete integration gaps and limits
+## Native integrations in 0.2.3
 
-- **Delegated receipts:** ProtoLink 0.7.0 model delegation returns worker output
-  without merging native child execution events into the parent report.
-  ProtoAgent joins same-trace native task snapshots from its RunStore by event
-  ID. Delegated process output may therefore arrive after worker completion.
-  Parent report/event propagation would remove this adapter.
-- **Persistence redaction:** automatic `Agent.run_store` snapshots call
-  `save_task` without a configurable redaction policy, and SQLiteRunStore's
-  save methods accept no redaction argument. A small application subclass
-  persists redacted copies through the native store. A native default redactor
-  for persistence would remove that wrapper.
-- **Checkpoint inventory:** `StorageCheckpointStore` exposes `get`/`save`, with
-  no list API. The CLI reads records through the backing Storage's public
-  `load()` API. A native metadata inventory would remove this coupling.
+ProtoLink 0.7.1 closes the three integration gaps identified in 0.2.2:
+
+| Removed application adapter | Native API now used |
+| --- | --- |
+| `ApplicationRunStore.trace_report()` / stored-worker scans | Delegated events in parent tasks and `RunReport.from_task()` |
+| `ApplicationRunStore.save_task()` / `save_report()` overrides | `SQLiteRunStore(..., redaction_policy=...)` |
+| Custom literal credential masking | `RedactionPolicy.sensitive_values` |
+| `changes()` / direct `Storage.load()` inventory | `StorageCheckpointStore.list_changes()` with filters and pagination |
+
+Native delegation preserves worker event/run/task/action identities and links to
+calling actions. Parent receipts are deduplicated by ProtoLink, and child final
+markers do not terminate the parent. The native Graph retains evidence across
+bounded repair attempts without querying worker databases.
+
+Native persistence masks task/report/caller metadata copies, including automatic
+intermediate snapshots. ProtoAgent selects configured secret values and strips
+terminal controls for its UI. Approval and recovery records retain the protected
+original data needed for authorization and restoration. Inventory returns those
+protected records; the CLI projects metadata only, never original bytes.
+
+## Streaming in 0.2.3
+
+All coding deck agents advertise streaming. ProtoLink 0.7.1 reads HTTP and SDK
+streams without blocking the application's event loop. ProtoAgent consumes
+`RunHandle.events()` and forwards `llm_chunk`, `llm_final` and `process.output`
+to the Rust live preview independently of trace-summary limits.
+
+Shell output flushes as text arrives. The TUI keeps bounded previews by native
+run/task/agent/step/channel identity and replaces generation text on `llm_final`.
+Only the terminal task result determines success, failure, cancellation or
+uncertainty. JSON-action fragments are provisional generation output, not
+executable actions. `PROTOAGENT_STREAM=0` disables live presentation without
+resubmitting or changing execution. Native peer capabilities determine delegated
+streaming versus request/response delivery.
+
+## Remaining boundaries
+
 - **Chained restoration:** restoring a later edit changes native file identity.
   An older checkpoint for the same file can conflict even when its content is
   restored. The application preserves this conservative behavior.
@@ -64,7 +88,13 @@ caps, budgets, stale preimages, restoration conflicts, uncertainty after effects
 private persistence, read-only legacy inventory, normalized final results,
 managed cleanup and a maximum of two repairs. The embedded mesh test uses
 scripted ProtoLink MockLLM responses and real native tools; no paid models are
-needed. Rust tests cover native JSON and diff previews and fingerprint echoes.
+needed. Gated HTTP provider tests prove early delivery in JSON-action and native-tool
+modes, cancellation while generation waits, resource cleanup and disabled previews.
+Runtime and real SSE meshes verify delegated stdout before process completion,
+receipt deduplication and bounded repair without stored-task scans. Inventory tests
+cover pagination beyond 100 records and uncertainty outside the first page. Rust
+tests cover incremental previews, final replacement, partial UTF-8/JSONL reads,
+output bounds, native approval previews and fingerprint echoes.
 
 ```bash
 PYTHONPATH=core .venv/bin/python -m unittest discover -s core/tests -q

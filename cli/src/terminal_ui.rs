@@ -453,6 +453,7 @@ async fn run_task(
     let session_id = crate::context_session_id(&workspace);
     app.turn += 1;
     app.context_usage.reset();
+    app.live_output = Default::default();
     app.last_query = query.to_string();
     app.last_diff_preview.clear();
     app.push(Role::User, "You", query);
@@ -515,8 +516,9 @@ async fn run_task(
                         "Esc or Ctrl-C cancels this task."
                     };
                     message.body = format!(
-                        "{}\n\n{task_hint}",
+                        "{}\n\n{}\n\n{task_hint}",
                         format_live_progress(&progress_events),
+                        app.live_output.render(),
                     );
                 }
                 terminal.render(app, None)?;
@@ -541,6 +543,9 @@ async fn run_task(
         "blocked" => "blocked",
         "canceled" => "canceled",
         "incomplete" => "incomplete",
+        "failed" => "failed",
+        "uncertain" => "uncertain",
+        "input_required" => "input required",
         _ => "completed",
     };
     app.activity = format!("{} in {} ms", terminal_status, response.elapsed_ms);
@@ -549,6 +554,9 @@ async fn run_task(
             "blocked" => "Blocked",
             "canceled" => "Canceled",
             "incomplete" => "Incomplete",
+            "failed" => "Failed",
+            "uncertain" => "Uncertain",
+            "input_required" => "Input required",
             _ => "Completed",
         }
         .to_string();
@@ -586,6 +594,9 @@ fn latest_diff_preview(app: &TerminalApp) -> String {
 
 fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: ProgressBatch) {
     events.extend(batch.events);
+    for update in batch.output {
+        app.live_output.observe(update);
+    }
     for sample in batch.context_samples {
         app.context_usage.observe(sample);
     }
