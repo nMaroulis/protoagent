@@ -100,10 +100,18 @@ read-only context.
 ## Streaming answers
 
 Replies use an `AGENT / architect` or `AGENT / guide` heading. Each starts with
-a blinking mint `_` cursor and animated `thinking.`, `thinking..`, `thinking...` dots.
+a steady mint `_` cursor and animated `thinking.`, `thinking..`, `thinking...` dots.
 As answer text arrives, it appears in that same message with a `streaming`
-indicator. JSON action wrappers are hidden; code, newlines and Unicode remain
-readable. The cursor reserves a fixed cell so blinking does not shift the text.
+indicator. JSON action wrappers are hidden. Response text and its cursor retain
+your terminal's default background. The cursor does not blink and reserves a
+fixed cell through completion; the rest of the UI keeps its existing palette.
+
+Answers render Markdown while they stream: **bold**, *italic*, headings,
+yellow-highlighted inline code and mint fenced code blocks with preserved
+indentation. Opening and closing markers become styles instead of raw tags;
+partial delimiters are held at the live edge. Formatting crosses wrapped lines,
+and Unicode display widths keep emoji and wide characters aligned. These are
+presentation styles; the original Markdown stays in the saved answer.
 
 Completion updates the status in that same header. The answer stays in place:
 report footnotes and expanding trace blocks do not change its position. Terminal

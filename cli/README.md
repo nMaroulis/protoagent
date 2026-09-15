@@ -52,7 +52,9 @@ retains multiline text without submitting. Tab opens slash-command completion
 and Ctrl-R searches recent input. Ctrl-P/Ctrl-N browse history from any row.
 
 Answers stream under `AGENT / architect` or `AGENT / guide`, with animated
-thinking dots and a mint cursor. Activity stays in the bottom bar. Input hints
+thinking dots and a steady mint cursor on the text background. Bold, italic,
+headings and highlighted inline/fenced code render as the answer streams,
+preserving the original Markdown in saved responses. Activity stays in the bottom bar. Input hints
 are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
 metadata below completed answers and a `/trace` hint; `/debug off` hides it.
 This display setting defaults off for each TUI session.

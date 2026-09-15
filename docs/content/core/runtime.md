@@ -102,7 +102,9 @@ delegated event propagation and final-result normalization. `streaming.py`
 projects `llm_chunk`, `llm_final` and `process.output` into a separate live-output
 channel for Rust. Architect and isolated Guide text use the `answer` channel and
 update a single TUI response headed `AGENT / architect` or `AGENT / guide`, with
-a blinking mint `_` cursor. The native task finalizes that same message without
+a steady mint `_` cursor. Rust applies Markdown emphasis, headings and code
+highlighting to the growing answer before wrapping by terminal display width;
+the underlying text is unchanged. The native task finalizes that same message without
 changing its layout. Reports remain attached for inspection through `/trace`;
 runtime activity stays in the status area. Worker/process
 previews retain up to four streams, each with the last 4096 characters; the

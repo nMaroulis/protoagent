@@ -9,7 +9,7 @@ This file records user-visible changes to the active ProtoAgent components.
 - Live model generation and delegated command stdout/stderr in shell and TUI,
   using native `RunHandle.events()` and explicit streaming Agent capabilities.
   Answers stream under a consistent `AGENT / architect` or `AGENT / guide`
-  heading with a cyan prompt and blinking mint `_` cursor. Runtime activity
+  heading with a cyan prompt and steady mint `_` cursor. Runtime activity
   stays in the status area; `/trace` exposes details and up to four retained
   worker/process previews of 4096 characters. Answers stay complete.
 - Streaming Guide help in `/help QUESTION` and `proto-cli help "QUESTION"`,
@@ -20,6 +20,10 @@ This file records user-visible changes to the active ProtoAgent components.
   including on existing answers. It defaults off for each TUI session.
 - Animated three-dot thinking, faint hints inside the empty composer, and a
   slow cursor blink (700 ms per phase) that does not repaint the chat.
+- Markdown styling during generation for Architect and Guide answers: bold,
+  italic, headings, highlighted inline code and indented fenced code blocks.
+  Formatting survives wrapped lines and partial delimiters; stored answers
+  retain their original Markdown.
 - Shell Ctrl-C requests native cancellation and waits for runtime cleanup.
 - Provider-free gated streaming tests for early HTTP model delivery, JSON-action
   and native-tool modes, cancellation, cleanup, live delegated process output,
@@ -57,6 +61,11 @@ This file records user-visible changes to the active ProtoAgent components.
   and synchronize terminal redraws where supported.
 - Keep runtime activity only in the bottom status bar. Remove the duplicate
   top loading indicator and the bright input instructions beside the answer.
+- Give the response cursor the same background as its text and stop its blink.
+  Keep the terminal's default background for answers and the existing UI
+  palette; limit Markdown color changes to response text and code highlights.
+  Position styled spans by Unicode display width so emoji and wide characters
+  do not overlap the next span.
 - Give Guide explicit configuration guidance: `/config` and `proto-cli config`
   inspect redacted settings; model, key, context and agent commands change them.
 

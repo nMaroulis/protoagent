@@ -17,6 +17,7 @@ mod approval;
 mod commands;
 mod diff_view;
 mod input;
+mod markdown;
 mod modal;
 mod model_picker;
 mod project;

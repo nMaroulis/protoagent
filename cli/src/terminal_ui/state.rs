@@ -23,7 +23,6 @@ pub(super) struct TerminalApp {
     pub(super) context_usage: ContextUsage,
     pub(super) live_output: LiveOutput,
     pub(super) active_response: Option<usize>,
-    pub(super) cursor_tick: usize,
     pub(super) models_loading: bool,
     pub(super) debug_mode: bool,
 }
@@ -46,7 +45,6 @@ impl TerminalApp {
             context_usage: ContextUsage::default(),
             live_output: LiveOutput::default(),
             active_response: None,
-            cursor_tick: 0,
             models_loading: false,
             debug_mode: false,
         }
@@ -253,13 +251,11 @@ impl TerminalApp {
 
     pub(super) fn begin_response(&mut self, agent: &str) {
         self.active_response = Some(self.messages.len());
-        self.cursor_tick = 0;
         self.push(Role::Assistant, agent, "");
         self.update_streaming_response(0);
     }
 
     pub(super) fn update_streaming_response(&mut self, tick: usize) {
-        self.cursor_tick = tick;
         if let Some(index) = self.active_response {
             self.messages[index].body = self.live_output.answer().to_string();
             self.messages[index].meta = vec![if self.live_output.answer().is_empty() {

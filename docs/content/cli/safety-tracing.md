@@ -66,8 +66,11 @@ and the application's trusted mesh authorization, not UI-supplied scopes.
 ## Live output
 
 Live generation is enabled by default in `proto-cli run` and the TUI. The TUI
-streams answer text under **AGENT / architect** (or **AGENT / guide** for help), with a cyan prompt and blinking
-mint `_` cursor. JSON action wrappers stay hidden. Completion settles into the
+streams answer text under **AGENT / architect** (or **AGENT / guide** for help),
+with a cyan prompt and steady mint `_` cursor on the text background. Markdown
+emphasis, headings and highlighted code render during generation; original
+answer text remains available in the saved response. JSON action wrappers stay
+hidden. Completion settles into the
 same message, updates its status and hides the cursor without changing layout. `/trace` opens the
 full run details without duplicating the answer in the conversation.
 

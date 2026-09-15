@@ -6,12 +6,14 @@ use crossterm::{
         Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
     },
 };
-use std::io::Stdout;
+use std::io::{Stdout, Write};
+use unicode_width::UnicodeWidthStr;
 
 use crate::inline_style::{inline_code_segments, InlineKind};
 use crate::wrap_lines;
 
 use super::input::InputEditor;
+use super::markdown::{self, Code, Span, Style};
 use super::state::{PanelView, TerminalApp, TerminalMessage};
 use super::theme::{
     bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, red, role_color,
@@ -72,7 +74,7 @@ pub(super) fn draw_transcript(
         if !lines.is_empty() {
             lines.push(RenderLine::blank());
         }
-        let cursor = (app.active_response == Some(index)).then_some((app.cursor_tick / 4) % 2 == 0);
+        let cursor = (app.active_response == Some(index)).then_some(true);
         append_message_lines(&mut lines, message, content_width, cursor, app.debug_mode);
     }
     let visible = bottom.saturating_sub(top) as usize;
@@ -88,7 +90,7 @@ pub(super) fn draw_transcript(
     Ok(())
 }
 
-fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> Result<()> {
+fn draw_render_line(out: &mut impl Write, y: u16, width: u16, line: &RenderLine) -> Result<()> {
     if line.footnote {
         let value = clip_plain(&line.text, width as usize);
         let padding = width as usize - unicode_width::UnicodeWidthStr::width(value.as_str());
@@ -113,44 +115,57 @@ fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> 
     } else {
         &line.text
     };
-    for segment in inline_code_segments(body) {
-        match segment.kind {
-            InlineKind::Text => {
-                draw_text_segment(
-                    out,
-                    &mut x,
-                    y,
-                    width,
-                    &segment.text,
-                    line.color,
-                    bg(),
-                    line.bold,
-                )?;
-            }
-            InlineKind::Code => {
-                draw_text_segment(
-                    out,
-                    &mut x,
-                    y,
-                    width,
-                    &segment.text,
-                    black(),
-                    yellow(),
-                    true,
-                )?;
+    if let Some(spans) = &line.spans {
+        for span in spans {
+            let (fg, background) = match span.style.code {
+                Code::None => (line.color, Color::Reset),
+                Code::Inline => (black(), yellow()),
+                Code::Block => (green(), Color::Reset),
+            };
+            draw_styled_segment(
+                out, &mut x, y, width, &span.text, fg, background, span.style,
+            )?;
+        }
+    } else {
+        for segment in inline_code_segments(body) {
+            match segment.kind {
+                InlineKind::Text => {
+                    draw_text_segment(
+                        out,
+                        &mut x,
+                        y,
+                        width,
+                        &segment.text,
+                        line.color,
+                        bg(),
+                        line.bold,
+                    )?;
+                }
+                InlineKind::Code => {
+                    draw_text_segment(
+                        out,
+                        &mut x,
+                        y,
+                        width,
+                        &segment.text,
+                        black(),
+                        yellow(),
+                        true,
+                    )?;
+                }
             }
         }
     }
-    if let Some(visible) = line.cursor {
-        draw_text_segment(
+    if line.cursor == Some(true) {
+        draw_styled_segment(
             out,
             &mut x,
             y,
             width,
             "_",
-            if visible { green() } else { bg() },
-            bg(),
-            true,
+            green(),
+            Color::Reset,
+            Style::default(),
         )?;
     }
     Ok(())
@@ -1099,7 +1114,7 @@ fn draw_badge(
 
 #[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 fn draw_text_segment(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: &mut u16,
     y: u16,
     width: u16,
@@ -1111,12 +1126,13 @@ fn draw_text_segment(
     if *x >= width {
         return Ok(());
     }
-    let remaining = width.saturating_sub(*x) as usize;
-    let value = clip_plain(text_value, remaining);
-    let used = value.chars().count() as u16;
+    let value = clip_plain(text_value, width.saturating_sub(*x) as usize);
+    let used = value.width() as u16;
     if used == 0 {
         return Ok(());
     }
+    // Preserve the existing UI palette and terminal-default plain segments.
+    // Markdown styling is scoped to draw_styled_segment, not this shared path.
     queue!(
         out,
         MoveTo(*x, y),
@@ -1127,6 +1143,52 @@ fn draw_text_segment(
         } else {
             Attribute::Reset
         }),
+        Print(value),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    *x = (*x).saturating_add(used);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
+fn draw_styled_segment(
+    out: &mut impl Write,
+    x: &mut u16,
+    y: u16,
+    width: u16,
+    text_value: &str,
+    fg: Color,
+    background: Color,
+    style: Style,
+) -> Result<()> {
+    if *x >= width {
+        return Ok(());
+    }
+    let remaining = width.saturating_sub(*x) as usize;
+    let value = clip_plain(text_value, remaining);
+    let used = value.width() as u16;
+    if used == 0 {
+        return Ok(());
+    }
+    queue!(
+        out,
+        MoveTo(*x, y),
+        // Response styles are independent of the shared UI helpers. Normal
+        // text and the cursor use Color::Reset to retain the terminal background.
+        SetAttribute(Attribute::Reset),
+        SetAttribute(if style.bold || style.code == Code::Inline {
+            Attribute::Bold
+        } else {
+            Attribute::NormalIntensity
+        }),
+        SetAttribute(if style.italic {
+            Attribute::Italic
+        } else {
+            Attribute::NoItalic
+        }),
+        SetForegroundColor(fg),
+        SetBackgroundColor(background),
         Print(value),
         SetAttribute(Attribute::Reset),
         ResetColor
@@ -1274,20 +1336,28 @@ fn append_message_lines(
         bold: true,
         footnote: false,
         cursor: None,
+        spans: None,
     });
     let cursor = if agent {
         Some(cursor.unwrap_or(false))
     } else {
         cursor
     };
-    let body = if cursor.is_some() {
-        // Keep the cursor cell even after completion, avoiding a one-row jump
-        // when the last answer character filled the line exactly.
-        format!("{}_", message.body)
+    if agent {
+        append_answer_lines(lines, &message.body, width, running);
     } else {
-        message.body.clone()
-    };
-    append_wrapped_render_line(lines, "  | ", &body, text(), false, width);
+        append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
+    }
+    if cursor.is_some() {
+        // Reserve the same cell during and after execution. Keep it out of the
+        // Markdown source so it cannot accidentally open/close emphasis.
+        if lines.last().is_some_and(|line| line.text.width() >= width) {
+            lines.push(answer_line(vec![]));
+        }
+        if let Some(last) = lines.last_mut() {
+            last.text.push('_');
+        }
+    }
     if let Some(last) = lines.last_mut() {
         last.cursor = cursor;
     }
@@ -1328,6 +1398,32 @@ fn append_message_lines(
     }
 }
 
+fn append_answer_lines(lines: &mut Vec<RenderLine>, body: &str, width: usize, streaming: bool) {
+    lines.extend(
+        markdown::layout(body, width.saturating_sub(4).max(1), streaming)
+            .into_iter()
+            .map(answer_line),
+    );
+}
+
+fn answer_line(mut spans: Vec<Span>) -> RenderLine {
+    spans.insert(
+        0,
+        Span {
+            text: "  | ".into(),
+            style: Style::default(),
+        },
+    );
+    RenderLine {
+        text: spans.iter().map(|span| span.text.as_str()).collect(),
+        color: text(),
+        bold: false,
+        footnote: false,
+        cursor: None,
+        spans: Some(spans),
+    }
+}
+
 fn append_footnote_lines(lines: &mut Vec<RenderLine>, value: &str, width: usize) {
     let prefix = "  | ";
     for line in wrap_lines(value, width.saturating_sub(prefix.len()).max(1)) {
@@ -1337,6 +1433,7 @@ fn append_footnote_lines(lines: &mut Vec<RenderLine>, value: &str, width: usize)
             bold: false,
             footnote: true,
             cursor: None,
+            spans: None,
         });
     }
 }
@@ -1358,6 +1455,7 @@ fn append_wrapped_render_line(
             bold,
             footnote: false,
             cursor: None,
+            spans: None,
         });
     }
 }
@@ -1368,6 +1466,7 @@ struct RenderLine {
     bold: bool,
     footnote: bool,
     cursor: Option<bool>,
+    spans: Option<Vec<Span>>,
 }
 
 impl RenderLine {
@@ -1378,6 +1477,7 @@ impl RenderLine {
             bold: false,
             footnote: false,
             cursor: None,
+            spans: None,
         }
     }
 }
@@ -1448,7 +1548,13 @@ mod context_meter_tests {
         use super::*;
         use crate::terminal_ui::state::Role;
         for width in [20, 60, 100] {
-            for body in ["an answer", "1234567890123456", "line one\nline two\n"] {
+            for body in [
+                "an answer",
+                "1234567890123456",
+                "line one\nline two\n",
+                "**bold** `code`\n```rust\n    let x = 1;\n```",
+                "**界👩‍💻**",
+            ] {
                 let mut message = TerminalMessage {
                     role: Role::Assistant,
                     label: "architect".into(),
@@ -1476,7 +1582,7 @@ mod context_meter_tests {
     }
 
     #[test]
-    fn streaming_cursor_blinks_without_changing_wrapping_or_saved_text() {
+    fn response_cursor_reserves_its_cell_without_changing_saved_text() {
         use super::*;
         use crate::terminal_ui::state::Role;
         for body in ["", "1234567890123456", "hello\nworld", "`café` 🎉"] {
@@ -1503,5 +1609,141 @@ mod context_meter_tests {
             assert_eq!(finished.last().unwrap().cursor, Some(false));
             assert_eq!(finished.len(), on.len());
         }
+    }
+
+    #[test]
+    fn response_cursor_uses_the_text_background_without_blink_attributes() {
+        use super::*;
+        let mut line = answer_line(markdown::layout("**bold** `code` plain", 80, true).remove(0));
+        line.text.push('_');
+        line.cursor = Some(true);
+        let mut output = vec![];
+        draw_render_line(&mut output, 0, 100, &line).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for text in ["bold", " plain", "_"] {
+            assert_eq!(background_before(&output, text), Color::Reset);
+        }
+        assert_eq!(background_before(&output, "code"), yellow());
+        assert!(output.contains(&SetAttribute(Attribute::Bold).to_string()));
+        assert!(!output.contains("**"));
+        assert!(!output.contains('`'));
+        assert!(!output.contains(&SetAttribute(Attribute::SlowBlink).to_string()));
+        assert!(!output.contains(&SetAttribute(Attribute::RapidBlink).to_string()));
+
+        line.cursor = Some(false);
+        output_final_has_no_cursor(&line);
+    }
+
+    // Interpret the emitted background at the point text is painted, including
+    // SGR resets. Merely checking that a color sequence exists misses regressions.
+    fn background_before(output: &str, text: &str) -> crossterm::style::Color {
+        use crossterm::style::Color;
+        let mut background = Color::Reset;
+        for sequence in output[..output.find(text).unwrap()].split("\x1b[").skip(1) {
+            let Some((parameters, _)) = sequence.split_once('m') else {
+                continue;
+            };
+            let Ok(codes) = parameters
+                .split(';')
+                .map(str::parse::<u8>)
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
+            };
+            match codes.as_slice() {
+                [0] | [49] => background = Color::Reset,
+                [48, 2, r, g, b] => {
+                    background = Color::Rgb {
+                        r: *r,
+                        g: *g,
+                        b: *b,
+                    }
+                }
+                [48, 5, value] => background = Color::AnsiValue(*value),
+                _ => {}
+            }
+        }
+        background
+    }
+
+    #[test]
+    fn shared_ui_helpers_keep_plain_terminal_backgrounds_and_existing_chips() {
+        use super::*;
+        for background in [bg(), panel_bg(), input_bg()] {
+            let mut output = vec![];
+            write_line(&mut output, 0, 40, "plain row", text(), background, false).unwrap();
+            assert_eq!(
+                background_before(&String::from_utf8(output).unwrap(), "plain row"),
+                Color::Reset
+            );
+            let mut output = vec![];
+            draw_text_segment(
+                &mut output,
+                &mut 0,
+                0,
+                40,
+                "plain segment",
+                text(),
+                background,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                background_before(&String::from_utf8(output).unwrap(), "plain segment"),
+                Color::Reset
+            );
+        }
+        let mut output = vec![];
+        write_line(
+            &mut output,
+            0,
+            40,
+            "selected chip",
+            black(),
+            magenta(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            background_before(&String::from_utf8(output).unwrap(), "selected chip"),
+            magenta()
+        );
+
+        let line = answer_line(markdown::layout("```\nprint('hi')\n```", 80, true).remove(1));
+        let mut output = vec![];
+        draw_render_line(&mut output, 0, 80, &line).unwrap();
+        assert_eq!(
+            background_before(&String::from_utf8(output).unwrap(), "print('hi')"),
+            Color::Reset
+        );
+    }
+
+    fn output_final_has_no_cursor(line: &super::RenderLine) {
+        let mut output = vec![];
+        super::draw_render_line(&mut output, 0, 100, line).unwrap();
+        assert!(!output.contains(&b'_'));
+    }
+
+    #[test]
+    fn styled_segments_position_the_next_span_by_terminal_cells() {
+        use super::*;
+        let mut output = vec![];
+        let mut x = 4;
+        draw_text_segment(
+            &mut output,
+            &mut x,
+            0,
+            80,
+            "界👩‍💻e\u{301}",
+            text(),
+            bg(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(x, 9);
+        draw_text_segment(&mut output, &mut x, 0, 80, "_", green(), bg(), false).unwrap();
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains(&MoveTo(9, 0).to_string()));
     }
 }

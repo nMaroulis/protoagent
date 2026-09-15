@@ -34,8 +34,10 @@ Manual:
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
 - One-shot task: `proto-cli run "task"`.
 - The TUI streams answers under AGENT / architect or AGENT / guide with a
-  blinking mint cursor and animated thinking dots. JSON-action wrappers stay
-  hidden. Runtime activity appears only in the bottom status area; /trace shows
+  steady mint cursor on the text background and animated thinking dots. Bold,
+  italic, headings and highlighted inline/fenced code render while streaming;
+  saved answers retain their original Markdown. JSON-action wrappers stay hidden.
+  Runtime activity appears only in the bottom status area; /trace shows
   detailed events and worker output. Empty input has a dim keyboard-hint
   placeholder and a slow-blinking cursor.
   Final task status determines completion. Guide also streams via /help QUESTION.
