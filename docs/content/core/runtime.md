@@ -112,6 +112,12 @@ Architect answer is not truncated by this preview limit. Shell output is flushed
 as deltas arrive. Task/agent/step/channel identities keep streams separate;
 a new Architect step or repair replaces the previous provisional text.
 
+TUI polling processes at most 256 complete progress records per batch and yields
+after crossing 256 KiB, checked between records. The final drain consumes the
+remaining records before cleanup. Only the last 512 status summaries are kept in
+the live TUI; native trace/report retention is unchanged. Immutable messages let
+Rust cache completed layouts and repaint only changed transcript rows.
+
 The default conversation hides diagnostic footnotes. `/debug on` reveals saved
 response metadata and report labels with a `/trace` hint; `/debug off` hides
 them. This session-local presentation toggle does not change native recording.

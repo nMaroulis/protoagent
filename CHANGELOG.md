@@ -20,6 +20,8 @@ This file records user-visible changes to the active ProtoAgent components.
   including on existing answers. It defaults off for each TUI session.
 - Animated three-dot thinking, faint hints inside the empty composer, and a
   slow cursor blink (700 ms per phase) that does not repaint the chat.
+- Two muted composer borders and a lower single-line prompt that expands upward
+  for multiline input; command suggestions sit in the lower border.
 - Markdown styling during generation for Architect and Guide answers: bold,
   italic, headings, highlighted inline code and indented fenced code blocks.
   Formatting survives wrapped lines and partial delimiters; stored answers
@@ -41,6 +43,12 @@ This file records user-visible changes to the active ProtoAgent components.
   Remove the application inventory reader over the raw Storage namespace.
 - Read progress JSONL incrementally by byte offset, retaining partial writes for
   the next poll. Live output is separate from the bounded trace-summary channel.
+- Cache immutable message layouts and repaint only changed transcript rows during
+  streaming. Animation ticks retain the answer without copying or reformatting
+  it; resize, debug and modal transitions refresh the relevant layout.
+- Bound live TUI ingestion to 256 records or 256 KiB checked between records per
+  poll, retain the latest 512 status summaries, and drain remaining records at
+  completion. Native traces and complete answers remain intact.
 - Update docstrings, runtime readiness checks, Guide help and documentation.
 
 ### Fixed

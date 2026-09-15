@@ -39,7 +39,9 @@ Manual:
   saved answers retain their original Markdown. JSON-action wrappers stay hidden.
   Runtime activity appears only in the bottom status area; /trace shows
   detailed events and worker output. Empty input has a dim keyboard-hint
-  placeholder and a slow-blinking cursor.
+  placeholder and a slow-blinking cursor. Two muted horizontal borders frame the
+  input, which expands upward for up to three visible lines. Slash-command
+  suggestions appear in the lower border; context and status stay below it.
   Final task status determines completion. Guide also streams via /help QUESTION.
   `PROTOAGENT_STREAM=0` hides live previews without changing execution.
   Ctrl-C in shell mode requests native cancellation and waits for cleanup.

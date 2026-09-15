@@ -7,6 +7,7 @@ use crossterm::{
     },
 };
 use std::io::{Stdout, Write};
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::inline_style::{inline_code_segments, InlineKind};
@@ -56,36 +57,123 @@ pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Re
     Ok(())
 }
 
+/// Layouts hold immutable message references, so unchanged history is checked
+/// by identity without copying or scanning its text/reports every animation tick.
+#[derive(Default)]
+pub(super) struct TranscriptCache {
+    width: usize,
+    debug: bool,
+    entries: Vec<CachedMessage>,
+    painted: Vec<RenderLine>,
+    scroll: usize,
+    #[cfg(test)]
+    rebuilds: usize,
+}
+
+struct CachedMessage {
+    message: Arc<TerminalMessage>,
+    running: bool,
+    lines: Vec<RenderLine>,
+}
+
+impl TranscriptCache {
+    fn update(&mut self, app: &TerminalApp, width: usize) {
+        if self.width != width || self.debug != app.debug_mode {
+            self.entries.clear();
+            self.width = width;
+            self.debug = app.debug_mode;
+        }
+        self.entries.truncate(app.messages.len());
+        for (index, message) in app.messages.iter().enumerate() {
+            let running = app.active_response == Some(index);
+            if self.entries.get(index).is_some_and(|entry| {
+                Arc::ptr_eq(&entry.message, message) && entry.running == running
+            }) {
+                continue;
+            }
+            let mut lines = vec![];
+            append_message_lines(
+                &mut lines,
+                message,
+                width,
+                running.then_some(true),
+                app.debug_mode,
+            );
+            let entry = CachedMessage {
+                message: Arc::clone(message),
+                running,
+                lines,
+            };
+            if index < self.entries.len() {
+                self.entries[index] = entry;
+            } else {
+                self.entries.push(entry);
+            }
+            #[cfg(test)]
+            {
+                self.rebuilds += 1;
+            }
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|entry| entry.lines.len())
+            .sum::<usize>()
+            + self.entries.len().saturating_sub(1)
+    }
+
+    fn window(&self, mut skip: usize, count: usize) -> Vec<RenderLine> {
+        let mut rows = Vec::with_capacity(count);
+        for (index, entry) in self.entries.iter().enumerate() {
+            if rows.len() == count {
+                break;
+            }
+            if index > 0 {
+                if skip > 0 {
+                    skip -= 1;
+                } else {
+                    rows.push(RenderLine::blank());
+                }
+            }
+            if skip >= entry.lines.len() {
+                skip -= entry.lines.len();
+                continue;
+            }
+            rows.extend(entry.lines[skip..].iter().take(count - rows.len()).cloned());
+            skip = 0;
+        }
+        rows.resize_with(count, RenderLine::blank);
+        rows
+    }
+}
+
 pub(super) fn draw_transcript(
     out: &mut Stdout,
     width: u16,
-    height: u16,
+    bottom: u16,
     app: &TerminalApp,
+    cache: &mut TranscriptCache,
+    force: bool,
 ) -> Result<()> {
     let top = HEADER_ROWS;
-    let bottom = height.saturating_sub(INPUT_ROWS).max(top + 1);
-    for y in top..bottom {
-        write_line(out, y, width, "", text(), bg(), false)?;
-    }
-
-    let content_width = width.saturating_sub(4).max(20) as usize;
-    let mut lines = Vec::new();
-    for (index, message) in app.messages.iter().enumerate() {
-        if !lines.is_empty() {
-            lines.push(RenderLine::blank());
-        }
-        let cursor = (app.active_response == Some(index)).then_some(true);
-        append_message_lines(&mut lines, message, content_width, cursor, app.debug_mode);
-    }
+    let bottom = bottom.max(top + 1);
+    cache.update(app, width.saturating_sub(4).max(1) as usize);
     let visible = bottom.saturating_sub(top) as usize;
-    let latest_start = lines.len().saturating_sub(visible);
-    let scroll_offset = app.scroll_offset.min(latest_start);
-    let start = latest_start.saturating_sub(scroll_offset);
-    for (idx, line) in lines.iter().skip(start).take(visible).enumerate() {
-        draw_render_line(out, top + idx as u16, width, line)?;
+    let latest_start = cache.row_count().saturating_sub(visible);
+    let scroll = app.scroll_offset.min(latest_start);
+    let rows = cache.window(latest_start - scroll, visible);
+    for (index, line) in rows.iter().enumerate() {
+        if force || cache.painted.get(index) != Some(line) || (index == 0 && cache.scroll != scroll)
+        {
+            draw_render_line(out, top + index as u16, width, line)?;
+        }
     }
-    if scroll_offset > 0 && visible > 0 {
-        draw_scroll_marker(out, top, width, scroll_offset)?;
+    cache.painted = rows;
+    cache.scroll = scroll;
+    if scroll > 0 && visible > 0 {
+        draw_scroll_marker(out, top, width, scroll)?;
     }
     Ok(())
 }
@@ -171,6 +259,47 @@ fn draw_render_line(out: &mut impl Write, y: u16, width: u16, line: &RenderLine)
     Ok(())
 }
 
+pub(super) fn composer_height(width: u16, editor: Option<&InputEditor>) -> u16 {
+    let available = width.saturating_sub(7).max(1) as usize;
+    let rows = editor.map_or(1, |editor| editor.layout(available, 3).0.len().max(1));
+    INPUT_ROWS + rows as u16 - 1
+}
+
+pub(super) fn draw_runtime_status(
+    out: &mut Stdout,
+    width: u16,
+    height: u16,
+    app: &TerminalApp,
+) -> Result<()> {
+    draw_context_usage(out, height.saturating_sub(2), width, app)?;
+    draw_bottom_status(out, height.saturating_sub(1), width, app)
+}
+
+fn draw_composer_border(out: &mut impl Write, y: u16, width: u16, hint: &str) -> Result<()> {
+    let columns = width.saturating_sub(4) as usize;
+    let label = clip_plain(hint.trim(), columns.saturating_sub(4));
+    let line = if label.is_empty() {
+        "─".repeat(columns)
+    } else {
+        format!(
+            "─ {} {}",
+            label,
+            "─".repeat(columns.saturating_sub(label.width() + 3))
+        )
+    };
+    queue!(
+        out,
+        MoveTo(2, y),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        SetForegroundColor(muted()),
+        SetAttribute(Attribute::Dim),
+        Print(line),
+        SetAttribute(Attribute::Reset)
+    )?;
+    Ok(())
+}
+
 pub(super) fn draw_input(
     out: &mut Stdout,
     width: u16,
@@ -178,13 +307,16 @@ pub(super) fn draw_input(
     app: &TerminalApp,
     editor: Option<&InputEditor>,
 ) -> Result<(u16, u16)> {
-    let top = height.saturating_sub(INPUT_ROWS);
+    let input_height = composer_height(width, editor);
+    let top = height.saturating_sub(input_height);
+    let rows = input_height - INPUT_ROWS + 1;
     write_line(out, top, width, "", muted(), bg(), false)?;
-    for row in 1..=3 {
+    for row in 1..=rows + 2 {
         write_line(out, top + row, width, "", text(), input_bg(), false)?;
     }
-    draw_context_usage(out, top + 4, width, app)?;
-    draw_bottom_status(out, top + 5, width, app)?;
+    draw_composer_border(out, top + 1, width, "")?;
+    draw_composer_border(out, top + rows + 2, width, &composer_hint(editor))?;
+    draw_runtime_status(out, width, height, app)?;
 
     let prompt = " > ";
     let available = width.saturating_sub(prompt.len() as u16 + 4).max(1) as usize;
@@ -194,7 +326,7 @@ pub(super) fn draw_input(
     for (row, visible) in lines.iter().enumerate() {
         queue!(
             out,
-            MoveTo(2, top + 1 + row as u16),
+            MoveTo(2, top + 2 + row as u16),
             SetForegroundColor(cyan()),
             SetBackgroundColor(input_bg()),
             Print(if row == 0 { prompt } else { " · " }),
@@ -205,27 +337,16 @@ pub(super) fn draw_input(
     if let Some(placeholder) = input_placeholder(editor, app.active_response.is_some()) {
         queue!(
             out,
-            MoveTo(2 + prompt.len() as u16 + 1, top + 1),
+            MoveTo(2 + prompt.len() as u16 + 1, top + 2),
             SetForegroundColor(muted()),
             SetAttribute(Attribute::Dim),
             Print(clip_plain(placeholder, available.saturating_sub(1))),
             SetAttribute(Attribute::Reset),
         )?;
-    } else if lines.len() < 3 {
-        write_at(
-            out,
-            5,
-            top + 3,
-            width.saturating_sub(6),
-            &composer_hint(editor),
-            muted(),
-            input_bg(),
-            false,
-        )?;
     }
     Ok((
         2 + prompt.len() as u16 + cursor as u16,
-        top + 1 + cursor_row as u16,
+        top + 2 + cursor_row as u16,
     ))
 }
 
@@ -1460,6 +1581,7 @@ fn append_wrapped_render_line(
     }
 }
 
+#[derive(Clone, PartialEq)]
 struct RenderLine {
     text: String,
     color: Color,
@@ -1485,6 +1607,136 @@ impl RenderLine {
 #[cfg(test)]
 mod context_meter_tests {
     use super::{compact_tokens, meter_fill};
+
+    #[test]
+    fn cache_invalidates_edits_finalization_resize_debug_and_clear() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        let mut app = TerminalApp::for_test();
+        for _ in 0..100 {
+            app.push(Role::Assistant, "guide", "**Saved** `answer`\n");
+        }
+        app.begin_response("architect");
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 101);
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 101);
+        Arc::make_mut(&mut app.messages[100]).body = "**New text**".into();
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 102);
+        app.active_response = None;
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 103);
+        app.debug_mode = true;
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 204);
+        cache.update(&app, 20);
+        assert_eq!(cache.rebuilds, 305);
+        app.messages.clear();
+        app.push(Role::User, "you", "new conversation");
+        cache.update(&app, 20);
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache
+            .window(0, 6)
+            .iter()
+            .any(|row| row.text.contains("conversation")));
+    }
+
+    #[test]
+    fn cached_viewports_match_full_layout_at_every_scroll_position() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        let mut app = TerminalApp::for_test();
+        app.push(Role::User, "you", "question");
+        app.push(
+            Role::Assistant,
+            "guide",
+            "**answer**\n```rust\n    let x = 2;\n```\n",
+        );
+        app.begin_response("architect");
+        let mut cache = TranscriptCache::default();
+        for width in [12, 40, 100] {
+            for debug in [false, true] {
+                app.debug_mode = debug;
+                cache.update(&app, width);
+                let mut full = vec![];
+                for (index, message) in app.messages.iter().enumerate() {
+                    if index > 0 {
+                        full.push(RenderLine::blank());
+                    }
+                    append_message_lines(
+                        &mut full,
+                        message,
+                        width,
+                        (app.active_response == Some(index)).then_some(true),
+                        debug,
+                    );
+                }
+                assert_eq!(cache.row_count(), full.len());
+                for start in 0..full.len() {
+                    let mut expected: Vec<_> = full.iter().skip(start).take(5).cloned().collect();
+                    expected.resize_with(5, RenderLine::blank);
+                    assert!(
+                        cache.window(start, 5) == expected,
+                        "width={width}, start={start}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn composer_expands_upward_while_its_bottom_border_stays_anchored() {
+        use super::*;
+        let mut editor = InputEditor::new(&Default::default());
+        assert_eq!(composer_height(80, Some(&editor)), 6);
+        editor.insert_str("first\nsecond");
+        assert_eq!(composer_height(80, Some(&editor)), 7);
+        editor.insert_str("\nthird\nfourth");
+        assert_eq!(composer_height(80, Some(&editor)), 8);
+        assert_eq!(composer_height(80, None), 6);
+        for width in [20, 80] {
+            let mut output = vec![];
+            draw_composer_border(&mut output, 27, width, "").unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&"─".repeat(width as usize - 4)));
+            assert_eq!(background_before(&output, "─"), Color::Reset);
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode layout benchmark"]
+    fn benchmark_long_conversation_layout() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        use std::{hint::black_box, time::Instant};
+        let mut app = TerminalApp::for_test();
+        for _ in 0..500 {
+            app.push(
+                Role::Assistant,
+                "guide",
+                &"**A formatted answer** with `code`, words and Unicode 界.\n".repeat(20),
+            );
+        }
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 96);
+        let start = Instant::now();
+        for _ in 0..20 {
+            let mut full = vec![];
+            for message in &app.messages {
+                append_message_lines(&mut full, message, 96, None, false);
+            }
+            black_box(full);
+        }
+        let uncached = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..20 {
+            cache.update(&app, 96);
+            black_box(cache.window(cache.row_count().saturating_sub(25), 25));
+        }
+        println!("500 messages / 10,000 body lines, 20 unchanged ticks: uncached={uncached:?}, cached={:?}", start.elapsed());
+    }
 
     #[test]
     fn input_instructions_are_only_an_empty_composer_placeholder() {

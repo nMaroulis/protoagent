@@ -444,6 +444,7 @@ async fn run_agent(
         },
     );
     app.begin_response(if guide { "guide" } else { "architect" });
+    terminal.render(app, None)?;
 
     let mut progress_file = ProgressFile::new(app.turn);
     let progress_path = progress_file.path_string();
@@ -474,13 +475,16 @@ async fn run_agent(
                 break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
             }
             _ = sleep(Duration::from_millis(120)) => {
-                ingest_progress(app, &mut progress_events, progress_file.read_new_batch());
+                ingest_progress(app, &mut progress_events, progress_file.read_ui_batch());
                 if let Some(approval) = progress_file.take_approval_request() {
                     if !approval.diff.trim().is_empty() {
                         app.last_diff_preview = approval.diff.clone();
                     }
                     terminal.render(app, None)?;
                     let approved = approval_prompt(terminal, app, &approval)?;
+                    // Modal painting bypasses the transcript cache. Restore the
+                    // complete frame before returning to incremental updates.
+                    terminal.render(app, None)?;
                     progress_file.decide(&approval, approved)?;
                     let decision = if approved { "approved" } else { "denied" };
                     progress_events.push(format!(
@@ -495,7 +499,7 @@ async fn run_agent(
                 }
                 app.activity = progress_activity(&progress_events, tick);
                 app.update_streaming_response(tick);
-                terminal.render(app, None)?;
+                terminal.render_streaming(app)?;
                 tick += 1;
             }
         }
@@ -553,6 +557,10 @@ fn latest_diff_preview(app: &TerminalApp) -> String {
 
 fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: ProgressBatch) {
     events.extend(batch.events);
+    // These are status-bar summaries; complete events remain in the native trace.
+    if events.len() > 512 {
+        events.drain(..events.len() - 512);
+    }
     for update in batch.output {
         app.live_output.observe(update);
     }

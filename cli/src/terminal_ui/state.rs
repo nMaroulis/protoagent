@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::{
     empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
@@ -12,7 +13,7 @@ pub(super) struct TerminalApp {
     pub(super) panel: PanelView,
     pub(super) status: StatusSnapshot,
     pub(super) agent_settings: AgentSettings,
-    pub(super) messages: Vec<TerminalMessage>,
+    pub(super) messages: Vec<Arc<TerminalMessage>>,
     pub(super) input_history: VecDeque<String>,
     pub(super) last_query: String,
     pub(super) last_response: Option<CoreResponse>,
@@ -23,11 +24,17 @@ pub(super) struct TerminalApp {
     pub(super) context_usage: ContextUsage,
     pub(super) live_output: LiveOutput,
     pub(super) active_response: Option<usize>,
+    answer_revision: Option<u64>,
     pub(super) models_loading: bool,
     pub(super) debug_mode: bool,
 }
 
 impl TerminalApp {
+    #[cfg(test)]
+    pub(super) fn for_test() -> Self {
+        Self::empty()
+    }
+
     fn empty() -> Self {
         Self {
             turn: 0,
@@ -45,6 +52,7 @@ impl TerminalApp {
             context_usage: ContextUsage::default(),
             live_output: LiveOutput::default(),
             active_response: None,
+            answer_revision: None,
             models_loading: false,
             debug_mode: false,
         }
@@ -122,13 +130,13 @@ impl TerminalApp {
 
     pub(super) fn push(&mut self, role: Role, label: &str, body: &str) {
         self.jump_to_bottom();
-        self.messages.push(TerminalMessage {
+        self.messages.push(Arc::new(TerminalMessage {
             role,
             label: label.to_string(),
             body: body.to_string(),
             meta: Vec::new(),
             details: Vec::new(),
-        });
+        }));
     }
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
@@ -243,13 +251,14 @@ impl TerminalApp {
             }
         }
         if let Some(index) = self.active_response.take() {
-            self.messages[index] = message;
+            self.messages[index] = Arc::new(message);
         } else {
-            self.messages.push(message);
+            self.messages.push(Arc::new(message));
         }
     }
 
     pub(super) fn begin_response(&mut self, agent: &str) {
+        self.answer_revision = None;
         self.active_response = Some(self.messages.len());
         self.push(Role::Assistant, agent, "");
         self.update_streaming_response(0);
@@ -257,12 +266,24 @@ impl TerminalApp {
 
     pub(super) fn update_streaming_response(&mut self, tick: usize) {
         if let Some(index) = self.active_response {
-            self.messages[index].body = self.live_output.answer().to_string();
-            self.messages[index].meta = vec![if self.live_output.answer().is_empty() {
+            let revision = self.live_output.answer_revision();
+            let meta = vec![if self.live_output.answer().is_empty() {
                 format!("status thinking{:<3}", ".".repeat((tick / 4) % 3 + 1))
             } else {
                 "status streaming".into()
             }];
+            if self.answer_revision != Some(revision) || self.messages[index].meta != meta {
+                // Replacing the immutable message invalidates its cached layout.
+                // Animation-only ticks retain it without copying answer text.
+                self.messages[index] = Arc::new(TerminalMessage {
+                    role: Role::Assistant,
+                    label: self.messages[index].label.clone(),
+                    body: self.live_output.answer().to_string(),
+                    meta,
+                    details: Vec::new(),
+                });
+                self.answer_revision = Some(revision);
+            }
         }
     }
 
@@ -286,7 +307,7 @@ impl TerminalApp {
 
     pub(super) fn fail_streaming_response(&mut self, error: &str) {
         if let Some(index) = self.active_response.take() {
-            let message = &mut self.messages[index];
+            let message = Arc::make_mut(&mut self.messages[index]);
             message.meta = vec!["status interrupted".into()];
             message.body = format!("{}\n\n{error}", message.body).trim().to_string();
         }
@@ -361,6 +382,7 @@ pub(super) enum Role {
     Error,
 }
 
+#[derive(Clone)]
 pub(super) struct TerminalMessage {
     pub(super) role: Role,
     pub(super) label: String,
@@ -395,6 +417,25 @@ mod streaming_tests {
     }
 
     #[test]
+    fn animation_ticks_retain_the_same_streaming_message() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("guide");
+        app.live_output.observe(OutputUpdate {
+            id: "answer".into(),
+            agent: "guide".into(),
+            channel: "answer".into(),
+            text: "**A long answer**".repeat(100),
+            replace: false,
+        });
+        app.update_streaming_response(1);
+        let message = Arc::clone(&app.messages[0]);
+        for tick in 2..30 {
+            app.update_streaming_response(tick);
+        }
+        assert!(Arc::ptr_eq(&message, &app.messages[0]));
+    }
+
+    #[test]
     fn debug_is_opt_in_and_invalid_arguments_preserve_the_mode() {
         let mut app = TerminalApp::empty();
         assert!(!app.debug_mode);
@@ -413,7 +454,7 @@ mod streaming_tests {
     fn final_whitespace_normalization_does_not_move_the_answer() {
         let mut app = TerminalApp::empty();
         app.begin_response("guide");
-        app.messages[0].body = "A complete answer\n\n".into();
+        Arc::make_mut(&mut app.messages[0]).body = "A complete answer\n\n".into();
         app.scroll_offset = 2;
         let response = serde_json::from_value(serde_json::json!({
             "status":"completed", "responder":"guide", "answer":"A complete answer"
@@ -472,7 +513,7 @@ mod streaming_tests {
     fn stream_failure_clears_cursor_and_keeps_partial_text() {
         let mut app = TerminalApp::empty();
         app.begin_response("architect");
-        app.messages[0].body = "Partial answer".into();
+        Arc::make_mut(&mut app.messages[0]).body = "Partial answer".into();
         app.fail_streaming_response("Connection interrupted");
         assert!(app.active_response.is_none());
         assert_eq!(app.messages.len(), 1);

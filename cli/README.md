@@ -59,6 +59,11 @@ are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
 metadata below completed answers and a `/trace` hint; `/debug off` hides it.
 This display setting defaults off for each TUI session.
 
+Two muted horizontal borders frame the input. It expands upward for multiline
+text while the lower border and status stay anchored. Cached message layouts
+and changed-row painting keep streaming work independent of old answer sizes
+on animation-only ticks.
+
 `/help QUESTION` and `proto-cli help "QUESTION"` stream Guide help using the
 active model and bundled command reference, without requiring a project.
 

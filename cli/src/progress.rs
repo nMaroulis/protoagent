@@ -50,6 +50,7 @@ pub(crate) struct OutputUpdate {
 pub(crate) struct LiveOutput {
     streams: Vec<OutputUpdate>,
     answer: Option<OutputUpdate>,
+    answer_revision: u64,
 }
 
 impl LiveOutput {
@@ -57,7 +58,11 @@ impl LiveOutput {
         if update.channel == "answer" {
             if let Some(answer) = &mut self.answer {
                 if answer.id == update.id && !update.replace {
+                    if update.text.is_empty() {
+                        return;
+                    }
                     answer.text.push_str(&update.text);
+                    self.answer_revision = self.answer_revision.wrapping_add(1);
                     return;
                 }
                 if answer.id == update.id && answer.text.trim() == update.text.trim() {
@@ -66,6 +71,7 @@ impl LiveOutput {
             }
             // A new step/repair replaces its predecessor, never a worker's output.
             self.answer = Some(update);
+            self.answer_revision = self.answer_revision.wrapping_add(1);
             return;
         }
         let position = self.streams.iter().position(|item| item.id == update.id);
@@ -91,6 +97,10 @@ impl LiveOutput {
 
     pub(crate) fn answer(&self) -> &str {
         self.answer.as_ref().map_or("", |answer| &answer.text)
+    }
+
+    pub(crate) fn answer_revision(&self) -> u64 {
+        self.answer_revision
     }
 
     pub(crate) fn render(&self) -> String {
@@ -163,6 +173,16 @@ impl ProgressFile {
     }
 
     pub(crate) fn read_new_batch(&mut self) -> ProgressBatch {
+        self.read_batch(usize::MAX, u64::MAX)
+    }
+
+    /// Bound live TUI ingestion so a burst cannot monopolize input handling.
+    /// Final drains and shell consumers still use read_new_batch without limits.
+    pub(crate) fn read_ui_batch(&mut self) -> ProgressBatch {
+        self.read_batch(256, 256 * 1024)
+    }
+
+    fn read_batch(&mut self, max_lines: usize, max_bytes: u64) -> ProgressBatch {
         let Ok(mut file) = fs::File::open(&self.path) else {
             return ProgressBatch::default();
         };
@@ -171,7 +191,11 @@ impl ProgressFile {
         }
         let mut reader = BufReader::new(file);
         let mut batch = ProgressBatch::default();
-        loop {
+        let start = self.offset;
+        for _ in 0..max_lines {
+            if self.offset - start >= max_bytes {
+                break;
+            }
             let mut line = String::new();
             if reader.read_line(&mut line).is_err() || !line.ends_with('\n') {
                 break; // Retry a partially written JSON/UTF-8 line on the next poll.
@@ -993,6 +1017,39 @@ mod tests {
         assert!(output.render().contains("Final answer"));
         output.observe(update("architect", &"🎉".repeat(5000), true));
         assert_eq!(output.streams.last().unwrap().text.chars().count(), 4096);
+    }
+
+    #[test]
+    fn ui_batches_yield_during_bursts_and_final_drain_keeps_every_record() {
+        let mut progress = super::ProgressFile::new("burst-output");
+        let records: String = (0..700)
+            .map(|i| serde_json::json!({"event": format!("event {i}")}).to_string() + "\n")
+            .collect();
+        std::fs::write(&progress.path, records).unwrap();
+        let first = progress.read_ui_batch();
+        assert_eq!(first.events.len(), 256);
+        let second = progress.read_ui_batch();
+        assert_eq!(second.events.len(), 256);
+        let final_batch = progress.read_new_batch();
+        let all: Vec<_> = first
+            .events
+            .into_iter()
+            .chain(second.events)
+            .chain(final_batch.events)
+            .collect();
+        assert_eq!(
+            all,
+            (0..700).map(|i| format!("event {i}")).collect::<Vec<_>>()
+        );
+        assert!(progress.read_new_batch().events.is_empty());
+        progress.cleanup();
+
+        let mut progress = super::ProgressFile::new("large-output-burst");
+        let record = serde_json::json!({"event": "x".repeat(150_000)}).to_string() + "\n";
+        std::fs::write(&progress.path, record.repeat(4)).unwrap();
+        assert_eq!(progress.read_ui_batch().events.len(), 2);
+        assert_eq!(progress.read_new_batch().events.len(), 2);
+        progress.cleanup();
     }
 
     #[test]

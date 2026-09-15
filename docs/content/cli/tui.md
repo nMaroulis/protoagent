@@ -117,6 +117,10 @@ Completion updates the status in that same header. The answer stays in place:
 report footnotes and expanding trace blocks do not change its position. Terminal
 frames use synchronized updates where supported to reduce flicker.
 
+Unchanged messages reuse cached Markdown layouts. Streaming paints only changed
+transcript rows; spinner ticks do not copy or reformat an unchanged answer.
+Resize, debug changes and returning from a modal refresh the affected layout.
+
 Worker activity appears only in the bottom status bar; the top model row shows
 the provider and model. Use `/trace` for the full trace and
 retained worker/command output, or `/diff` for proposed changes. Esc or Ctrl-C
@@ -130,8 +134,10 @@ can explain `/config`, `proto-cli config` and the commands for changing settings
 ## Quiet composer and debug details
 
 Keyboard hints are a faint placeholder inside the empty input. They disappear
-when you type; slash-command suggestions appear within the input area. A blank
-separator keeps the composer apart from the answer. The empty input cursor
+when you type; slash-command suggestions sit in the lower border. Two muted
+horizontal lines frame the composer, with a blank gap above it. The single-line
+prompt sits near the bottom and expands upward to show up to three lines while
+the lower border, context meter and status bar stay anchored. The empty input cursor
 blinks slowly, with 700 ms per phase, without repainting the conversation.
 
 `/debug on` shows the metadata previously displayed under answers: provider,
