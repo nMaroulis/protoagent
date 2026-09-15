@@ -51,6 +51,15 @@ Enter submits the complete prompt; Ctrl-J inserts a newline. Bracketed paste
 retains multiline text without submitting. Tab opens slash-command completion
 and Ctrl-R searches recent input. Ctrl-P/Ctrl-N browse history from any row.
 
+Answers stream under `AGENT / architect` or `AGENT / guide`, with animated
+thinking dots and a mint cursor. Activity stays in the bottom bar. Input hints
+are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
+metadata below completed answers and a `/trace` hint; `/debug off` hides it.
+This display setting defaults off for each TUI session.
+
+`/help QUESTION` and `proto-cli help "QUESTION"` stream Guide help using the
+active model and bundled command reference, without requiring a project.
+
 Architect delegates checks to Verifier through ProtoLink. Each command requires
 approval of its argv, working directory and timeout; V opens the full preview.
 Commands run with host access, may write files or use the network, and have
@@ -115,6 +124,7 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 | `/context window 16k` | Set the Ollama request window and ProtoLink model profile together. |
 | `/index refresh` | Refresh the incremental Context Loom index. |
 | `/trace`, `/timeline`, `/diff` | Inspect the latest normalized run trace, event sequence, or diff preview. |
+| `/debug [on\|off]` | Show the mode, reveal response metadata with a `/trace` hint, or hide it. |
 | `/last` | Replay the last agent response. |
 | `/run TASK` | Run a task from a slash command. |
 | `/clear` | Clear the visible transcript. |

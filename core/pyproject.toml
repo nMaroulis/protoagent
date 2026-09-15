@@ -32,3 +32,6 @@ Issues = "https://github.com/nMaroulis/protoagent/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["protoagent_core*"]
+
+[tool.setuptools.package-data]
+protoagent_core = ["command_reference.json"]

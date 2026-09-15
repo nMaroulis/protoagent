@@ -71,11 +71,11 @@ def set_model(provider: str, model: str, base_url: str | None = None) -> str:
     return _json(set_active_model(provider, model, base_url))
 
 
-def answer_help_question(question: str) -> str:
-    """Answer a ProtoAgent usage question through the isolated Guide agent."""
+def answer_help_question(question: str, progress_path: str | None = None) -> str:
+    """Answer isolated Guide help with optional live output and cancellation."""
     from .help_agent import answer_help_question as guide_answer_help_question
 
-    return _json(guide_answer_help_question(question))
+    return _json(guide_answer_help_question(question, progress_path))
 
 
 def get_context_settings() -> str:

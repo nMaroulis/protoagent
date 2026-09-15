@@ -146,7 +146,6 @@ async def _run_agent_deck(
     bridge.redaction = redaction
     events: list[str] = []
     live_updates = _streaming_enabled()
-    live_output = LiveOutput(bridge, redaction)
 
     def emit(message):
         events.append(message)
@@ -222,6 +221,15 @@ async def _run_agent_deck(
         )
         for agent in deck.values():
             agent.run_store = store
+        live_output = LiveOutput(
+            bridge,
+            redaction,
+            json_agents={
+                name
+                for name, agent in deck.items()
+                if agent.llm is not None and not agent.llm.supports_native_action_stream
+            },
+        )
         compaction_reports = await compact_agent_histories_for_run(deck.values(), session_id)
         for report in compaction_reports:
             if report.get("changed"):

@@ -8,9 +8,18 @@ This file records user-visible changes to the active ProtoAgent components.
 
 - Live model generation and delegated command stdout/stderr in shell and TUI,
   using native `RunHandle.events()` and explicit streaming Agent capabilities.
-  TUI previews retain up to four streams with the last 4096 characters each;
-  `llm_final` replaces its generation preview. The terminal task establishes
-  overall completion, including failure, cancellation and uncertainty.
+  Answers stream under a consistent `AGENT / architect` or `AGENT / guide`
+  heading with a cyan prompt and blinking mint `_` cursor. Runtime activity
+  stays in the status area; `/trace` exposes details and up to four retained
+  worker/process previews of 4096 characters. Answers stay complete.
+- Streaming Guide help in `/help QUESTION` and `proto-cli help "QUESTION"`,
+  with native cancellation and no project or saved conversation required.
+- Packaged command reference shared by Guide and TUI command completion,
+  including `/config`, shell equivalents, settings commands and aliases.
+- `/debug [on|off]` reveals or hides response metadata and a `/trace` hint,
+  including on existing answers. It defaults off for each TUI session.
+- Animated three-dot thinking, faint hints inside the empty composer, and a
+  slow cursor blink (700 ms per phase) that does not repaint the chat.
 - Shell Ctrl-C requests native cancellation and waits for runtime cleanup.
 - Provider-free gated streaming tests for early HTTP model delivery, JSON-action
   and native-tool modes, cancellation, cleanup, live delegated process output,
@@ -36,14 +45,26 @@ This file records user-visible changes to the active ProtoAgent components.
   mesh no longer disables live output from the locally invoked Architect.
 - Keep worker/step previews separate, replace final text without duplication and
   retain valid UTF-8 when bounding previews or reading partial progress lines.
+- Hide JSON-action envelopes during generation: progressively decode final
+  answer text, including split escapes and Unicode, into the Architect message.
+  Native-tool models can still stream genuine JSON answers unchanged. Trace
+  details remain available through `/trace` without repeating the answer.
 - Mask configured secrets split across live output chunks and strip terminal
   controls from presentation. Unknown secrets still require application handling.
 - Preserve failed, uncertain and input-required labels in the TUI.
+- Stop the answer jumping at completion: retain the same message layout and
+  cursor cell, avoid inserting report footnotes or collapsing a trace above it,
+  and synchronize terminal redraws where supported.
+- Keep runtime activity only in the bottom status bar. Remove the duplicate
+  top loading indicator and the bright input instructions beside the answer.
+- Give Guide explicit configuration guidance: `/config` and `proto-cli config`
+  inspect redacted settings; model, key, context and agent commands change them.
 
 ### Boundaries
 
-- JSON-action models can show raw JSON generation fragments. These previews are
-  provisional; actions remain assembled, authorized and executed by ProtoLink.
+- Streamed answers are provisional until the native task establishes completion,
+  failure, cancellation or uncertainty. Partial JSON is projected for display
+  only; actions remain assembled, authorized and executed by ProtoLink.
 - `PROTOAGENT_STREAM=0` hides previews without changing execution or replaying work.
 - Existing approvals, budgets, POSIX recovery constraints, legacy inspection and
   bounded repairs remain. Native inventory includes original recovery bytes;

@@ -4,8 +4,6 @@ use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-const MAX_VISIBLE_EVENTS: usize = 8;
-
 pub(crate) struct ProgressFile {
     path: PathBuf,
     offset: u64,
@@ -51,10 +49,25 @@ pub(crate) struct OutputUpdate {
 #[derive(Default)]
 pub(crate) struct LiveOutput {
     streams: Vec<OutputUpdate>,
+    answer: Option<OutputUpdate>,
 }
 
 impl LiveOutput {
     pub(crate) fn observe(&mut self, update: OutputUpdate) {
+        if update.channel == "answer" {
+            if let Some(answer) = &mut self.answer {
+                if answer.id == update.id && !update.replace {
+                    answer.text.push_str(&update.text);
+                    return;
+                }
+                if answer.id == update.id && answer.text.trim() == update.text.trim() {
+                    return;
+                }
+            }
+            // A new step/repair replaces its predecessor, never a worker's output.
+            self.answer = Some(update);
+            return;
+        }
         let position = self.streams.iter().position(|item| item.id == update.id);
         let mut item = position
             .map(|index| self.streams.remove(index))
@@ -74,6 +87,10 @@ impl LiveOutput {
         if self.streams.len() > 4 {
             self.streams.remove(0);
         }
+    }
+
+    pub(crate) fn answer(&self) -> &str {
+        self.answer.as_ref().map_or("", |answer| &answer.text)
     }
 
     pub(crate) fn render(&self) -> String {
@@ -664,21 +681,6 @@ fn value_string(value: &Value, path: &[&str]) -> String {
     current.as_str().unwrap_or("").to_string()
 }
 
-pub(crate) fn format_live_progress(events: &[String]) -> String {
-    let mut rows = vec!["Live ProtoLink trace".to_string()];
-    if events.is_empty() {
-        rows.push("[START] Starting local agent runtime.".to_string());
-        rows.push("[WAIT] Waiting for Architect to publish the first task event.".to_string());
-        return rows.join("\n");
-    }
-
-    let start = events.len().saturating_sub(MAX_VISIBLE_EVENTS);
-    for event in &events[start..] {
-        rows.push(format!("{} {event}", event_badge(event)));
-    }
-    rows.join("\n")
-}
-
 pub(crate) fn progress_activity(events: &[String], tick: usize) -> String {
     let spinner = ["|", "/", "-", "\\"];
     format!(
@@ -861,33 +863,6 @@ fn action_label(event: &str, active: &str) -> String {
     clean_sentence_tail(event)
 }
 
-fn event_badge(event: &str) -> &'static str {
-    if event.contains("failed") || event.contains("error") || event.starts_with("Task error") {
-        "[ERROR]"
-    } else if event.contains("delegating to") || event.contains("AgentClient") {
-        "[SEND]"
-    } else if event.contains("calling tool") || event.contains(": tool ") {
-        "[TOOL]"
-    } else if event.starts_with("Task state") || event.starts_with("Progress") {
-        "[TASK]"
-    } else if event.starts_with("Architect") || agent_prefix(event).as_deref() == Some("Architect")
-    {
-        "[ARCH]"
-    } else if event.starts_with("Explorer") || agent_prefix(event).as_deref() == Some("Explorer") {
-        "[EXPL]"
-    } else if event.starts_with("Coder") || agent_prefix(event).as_deref() == Some("Coder") {
-        "[CODE]"
-    } else if event.starts_with("Registry") {
-        "[REG]"
-    } else if event.starts_with("Loaded tagged") || event.starts_with("Tagged context") {
-        "[TAG]"
-    } else if event.contains("model") || event.contains("LLM") {
-        "[MODEL]"
-    } else {
-        "[INFO]"
-    }
-}
-
 fn agent_prefix(event: &str) -> Option<String> {
     let head = event.split(':').next()?.trim();
     let agent = head.split(" step ").next().unwrap_or(head).trim();
@@ -971,6 +946,33 @@ fn clip_activity(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn architect_answer_is_separate_complete_and_replaced_on_a_new_attempt() {
+        let mut output = super::LiveOutput::default();
+        let update = |id: &str, text: &str, replace| super::OutputUpdate {
+            id: id.into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: text.into(),
+            replace,
+        };
+        output.observe(update("step1", "Hel", false));
+        output.observe(super::OutputUpdate {
+            agent: "coder".into(),
+            channel: "generation".into(),
+            ..update("worker", "worker text", false)
+        });
+        output.observe(update("step1", "lo", false));
+        assert_eq!(output.answer(), "Hello");
+        assert!(!output.render().contains("Hello"));
+        assert!(output.render().contains("worker text"));
+        output.observe(update("step1", "Hello", true));
+        assert_eq!(output.answer(), "Hello");
+        output.observe(update("repair", &"🎉".repeat(5000), false));
+        assert_eq!(output.answer().chars().count(), 5000);
+        assert!(!output.answer().contains("Hello"));
+    }
+
+    #[test]
     fn live_preview_keeps_streams_separate_and_replaces_final_text() {
         let mut output = super::LiveOutput::default();
         let update = |id: &str, text: &str, replace| super::OutputUpdate {
@@ -1046,7 +1048,7 @@ mod tests {
         .is_none());
     }
 
-    use super::{format_live_progress, latest_progress_message, ContextUsage, ProgressFile};
+    use super::{latest_progress_message, ContextUsage, ProgressFile};
     use serde_json::{json, Value};
     use std::fs;
 
@@ -1062,18 +1064,6 @@ mod tests {
         assert!(message.contains("[Architect -> Coder]"));
         assert!(message.contains("[Coder]"));
         assert!(message.contains("coding"));
-    }
-
-    #[test]
-    fn badges_live_trace_events() {
-        let events = vec![
-            "Architect step 1: delegating to Explorer (infer).".to_string(),
-            "Explorer step 1: calling tool read_file.".to_string(),
-        ];
-
-        let progress = format_live_progress(&events);
-        assert!(progress.contains("[SEND]"));
-        assert!(progress.contains("[TOOL]"));
     }
 
     #[test]

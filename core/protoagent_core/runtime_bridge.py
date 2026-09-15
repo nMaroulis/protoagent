@@ -96,7 +96,6 @@ class RuntimeBridge:
         never read from the decision file. Cancellation goes to RunHandle once;
         it is not converted to an approval or a task submission retry.
         """
-        assert self.broker is not None and self.authorization is not None
         presented = None
         generation = 0
         while True:
@@ -104,6 +103,10 @@ class RuntimeBridge:
                 await handle.cancel(reason)
                 self.emit(f"Cancellation requested: {reason}")
                 return
+            # Isolated agents such as Guide need cancellation, but no broker.
+            if self.broker is None or self.authorization is None:
+                await asyncio.sleep(0.08)
+                continue
             scope = self.authorization.scope
             pending = self.broker.pending(scope)
             record = pending[0] if pending else None

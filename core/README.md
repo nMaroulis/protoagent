@@ -24,6 +24,7 @@ context, configuration, acceptance criteria and terminal presentation.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic Architect token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
+- `protoagent_core/command_reference.json` - Packaged TUI/shell reference shared by Guide and Rust command completion. Guide streams via native `AgentGroup`/`RunHandle`, with cancellation and redacted settings on every call.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider, prompt-profile, optional-agent, and API-key config at `~/.protoagent/config.json`.
 - `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.

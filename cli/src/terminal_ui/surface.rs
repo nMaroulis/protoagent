@@ -1,9 +1,9 @@
 use anyhow::Result;
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{DisableBlinking, EnableBlinking, Hide, MoveTo, Show},
     event::{
-        read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyModifiers, MouseEventKind,
+        poll, read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
     },
     execute, queue,
     style::ResetColor,
@@ -59,6 +59,7 @@ impl TerminalSurface {
             let leave_result = execute!(
                 stdout(),
                 ResetColor,
+                EnableBlinking,
                 Show,
                 DisableMouseCapture,
                 DisableBracketedPaste,
@@ -77,24 +78,51 @@ impl TerminalSurface {
     pub(super) fn render(&mut self, app: &TerminalApp, editor: Option<&InputEditor>) -> Result<()> {
         let (width, height) = size();
         let mut out = stdout();
-        queue!(out, Hide)?;
-        draw_header(&mut out, width, app)?;
-        draw_transcript(&mut out, width, height, app)?;
-        let cursor = draw_input(&mut out, width, height, app, editor)?;
-        if editor.is_some() {
-            queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
-        } else {
-            queue!(out, Hide, ResetColor)?;
-        }
+        // Supported terminals present the complete frame together, avoiding
+        // a flash between clearing transcript rows and repainting the answer.
+        out.write_all(b"\x1b[?2026h")?;
+        let frame = (|| -> Result<()> {
+            queue!(out, Hide)?;
+            draw_header(&mut out, width, app)?;
+            draw_transcript(&mut out, width, height, app)?;
+            let cursor = draw_input(&mut out, width, height, app, editor)?;
+            if let Some(editor) = editor {
+                if editor.is_empty() {
+                    queue!(out, DisableBlinking)?;
+                } else {
+                    queue!(out, EnableBlinking)?;
+                }
+                queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
+            } else {
+                queue!(out, Hide, ResetColor)?;
+            }
+            Ok(())
+        })();
+        out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
-        Ok(())
+        frame
     }
 
     pub(super) fn read_input(&mut self, app: &mut TerminalApp) -> Result<Option<String>> {
         let mut editor = InputEditor::new(&app.input_history);
         // Mouse movement can be high-volume in some terminals, so repaint only after visible state changes.
         self.render(app, Some(&editor))?;
+        let blink_period = Duration::from_millis(700);
+        let mut next_blink = Instant::now() + blink_period;
+        let mut cursor_visible = true;
         loop {
+            if editor.is_empty() && !poll(next_blink.saturating_duration_since(Instant::now()))? {
+                // Blink only the hardware cursor; idle frames and model state
+                // do not need to be repainted for the placeholder animation.
+                cursor_visible = !cursor_visible;
+                if cursor_visible {
+                    execute!(stdout(), Show)?;
+                } else {
+                    execute!(stdout(), Hide)?;
+                }
+                next_blink = Instant::now() + blink_period;
+                continue;
+            }
             let mut needs_render = false;
             match read()? {
                 Event::Key(key) => match key.code {
@@ -279,6 +307,8 @@ impl TerminalSurface {
             }
             if needs_render {
                 self.render(app, Some(&editor))?;
+                cursor_visible = true;
+                next_blink = Instant::now() + blink_period;
             }
         }
     }

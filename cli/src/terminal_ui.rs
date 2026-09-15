@@ -7,8 +7,8 @@ use crate::{
     agent_profile_text, call_process_prompt_with_progress, compact_context_history,
     component_version_text, context_history_text, context_memory_text, context_pack_text,
     context_status_text, context_window_text, empty_as_unknown, format_scout_settings,
-    help_availability_text, help_question_text, load_doctor, parse_agents_command,
-    progress::{format_live_progress, progress_activity, ProgressBatch, ProgressFile},
+    help_availability_text, load_doctor, parse_agents_command,
+    progress::{progress_activity, ProgressBatch, ProgressFile},
     refresh_context_text, reset_context_history, scout_settings, set_context_memory_text,
     AgentsCommand, CoreResponse,
 };
@@ -149,6 +149,10 @@ async fn handle_command(
             switch_panel(app, PanelView::Config, command, "Config panel pinned.");
             Ok(true)
         }
+        "/debug" => {
+            app.configure_debug(input.strip_prefix(command).unwrap_or("").trim());
+            Ok(true)
+        }
         "/version" | "/versions" => {
             match component_version_text() {
                 Ok(text) => {
@@ -242,7 +246,15 @@ async fn handle_command(
                     app.push(
                         Role::Command,
                         "/trace",
-                        &crate::timeline::format_run_trace(&response.run_events, &response.events),
+                        format!(
+                            "{}\n\n{}",
+                            crate::timeline::format_run_trace(
+                                &response.run_events,
+                                &response.events
+                            ),
+                            app.live_output.render()
+                        )
+                        .trim(),
                     );
                 }
             } else {
@@ -279,58 +291,11 @@ async fn handle_help_command(
         return Ok(());
     }
 
-    let question = arg.to_string();
-    let answer = ask_guide_with_feedback(app, terminal, question).await?;
-    app.push(Role::Command, command, &answer);
-    Ok(())
-}
-
-async fn ask_guide_with_feedback(
-    app: &mut TerminalApp,
-    terminal: &mut TerminalSurface,
-    question: String,
-) -> Result<String> {
-    let mut tick = 0usize;
-    app.activity = guide_activity(tick);
-    let progress_index = app.messages.len();
-    app.push(Role::System, "Guide", &guide_loading_text(tick));
-    terminal.render(app, None)?;
-
-    let mut task = tokio::task::spawn_blocking(move || help_question_text(&question));
-    loop {
-        tokio::select! {
-            result = &mut task => {
-                app.activity = "idle".to_string();
-                if let Some(message) = app.messages.get_mut(progress_index) {
-                    message.label = "Guide".to_string();
-                    message.body = "Guide answered. Response is below.".to_string();
-                }
-                terminal.render(app, None)?;
-                return result?;
-            }
-            _ = sleep(Duration::from_millis(120)) => {
-                tick = tick.wrapping_add(1);
-                app.activity = guide_activity(tick);
-                if let Some(message) = app.messages.get_mut(progress_index) {
-                    message.body = guide_loading_text(tick);
-                }
-                terminal.render(app, None)?;
-            }
-        }
+    if crate::selected_model_label().is_none() {
+        app.push(Role::Command, command, &help_availability_text());
+        return Ok(());
     }
-}
-
-fn guide_activity(tick: usize) -> String {
-    let spinner = ["|", "/", "-", "\\"];
-    format!("{} asking Guide", spinner[tick % spinner.len()])
-}
-
-fn guide_loading_text(tick: usize) -> String {
-    let spinner = ["|", "/", "-", "\\"];
-    format!(
-        "{} Asking Guide about ProtoAgent help...\nUsing the active model with redacted current settings.",
-        spinner[tick % spinner.len()]
-    )
+    run_agent(app, terminal, arg, true).await
 }
 
 fn switch_panel(app: &mut TerminalApp, panel: PanelView, command: &str, body: &str) {
@@ -436,9 +401,19 @@ async fn run_task(
     terminal: &mut TerminalSurface,
     query: &str,
 ) -> Result<()> {
-    let workspace = match crate::active_project_dir() {
-        Some(path) => path.to_string_lossy().to_string(),
-        None => {
+    run_agent(app, terminal, query, false).await
+}
+
+async fn run_agent(
+    app: &mut TerminalApp,
+    terminal: &mut TerminalSurface,
+    query: &str,
+    guide: bool,
+) -> Result<()> {
+    let workspace = match (guide, crate::active_project_dir()) {
+        (true, _) => String::new(),
+        (false, Some(path)) => path.to_string_lossy().to_string(),
+        (false, None) => {
             app.panel = PanelView::Project;
             app.refresh(None);
             app.push(
@@ -455,16 +430,29 @@ async fn run_task(
     app.context_usage.reset();
     app.live_output = Default::default();
     app.last_query = query.to_string();
-    app.last_diff_preview.clear();
-    app.push(Role::User, "You", query);
-    let progress_index = app.messages.len();
-    app.push(Role::System, "Working", &format_live_progress(&[]));
+    if !guide {
+        app.last_diff_preview.clear();
+    }
+    app.push(
+        Role::User,
+        "You",
+        &if guide {
+            format!("/help {query}")
+        } else {
+            query.into()
+        },
+    );
+    app.begin_response(if guide { "guide" } else { "architect" });
 
     let mut progress_file = ProgressFile::new(app.turn);
     let progress_path = progress_file.path_string();
     let mut progress_events = Vec::new();
     let mut task = tokio::task::spawn_blocking(move || {
-        call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
+        if guide {
+            crate::call_answer_help_question(prompt, Some(progress_path))
+        } else {
+            call_process_prompt_with_progress(prompt, workspace, session_id, progress_path)
+        }
     });
     let mut tick = 0usize;
     let mut cancellation_requested = false;
@@ -476,6 +464,7 @@ async fn run_task(
                     Ok(raw) => raw,
                     Err(err) => {
                         progress_file.cleanup();
+                        app.fail_streaming_response(&err.to_string());
                         return Err(err.into());
                     }
                 };
@@ -497,11 +486,6 @@ async fn run_task(
                         "Approval {decision}: {}.",
                         if approval.description.is_empty() { approval.action_name } else { approval.description }
                     ));
-                    app.push(
-                        Role::System,
-                        "Policy decision",
-                        &format!("{} was {decision} before execution.", approval.target),
-                    );
                 }
                 if poll_task_cancellation(cancellation_requested)? {
                     progress_file.request_cancel("Canceled from the ProtoAgent TUI")?;
@@ -509,18 +493,7 @@ async fn run_task(
                     progress_events.push("Cancellation requested from the TUI.".to_string());
                 }
                 app.activity = progress_activity(&progress_events, tick);
-                if let Some(message) = app.messages.get_mut(progress_index) {
-                    let task_hint = if cancellation_requested {
-                        "Cancellation requested. Repeated Esc is ignored while the task winds down."
-                    } else {
-                        "Esc or Ctrl-C cancels this task."
-                    };
-                    message.body = format!(
-                        "{}\n\n{}\n\n{task_hint}",
-                        format_live_progress(&progress_events),
-                        app.live_output.render(),
-                    );
-                }
+                app.update_streaming_response(tick);
                 terminal.render(app, None)?;
                 tick += 1;
             }
@@ -532,12 +505,20 @@ async fn run_task(
         let _ = poll_task_cancellation(true)?;
         terminal.suppress_exit_escape();
     }
-    let json = json_result?;
-
-    let response: CoreResponse = serde_json::from_str(&json)?;
+    let response: CoreResponse =
+        match json_result.and_then(|json| serde_json::from_str(&json).map_err(Into::into)) {
+            Ok(response) => response,
+            Err(error) => {
+                app.fail_streaming_response(&error.to_string());
+                app.activity = "failed".into();
+                return Err(error);
+            }
+        };
     app.context_usage.observe_run_events(&response.run_events);
-    if let Err(err) = crate::sessions::record_turn(query, &response) {
-        app.push(Role::Error, "Session history", &err.to_string());
+    if !guide {
+        if let Err(err) = crate::sessions::record_turn(query, &response) {
+            app.push(Role::Error, "Session history", &err.to_string());
+        }
     }
     let terminal_status = match response.status.as_str() {
         "blocked" => "blocked",
@@ -549,29 +530,6 @@ async fn run_task(
         _ => "completed",
     };
     app.activity = format!("{} in {} ms", terminal_status, response.elapsed_ms);
-    if let Some(message) = app.messages.get_mut(progress_index) {
-        message.label = match response.status.as_str() {
-            "blocked" => "Blocked",
-            "canceled" => "Canceled",
-            "incomplete" => "Incomplete",
-            "failed" => "Failed",
-            "uncertain" => "Uncertain",
-            "input_required" => "Input required",
-            _ => "Completed",
-        }
-        .to_string();
-        message.body = format!(
-            "{} / {} | {} ms\n{} live event(s); /trace shows the full agent run",
-            empty_as_unknown(&response.provider),
-            if response.model.is_empty() {
-                "not selected"
-            } else {
-                response.model.as_str()
-            },
-            response.elapsed_ms,
-            progress_events.len().max(response.events.len())
-        );
-    }
     app.push_response(&response);
     app.last_response = Some(response.clone());
     if app.panel == PanelView::Models {

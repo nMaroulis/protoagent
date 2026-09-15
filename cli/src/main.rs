@@ -396,16 +396,11 @@ async fn main() -> Result<()> {
         }
         Some("help") | Some("--help") | Some("-h") => {
             let question = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
-            print_cli_help();
             if question.trim().is_empty() {
+                print_cli_help();
                 println!("{}", help_availability_text());
             } else {
-                let answer = help_question_with_spinner(question.trim()).await?;
-                print_panel(
-                    "GUIDE",
-                    &answer.lines().map(str::to_string).collect::<Vec<_>>(),
-                    PanelTone::Cyan,
-                );
+                stream_help_question(question.trim()).await?;
             }
             Ok(())
         }
@@ -469,43 +464,73 @@ pub(crate) fn help_availability_text() -> String {
     }
 }
 
-pub(crate) fn help_question_text(question: &str) -> Result<String> {
+async fn stream_help_question(question: &str) -> Result<()> {
     if selected_model_label().is_none() {
-        return Ok(
-            "No model is selected yet. Use /model or `proto-cli model`, then ask Guide with /help <question>.".to_string(),
-        );
+        println!("{}", help_availability_text());
+        return Ok(());
     }
-    let raw = call_answer_help_question(question.to_string())
-        .map_err(|err| anyhow!("Python Guide help error: {err:?}"))?;
-    let value: Value = serde_json::from_str(&raw)?;
-    let answer = value
-        .get("answer")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if answer.is_empty() {
-        Ok("Guide returned an empty answer.".to_string())
-    } else {
-        Ok(answer.to_string())
+    let mut progress = ProgressFile::new("guide");
+    let path = progress.path_string();
+    let question = question.to_string();
+    println!("{}", style("AGENT / guide").cyan().bold());
+    let mut task =
+        tokio::task::spawn_blocking(move || call_answer_help_question(question, Some(path)));
+    let mut shown = String::new();
+    let mut canceled = false;
+    let result: Result<CoreResponse> = async {
+        let raw = loop {
+            tokio::select! {
+                signal = tokio::signal::ctrl_c() => {
+                    signal?;
+                    if !canceled {
+                        progress.request_cancel("Canceled Guide from the CLI")?;
+                        canceled = true;
+                    }
+                }
+                result = &mut task => {
+                    break result?.map_err(|err| anyhow!("Python Guide help error: {err:?}"))?;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(80)) => {
+                    print_help_output(progress.read_new_batch(), &mut shown)?;
+                }
+            }
+        };
+        print_help_output(progress.read_new_batch(), &mut shown)?;
+        Ok(serde_json::from_str(&raw)?)
     }
+    .await;
+    progress.cleanup();
+    let response = result?;
+    // The terminal result can append cancellation/error details. Never print
+    // an identical complete answer a second time after streaming it.
+    if let Some(tail) = response.answer.strip_prefix(&shown) {
+        print!("{tail}");
+    } else if response.answer != shown {
+        print!("\n{}", response.answer);
+    }
+    println!("\n{}", style(format!("[{}]", response.status)).dim());
+    Ok(())
 }
 
-async fn help_question_with_spinner(question: &str) -> Result<String> {
-    if selected_model_label().is_none() {
-        return help_question_text(question);
+fn print_help_output(batch: progress::ProgressBatch, shown: &mut String) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    for update in batch
+        .output
+        .into_iter()
+        .filter(|update| update.channel == "answer")
+    {
+        if update.replace {
+            if let Some(tail) = update.text.strip_prefix(shown.as_str()) {
+                write!(out, "{tail}")?;
+                *shown = update.text;
+            }
+        } else {
+            write!(out, "{}", update.text)?;
+            shown.push_str(&update.text);
+        }
     }
-    let spinner_style = ProgressStyle::with_template("{prefix:.bold.dim} {spinner:.cyan} {msg}")?
-        .tick_chars(">|/-\\");
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(spinner_style);
-    pb.set_prefix("[guide]");
-    pb.set_message("asking Guide");
-    pb.enable_steady_tick(Duration::from_millis(100));
-
-    let question = question.to_string();
-    let result = tokio::task::spawn_blocking(move || help_question_text(&question)).await;
-    pb.finish_and_clear();
-    result?
+    out.flush()
 }
 
 async fn run_orchestration(query: &str) -> Result<CoreResponse> {
@@ -3085,13 +3110,13 @@ fn call_configure_optional_agent(name: String, enabled: bool) -> PyResult<String
     })
 }
 
-fn call_answer_help_question(question: String) -> PyResult<String> {
+fn call_answer_help_question(question: String, progress_path: Option<String>) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module
             .getattr("answer_help_question")?
-            .call1((question,))?
+            .call1((question, progress_path))?
             .extract()
     })
 }

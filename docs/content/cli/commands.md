@@ -96,12 +96,13 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/diff` | Reopen the latest proposed diff or approval preview in the styled review modal. |
 | `/diff raw` | Print a truncated raw diff into the transcript. |
 | `/config` | Pin provider config panel. |
+| `/debug [on\|off]` | Show the current debug display mode, reveal response metadata with a `/trace` hint, or hide it. Defaults off for each TUI session. |
 | `/version`, `/versions` | Show CLI, Python core, and planned ACP component versions. |
 | `/project`, `/open` | Choose the active project. |
 | `/project PATH` | Open a project directly. |
 | `/project clear` | Clear the active project. |
 | `/help`, `/menu` | Show help panel and Guide availability. |
-| `/help QUESTION` | Ask Guide using the active model. |
+| `/help QUESTION` | Stream a Guide answer using the active model and bundled command reference, without needing a project. Esc/Ctrl-C cancels. |
 | `/check` | Refresh runtime diagnostics. |
 | `/last` | Replay the last response in the current TUI process. |
 | `/run TASK` | Run a task from a slash command. |

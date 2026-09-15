@@ -1,0 +1,370 @@
+{
+  "tui": [
+    [
+      "/dashboard",
+      "Project and runtime overview"
+    ],
+    [
+      "/project",
+      "Choose a workspace, or open one directly with /project PATH."
+    ],
+    [
+      "/project clear",
+      "Clear the active workspace"
+    ],
+    [
+      "/model",
+      "Choose provider and model"
+    ],
+    [
+      "/models",
+      "Model inventory"
+    ],
+    [
+      "/key",
+      "Store a provider API key in a masked modal. Usage: /key [provider]."
+    ],
+    [
+      "/agents",
+      "Agent roles and capabilities"
+    ],
+    [
+      "/agents profile",
+      "Show or set the prompt profile. Usage: /agents profile [auto|small|medium|large|api]."
+    ],
+    [
+      "/agents scout on",
+      "Enable public web research"
+    ],
+    [
+      "/agents scout off",
+      "Disable public web research"
+    ],
+    [
+      "/context",
+      "Inspect or preview workspace evidence"
+    ],
+    [
+      "/context history",
+      "Inspect model-facing memory"
+    ],
+    [
+      "/context compact",
+      "Compact saved model memory. Usage: /context compact [recent|tokens|summary] [limit]."
+    ],
+    [
+      "/context reset",
+      "Clear project conversation memory"
+    ],
+    [
+      "/context window",
+      "Show or set the Ollama context window. Usage: /context window [16k|auto]."
+    ],
+    [
+      "/context on",
+      "Enable persistent conversation memory"
+    ],
+    [
+      "/context off",
+      "Use task-local conversation memory"
+    ],
+    [
+      "/index refresh",
+      "Refresh Context Loom"
+    ],
+    [
+      "/sessions",
+      "List saved project sessions"
+    ],
+    [
+      "/session resume",
+      "Reopen a saved workspace"
+    ],
+    [
+      "/session rename",
+      "Rename the saved UI session. Usage: /session rename NAME."
+    ],
+    [
+      "/checkpoints",
+      "List recoverable agent file writes"
+    ],
+    [
+      "/undo",
+      "Review and undo the latest file write, or supply its ID"
+    ],
+    [
+      "/diff",
+      "Review the latest diff"
+    ],
+    [
+      "/timeline",
+      "Inspect the latest agent path"
+    ],
+    [
+      "/trace",
+      "Show the latest native run trace and retained worker/command output."
+    ],
+    [
+      "/check",
+      "Check runtime readiness"
+    ],
+    [
+      "/config",
+      "Show the redacted provider configuration panel: active provider, models, base URLs, context window and key presence. Read-only; use /model, /key, /context window or /agents to change settings. Shell: proto-cli config."
+    ],
+    [
+      "/version",
+      "Show component versions"
+    ],
+    [
+      "/help",
+      "Show static help; /help QUESTION streams a Guide answer. Uses the active model without project access, tools, or saved conversation history."
+    ],
+    [
+      "/last",
+      "Show the last response in this TUI without executing it again."
+    ],
+    [
+      "/run",
+      "Execute a coding task. Usage: /run TASK. Requires an active project."
+    ],
+    [
+      "/clear",
+      "Clear the visible transcript"
+    ],
+    [
+      "/quit",
+      "Exit ProtoAgent"
+    ],
+    [
+      "/context memory",
+      "Show whether persistent project conversation memory is enabled."
+    ],
+    [
+      "/diff raw",
+      "Print the latest raw diff in the transcript."
+    ],
+    [
+      "/models choose",
+      "Open the model picker; /models set and /models select also work."
+    ],
+    [
+      "/agents scout",
+      "Show whether optional Scout is enabled."
+    ],
+    [
+      "/agents auto",
+      "Set the automatic prompt profile; /agents small, medium, large and api are also accepted."
+    ],
+    [
+      "/sessions choose",
+      "Choose a saved workspace; /session choose, open and resume are accepted too."
+    ],
+    [
+      "/exit",
+      "Alias for /quit."
+    ],
+    [
+      "/dash",
+      "Alias for /dashboard."
+    ],
+    [
+      "/status",
+      "Alias for /dashboard."
+    ],
+    [
+      "/provider",
+      "Alias for /model."
+    ],
+    [
+      "/loom",
+      "Alias for /context."
+    ],
+    [
+      "/session",
+      "Alias for /sessions."
+    ],
+    [
+      "/flow",
+      "Alias for /timeline."
+    ],
+    [
+      "/versions",
+      "Alias for /version."
+    ],
+    [
+      "/open",
+      "Alias for /project."
+    ],
+    [
+      "/menu",
+      "Alias for /help."
+    ],
+    [
+      "/index",
+      "Show index usage; /index refresh refreshes Context Loom."
+    ],
+    [
+      "/debug",
+      "Show the metadata display mode for this TUI session. Default is off."
+    ],
+    [
+      "/debug on",
+      "Show response status, provider/model, elapsed time, transport metrics, counts and report labels below completed answers, with a /trace hint. Also reveals details on existing responses."
+    ],
+    [
+      "/debug off",
+      "Hide response metadata to keep the chat clean. This does not disable traces or change agent execution."
+    ]
+  ],
+  "shell": [
+    [
+      "start",
+      "Start the fullscreen terminal UI. This is also the default when no command is passed."
+    ],
+    [
+      "tui",
+      "Alias for fullscreen terminal UI."
+    ],
+    [
+      "cli",
+      "Alias for fullscreen terminal UI."
+    ],
+    [
+      "terminal",
+      "Alias for fullscreen terminal UI."
+    ],
+    [
+      "ui",
+      "Alias for fullscreen terminal UI."
+    ],
+    [
+      "checkpoints",
+      "List up to 50 native changes with their recovery states, plus up to 50 inspection-only legacy snapshots."
+    ],
+    [
+      "undo [id]",
+      "Preview and approve restoring one checkpoint; defaults to latest and needs no model."
+    ],
+    [
+      "run \"task\"",
+      "Run one task outside fullscreen mode. Requires an active project."
+    ],
+    [
+      "dashboard, dash, status",
+      "Show cockpit status, provider strip, agent graph, and hotkeys."
+    ],
+    [
+      "models",
+      "Show detected local/API models and validate API keys."
+    ],
+    [
+      "model",
+      "Pick the active provider/model interactively."
+    ],
+    [
+      "key [provider]",
+      "Store an API key for a supported API provider, then optionally choose a model."
+    ],
+    [
+      "config",
+      "Show redacted provider config."
+    ],
+    [
+      "version, versions, --version, -V",
+      "Show CLI, Python core, and planned ACP component versions."
+    ],
+    [
+      "project",
+      "Show active project and recent projects."
+    ],
+    [
+      "project set PATH",
+      "Set the active project folder."
+    ],
+    [
+      "project clear",
+      "Clear the active project folder."
+    ],
+    [
+      "project choose",
+      "Prompt for a project folder."
+    ],
+    [
+      "check",
+      "Show Python, platform, ProtoLink readiness, active provider status, and agent manifest."
+    ],
+    [
+      "agents",
+      "Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Scout state, and tool isolation."
+    ],
+    [
+      "agents profile [auto|small|medium|large|api]",
+      "Show or set the prompt profile used by Architect, Explorer, and Coder."
+    ],
+    [
+      "agents small, agents medium, agents large, agents api",
+      "Shorthand for setting the deck prompt profile."
+    ],
+    [
+      "agents scout [on|off]",
+      "Show, enable, or disable optional Scout. Changes apply to the next run."
+    ],
+    [
+      "eval profiles [--plan|--live] [--profile MODE] [--task ID] [--limit N] [--json]",
+      "Run the built-in prompt-profile quality eval harness."
+    ],
+    [
+      "eval tasks",
+      "List built-in quality eval tasks."
+    ],
+    [
+      "context",
+      "Show Context Loom status for the active project."
+    ],
+    [
+      "context QUERY",
+      "Build a source-cited Context Pack without running a model."
+    ],
+    [
+      "context window [16k|auto]",
+      "Show, set, or clear the Ollama context window override."
+    ],
+    [
+      "context history",
+      "Inspect saved ProtoLink Architect conversation state."
+    ],
+    [
+      "context compact [recent|tokens|summary] [limit]",
+      "Compact saved ProtoLink histories and trim the Rust session index."
+    ],
+    [
+      "context reset",
+      "Clear ProtoLink histories for the project session and trim Rust UI turns to zero."
+    ],
+    [
+      "context on",
+      "Enable persistent project conversation memory."
+    ],
+    [
+      "context off",
+      "Use task-local ProtoLink sessions until memory is turned on again."
+    ],
+    [
+      "index refresh",
+      "Run an incremental Context Loom SQLite index refresh."
+    ],
+    [
+      "sessions",
+      "Show saved project sessions and recent turns."
+    ],
+    [
+      "help",
+      "Show static CLI help."
+    ],
+    [
+      "help \"question\"",
+      "Ask the isolated Guide agent about ProtoAgent usage."
+    ]
+  ]
+}

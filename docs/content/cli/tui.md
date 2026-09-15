@@ -97,6 +97,43 @@ The picker:
 The Python core later resolves those tags with `safe_path()` and loads bounded
 read-only context.
 
+## Streaming answers
+
+Replies use an `AGENT / architect` or `AGENT / guide` heading. Each starts with
+a blinking mint `_` cursor and animated `thinking.`, `thinking..`, `thinking...` dots.
+As answer text arrives, it appears in that same message with a `streaming`
+indicator. JSON action wrappers are hidden; code, newlines and Unicode remain
+readable. The cursor reserves a fixed cell so blinking does not shift the text.
+
+Completion updates the status in that same header. The answer stays in place:
+report footnotes and expanding trace blocks do not change its position. Terminal
+frames use synchronized updates where supported to reduce flicker.
+
+Worker activity appears only in the bottom status bar; the top model row shows
+the provider and model. Use `/trace` for the full trace and
+retained worker/command output, or `/diff` for proposed changes. Esc or Ctrl-C
+cancels an active task or Guide answer.
+
+`/help QUESTION` streams from Guide using the active model, without requiring
+an active project. Guide receives a bundled command reference and a redacted
+settings snapshot on each call. For example, `/help what does config do?`
+can explain `/config`, `proto-cli config` and the commands for changing settings.
+
+## Quiet composer and debug details
+
+Keyboard hints are a faint placeholder inside the empty input. They disappear
+when you type; slash-command suggestions appear within the input area. A blank
+separator keeps the composer apart from the answer. The empty input cursor
+blinks slowly, with 700 ms per phase, without repainting the conversation.
+
+`/debug on` shows the metadata previously displayed under answers: provider,
+model, status, elapsed time, transport metrics, event/approval counts and report
+labels, plus a `/trace` hint. It reveals metadata on existing answers too.
+`/debug off` returns to the clean view; `/debug` reports the current mode.
+Debug defaults off for each TUI session and does not change agent execution,
+approvals or trace recording. With debug on, details appear after completion;
+use the default off mode to keep the answer layout unchanged.
+
 ## Scrolling
 
 | Input | Behavior |

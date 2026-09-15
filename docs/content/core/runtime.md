@@ -100,14 +100,34 @@ client to configure.
 All deck agents advertise streaming. ProtoLink handles provider streaming,
 delegated event propagation and final-result normalization. `streaming.py`
 projects `llm_chunk`, `llm_final` and `process.output` into a separate live-output
-channel for Rust. The TUI retains up to four stream previews, each with the last
-4096 characters; shell output is flushed as deltas arrive. Task/agent/step/channel
-identities keep independent streams separate. `llm_final` replaces its TUI
-preview, while the native terminal task determines the overall run status.
+channel for Rust. Architect and isolated Guide text use the `answer` channel and
+update a single TUI response headed `AGENT / architect` or `AGENT / guide`, with
+a blinking mint `_` cursor. The native task finalizes that same message without
+changing its layout. Reports remain attached for inspection through `/trace`;
+runtime activity stays in the status area. Worker/process
+previews retain up to four streams, each with the last 4096 characters; the
+Architect answer is not truncated by this preview limit. Shell output is flushed
+as deltas arrive. Task/agent/step/channel identities keep streams separate;
+a new Architect step or repair replaces the previous provisional text.
 
-JSON-action models produce raw JSON generation fragments. Native-tool models
-produce ordinary text. The application displays both as provisional output and
-does not parse partial actions or execute anything from the preview.
+The default conversation hides diagnostic footnotes. `/debug on` reveals saved
+response metadata and report labels with a `/trace` hint; `/debug off` hides
+them. This session-local presentation toggle does not change native recording.
+
+Guide uses its own tool-free `AgentGroup` and `RunHandle`, a task-local context,
+three-step/three-call limits and a 120-second native runtime budget. Its bridge
+needs cancellation only, without an approval broker. The prompt combines the
+application help manual, packaged `command_reference.json` (also compiled into
+the Rust command picker) and a redacted per-call settings snapshot. Guide has
+no workspace tools, coding delegation, persistent history or run database.
+
+For JSON-action models, a display projection progressively decodes the canonical
+`{"type":"final","content":"..."}` envelope, withholding unfinished escapes
+and secrets spanning chunks. Tool/delegation envelopes stay out of live text.
+The mode comes from the configured model's `supports_native_action_stream`
+capability: native-tool text, including genuine JSON answers, passes through.
+Unrecognized envelopes wait for native `llm_final`. This projection never
+validates or dispatches actions; ProtoLink retains all execution authority.
 
 `PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) limits summaries, not live text.
 `PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native
