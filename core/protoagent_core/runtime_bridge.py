@@ -31,11 +31,18 @@ class RuntimeBridge:
 
     def emit(self, message: str, *, run_event: dict[str, Any] | None = None) -> None:
         """Append a progress record, preserving the normalized event envelope."""
-        if self.progress_path is None:
-            return
         record: dict[str, Any] = {"ts": time.time(), "event": message}
         if run_event is not None:
             record["run_event"] = run_event
+        self._append(record)
+
+    def emit_output(self, output: dict[str, Any]) -> None:
+        """Send provisional text independently of the bounded trace-summary channel."""
+        self._append({"ts": time.time(), "live_output": output})
+
+    def _append(self, record: dict[str, Any]) -> None:
+        if self.progress_path is None:
+            return
         record = self.redaction.redact(record)
         try:
             with self._write_lock:
@@ -89,7 +96,6 @@ class RuntimeBridge:
         never read from the decision file. Cancellation goes to RunHandle once;
         it is not converted to an approval or a task submission retry.
         """
-        assert self.broker is not None and self.authorization is not None
         presented = None
         generation = 0
         while True:
@@ -97,6 +103,10 @@ class RuntimeBridge:
                 await handle.cancel(reason)
                 self.emit(f"Cancellation requested: {reason}")
                 return
+            # Isolated agents such as Guide need cancellation, but no broker.
+            if self.broker is None or self.authorization is None:
+                await asyncio.sleep(0.08)
+                continue
             scope = self.authorization.scope
             pending = self.broker.pending(scope)
             record = pending[0] if pending else None

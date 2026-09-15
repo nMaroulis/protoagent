@@ -1,13 +1,12 @@
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-
-const MAX_VISIBLE_EVENTS: usize = 8;
 
 pub(crate) struct ProgressFile {
     path: PathBuf,
-    seen_lines: usize,
+    offset: u64,
     seen_approvals: HashSet<String>,
 }
 
@@ -35,6 +34,87 @@ pub(crate) struct ContextSample {
 pub(crate) struct ProgressBatch {
     pub(crate) events: Vec<String>,
     pub(crate) context_samples: Vec<ContextSample>,
+    pub(crate) output: Vec<OutputUpdate>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct OutputUpdate {
+    pub(crate) id: String,
+    pub(crate) agent: String,
+    pub(crate) channel: String,
+    pub(crate) text: String,
+    pub(crate) replace: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct LiveOutput {
+    streams: Vec<OutputUpdate>,
+    answer: Option<OutputUpdate>,
+    answer_revision: u64,
+}
+
+impl LiveOutput {
+    pub(crate) fn observe(&mut self, update: OutputUpdate) {
+        if update.channel == "answer" {
+            if let Some(answer) = &mut self.answer {
+                if answer.id == update.id && !update.replace {
+                    if update.text.is_empty() {
+                        return;
+                    }
+                    answer.text.push_str(&update.text);
+                    self.answer_revision = self.answer_revision.wrapping_add(1);
+                    return;
+                }
+                if answer.id == update.id && answer.text.trim() == update.text.trim() {
+                    return;
+                }
+            }
+            // A new step/repair replaces its predecessor, never a worker's output.
+            self.answer = Some(update);
+            self.answer_revision = self.answer_revision.wrapping_add(1);
+            return;
+        }
+        let position = self.streams.iter().position(|item| item.id == update.id);
+        let mut item = position
+            .map(|index| self.streams.remove(index))
+            .unwrap_or_else(|| OutputUpdate {
+                text: String::new(),
+                ..update.clone()
+            });
+        if update.replace {
+            item.text.clear();
+        }
+        item.text.push_str(&update.text);
+        // Keep the live view bounded; the native final response remains complete.
+        if let Some((start, _)) = item.text.char_indices().rev().nth(4095) {
+            item.text = item.text[start..].to_string();
+        }
+        self.streams.push(item);
+        if self.streams.len() > 4 {
+            self.streams.remove(0);
+        }
+    }
+
+    pub(crate) fn answer(&self) -> &str {
+        self.answer.as_ref().map_or("", |answer| &answer.text)
+    }
+
+    pub(crate) fn answer_revision(&self) -> u64 {
+        self.answer_revision
+    }
+
+    pub(crate) fn render(&self) -> String {
+        self.streams
+            .iter()
+            .map(|item| {
+                format!(
+                    "[{} / {} — live preview]\n{}",
+                    item.agent, item.channel, item.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +163,7 @@ impl ProgressFile {
         }
         Self {
             path,
-            seen_lines: 0,
+            offset: 0,
             seen_approvals: HashSet::new(),
         }
     }
@@ -92,20 +172,37 @@ impl ProgressFile {
         self.path.to_string_lossy().to_string()
     }
 
-    pub(crate) fn read_new(&mut self) -> Vec<String> {
-        self.read_new_batch().events
+    pub(crate) fn read_new_batch(&mut self) -> ProgressBatch {
+        self.read_batch(usize::MAX, u64::MAX)
     }
 
-    pub(crate) fn read_new_batch(&mut self) -> ProgressBatch {
-        let Ok(text) = fs::read_to_string(&self.path) else {
+    /// Bound live TUI ingestion so a burst cannot monopolize input handling.
+    /// Final drains and shell consumers still use read_new_batch without limits.
+    pub(crate) fn read_ui_batch(&mut self) -> ProgressBatch {
+        self.read_batch(256, 256 * 1024)
+    }
+
+    fn read_batch(&mut self, max_lines: usize, max_bytes: u64) -> ProgressBatch {
+        let Ok(mut file) = fs::File::open(&self.path) else {
             return ProgressBatch::default();
         };
-
+        if file.seek(SeekFrom::Start(self.offset)).is_err() {
+            return ProgressBatch::default();
+        }
+        let mut reader = BufReader::new(file);
         let mut batch = ProgressBatch::default();
-        for line in text.lines().skip(self.seen_lines) {
+        let start = self.offset;
+        for _ in 0..max_lines {
+            if self.offset - start >= max_bytes {
+                break;
+            }
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() || !line.ends_with('\n') {
+                break; // Retry a partially written JSON/UTF-8 line on the next poll.
+            }
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                self.seen_lines += 1;
+                self.offset += line.len() as u64;
                 continue;
             }
 
@@ -113,6 +210,11 @@ impl ProgressFile {
                 break;
             };
             let run_event = value.get("run_event");
+            if let Some(output) = value.get("live_output") {
+                if let Ok(update) = serde_json::from_value::<OutputUpdate>(output.clone()) {
+                    batch.output.push(update);
+                }
+            }
             if let Some(sample) = run_event.and_then(context_sample_from_run_event) {
                 batch.context_samples.push(sample);
             }
@@ -132,7 +234,7 @@ impl ProgressFile {
             {
                 batch.events.push(event);
             }
-            self.seen_lines += 1;
+            self.offset += line.len() as u64;
         }
         batch
     }
@@ -603,21 +705,6 @@ fn value_string(value: &Value, path: &[&str]) -> String {
     current.as_str().unwrap_or("").to_string()
 }
 
-pub(crate) fn format_live_progress(events: &[String]) -> String {
-    let mut rows = vec!["Live ProtoLink trace".to_string()];
-    if events.is_empty() {
-        rows.push("[START] Starting local agent runtime.".to_string());
-        rows.push("[WAIT] Waiting for Architect to publish the first task event.".to_string());
-        return rows.join("\n");
-    }
-
-    let start = events.len().saturating_sub(MAX_VISIBLE_EVENTS);
-    for event in &events[start..] {
-        rows.push(format!("{} {event}", event_badge(event)));
-    }
-    rows.join("\n")
-}
-
 pub(crate) fn progress_activity(events: &[String], tick: usize) -> String {
     let spinner = ["|", "/", "-", "\\"];
     format!(
@@ -800,33 +887,6 @@ fn action_label(event: &str, active: &str) -> String {
     clean_sentence_tail(event)
 }
 
-fn event_badge(event: &str) -> &'static str {
-    if event.contains("failed") || event.contains("error") || event.starts_with("Task error") {
-        "[ERROR]"
-    } else if event.contains("delegating to") || event.contains("AgentClient") {
-        "[SEND]"
-    } else if event.contains("calling tool") || event.contains(": tool ") {
-        "[TOOL]"
-    } else if event.starts_with("Task state") || event.starts_with("Progress") {
-        "[TASK]"
-    } else if event.starts_with("Architect") || agent_prefix(event).as_deref() == Some("Architect")
-    {
-        "[ARCH]"
-    } else if event.starts_with("Explorer") || agent_prefix(event).as_deref() == Some("Explorer") {
-        "[EXPL]"
-    } else if event.starts_with("Coder") || agent_prefix(event).as_deref() == Some("Coder") {
-        "[CODE]"
-    } else if event.starts_with("Registry") {
-        "[REG]"
-    } else if event.starts_with("Loaded tagged") || event.starts_with("Tagged context") {
-        "[TAG]"
-    } else if event.contains("model") || event.contains("LLM") {
-        "[MODEL]"
-    } else {
-        "[INFO]"
-    }
-}
-
 fn agent_prefix(event: &str) -> Option<String> {
     let head = event.split(':').next()?.trim();
     let agent = head.split(" step ").next().unwrap_or(head).trim();
@@ -910,6 +970,113 @@ fn clip_activity(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn architect_answer_is_separate_complete_and_replaced_on_a_new_attempt() {
+        let mut output = super::LiveOutput::default();
+        let update = |id: &str, text: &str, replace| super::OutputUpdate {
+            id: id.into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: text.into(),
+            replace,
+        };
+        output.observe(update("step1", "Hel", false));
+        output.observe(super::OutputUpdate {
+            agent: "coder".into(),
+            channel: "generation".into(),
+            ..update("worker", "worker text", false)
+        });
+        output.observe(update("step1", "lo", false));
+        assert_eq!(output.answer(), "Hello");
+        assert!(!output.render().contains("Hello"));
+        assert!(output.render().contains("worker text"));
+        output.observe(update("step1", "Hello", true));
+        assert_eq!(output.answer(), "Hello");
+        output.observe(update("repair", &"🎉".repeat(5000), false));
+        assert_eq!(output.answer().chars().count(), 5000);
+        assert!(!output.answer().contains("Hello"));
+    }
+
+    #[test]
+    fn live_preview_keeps_streams_separate_and_replaces_final_text() {
+        let mut output = super::LiveOutput::default();
+        let update = |id: &str, text: &str, replace| super::OutputUpdate {
+            id: id.into(),
+            agent: id.into(),
+            channel: "generation".into(),
+            text: text.into(),
+            replace,
+        };
+        output.observe(update("architect", "Hel", false));
+        assert!(output.render().contains("Hel"));
+        output.observe(update("worker", "other", false));
+        output.observe(update("architect", "lo", false));
+        assert!(output.render().contains("Hello"));
+        assert!(output.render().contains("other"));
+        output.observe(update("architect", "Final answer", true));
+        assert!(!output.render().contains("Hello"));
+        assert!(output.render().contains("Final answer"));
+        output.observe(update("architect", &"🎉".repeat(5000), true));
+        assert_eq!(output.streams.last().unwrap().text.chars().count(), 4096);
+    }
+
+    #[test]
+    fn ui_batches_yield_during_bursts_and_final_drain_keeps_every_record() {
+        let mut progress = super::ProgressFile::new("burst-output");
+        let records: String = (0..700)
+            .map(|i| serde_json::json!({"event": format!("event {i}")}).to_string() + "\n")
+            .collect();
+        std::fs::write(&progress.path, records).unwrap();
+        let first = progress.read_ui_batch();
+        assert_eq!(first.events.len(), 256);
+        let second = progress.read_ui_batch();
+        assert_eq!(second.events.len(), 256);
+        let final_batch = progress.read_new_batch();
+        let all: Vec<_> = first
+            .events
+            .into_iter()
+            .chain(second.events)
+            .chain(final_batch.events)
+            .collect();
+        assert_eq!(
+            all,
+            (0..700).map(|i| format!("event {i}")).collect::<Vec<_>>()
+        );
+        assert!(progress.read_new_batch().events.is_empty());
+        progress.cleanup();
+
+        let mut progress = super::ProgressFile::new("large-output-burst");
+        let record = serde_json::json!({"event": "x".repeat(150_000)}).to_string() + "\n";
+        std::fs::write(&progress.path, record.repeat(4)).unwrap();
+        assert_eq!(progress.read_ui_batch().events.len(), 2);
+        assert_eq!(progress.read_new_batch().events.len(), 2);
+        progress.cleanup();
+    }
+
+    #[test]
+    fn partial_utf8_progress_line_is_retried_without_losing_or_repeating_output() {
+        use std::io::Write;
+        let mut progress = super::ProgressFile::new("partial-output");
+        let record = serde_json::json!({"live_output": {
+            "id": "worker-1", "agent": "worker", "channel": "stdout", "text": "café", "replace": false
+        }}).to_string() + "\n";
+        let split = record.find('é').unwrap() + 1;
+        std::fs::write(&progress.path, &record.as_bytes()[..split]).unwrap();
+        assert!(progress.read_new_batch().output.is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&progress.path)
+            .unwrap()
+            .write_all(&record.as_bytes()[split..])
+            .unwrap();
+        let batch = progress.read_new_batch();
+        assert_eq!(batch.output.len(), 1);
+        assert_eq!(batch.output[0].text, "café");
+        assert!(batch.events.is_empty());
+        assert!(progress.read_new_batch().output.is_empty());
+        progress.cleanup();
+    }
+
+    #[test]
     fn extracts_native_json_command_preview() {
         let approval = super::RuntimeApproval::from_value(serde_json::json!({
             "request_id": "command-approval", "fingerprint": "exact-command-fingerprint",
@@ -938,7 +1105,7 @@ mod tests {
         .is_none());
     }
 
-    use super::{format_live_progress, latest_progress_message, ContextUsage, ProgressFile};
+    use super::{latest_progress_message, ContextUsage, ProgressFile};
     use serde_json::{json, Value};
     use std::fs;
 
@@ -957,18 +1124,6 @@ mod tests {
     }
 
     #[test]
-    fn badges_live_trace_events() {
-        let events = vec![
-            "Architect step 1: delegating to Explorer (infer).".to_string(),
-            "Explorer step 1: calling tool read_file.".to_string(),
-        ];
-
-        let progress = format_live_progress(&events);
-        assert!(progress.contains("[SEND]"));
-        assert!(progress.contains("[TOOL]"));
-    }
-
-    #[test]
     fn prefers_normalized_run_event_summaries() {
         let mut progress = ProgressFile::new("normalized-event-test");
         fs::write(
@@ -981,12 +1136,13 @@ mod tests {
                     "summary": "Action started: replace_file"
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
         assert_eq!(
-            progress.read_new(),
+            progress.read_new_batch().events,
             vec!["coder: Action started: replace_file"]
         );
         progress.cleanup();
@@ -1009,11 +1165,12 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
-        let events = progress.read_new();
+        let events = progress.read_new_batch().events;
         assert_eq!(events, vec!["Architect: delegating to Explorer (infer)."]);
         assert!(latest_progress_message(&events).contains("[Architect -> Explorer]"));
         assert!(latest_progress_message(&events).contains("[Explorer]"));
@@ -1037,11 +1194,12 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
-        assert!(progress.read_new().is_empty());
+        assert!(progress.read_new_batch().events.is_empty());
         progress.cleanup();
     }
 
@@ -1075,7 +1233,8 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 
@@ -1112,7 +1271,8 @@ mod tests {
                     }
                 }
             }))
-            .unwrap(),
+            .unwrap()
+                + "\n",
         )
         .unwrap();
 

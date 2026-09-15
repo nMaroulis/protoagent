@@ -3,7 +3,7 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.2.2 requires **ProtoLink 0.7.0**. `runtime.py` configures an embedded
+ProtoAgent 0.2.3 requires **ProtoLink 0.7.1**. `runtime.py` configures an embedded
 mesh; `workflow.py` defines coding acceptance and repair routing. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
@@ -97,18 +97,59 @@ be overridden with `PROTOAGENT_REGISTRY_URL`, `PROTOAGENT_ARCHITECT_URL`,
 The entry handle invokes owned agents locally; there is no separate CLI task
 client to configure.
 
-ProtoLink handles task streams and final-result normalization. ProtoAgent only
-formats typed events for the UI, suppresses token chunks, and limits visible
-summaries with `PROTOAGENT_STREAM_TRACE_LIMIT` (default 120).
-`PROTOAGENT_STREAM=0` suppresses incremental UI summaries; native handles still
-consume execution to completion. It does not resubmit work on another transport.
+All deck agents advertise streaming. ProtoLink handles provider streaming,
+delegated event propagation and final-result normalization. `streaming.py`
+projects `llm_chunk`, `llm_final` and `process.output` into a separate live-output
+channel for Rust. Architect and isolated Guide text use the `answer` channel and
+update a single TUI response headed `AGENT / architect` or `AGENT / guide`, with
+a steady mint `_` cursor. Rust applies Markdown emphasis, headings and code
+highlighting to the growing answer before wrapping by terminal display width;
+the underlying text is unchanged. The native task finalizes that same message without
+changing its layout. Reports remain attached for inspection through `/trace`;
+runtime activity stays in the status area. Worker/process
+previews retain up to four streams, each with the last 4096 characters; the
+Architect answer is not truncated by this preview limit. Shell output is flushed
+as deltas arrive. Task/agent/step/channel identities keep streams separate;
+a new Architect step or repair replaces the previous provisional text.
 
-**0.7.0 integration gap:** model delegation returns a worker output without
-merging that worker's native receipts into the parent report. The application
-composes native task snapshots from the same trace in its `SQLiteRunStore` by
-event ID. It never turns model tool-result prose into evidence. Delegated process
-output may therefore be available only once the worker snapshot is persisted;
-direct native process handles expose live `process.output` events.
+TUI polling processes at most 256 complete progress records per batch and yields
+after crossing 256 KiB, checked between records. The final drain consumes the
+remaining records before cleanup. Only the last 512 status summaries are kept in
+the live TUI; native trace/report retention is unchanged. Immutable messages let
+Rust cache completed layouts and repaint only changed transcript rows.
+
+The default conversation hides diagnostic footnotes. `/debug on` reveals saved
+response metadata and report labels with a `/trace` hint; `/debug off` hides
+them. This session-local presentation toggle does not change native recording.
+
+Guide uses its own tool-free `AgentGroup` and `RunHandle`, a task-local context,
+three-step/three-call limits and a 120-second native runtime budget. Its bridge
+needs cancellation only, without an approval broker. The prompt combines the
+application help manual, packaged `command_reference.json` (also compiled into
+the Rust command picker) and a redacted per-call settings snapshot. Guide has
+no workspace tools, coding delegation, persistent history or run database.
+
+For JSON-action models, a display projection progressively decodes the canonical
+`{"type":"final","content":"..."}` envelope, withholding unfinished escapes
+and secrets spanning chunks. Tool/delegation envelopes stay out of live text.
+The mode comes from the configured model's `supports_native_action_stream`
+capability: native-tool text, including genuine JSON answers, passes through.
+Unrecognized envelopes wait for native `llm_final`. This projection never
+validates or dispatches actions; ProtoLink retains all execution authority.
+
+`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) limits summaries, not live text.
+`PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native
+handles still consume execution once. Peer capabilities determine whether
+delegated output arrives live or with the final snapshot. Even an HTTP worker
+mesh can show live output from the locally invoked Architect.
+
+ProtoLink 0.7.1 puts delegated events and receipts directly in parent streams,
+tasks and reports, with native identity preservation and deduplication. Completion
+uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
+handle's complete report events into the Graph task, preserving model metrics
+and stream events along with execution receipts. No stored-task scan or
+application event join is needed, and a worker's terminal event cannot finish
+the parent run.
 
 Responses retain native transport diagnostics for the Registry and each worker.
 The final report keeps the handle's normalized terminal task plus application
@@ -133,9 +174,10 @@ individual requests and does not set the aggregate run budget. Command execution
 is also bounded by its explicit limits and the remaining native runtime budget.
 Native nested flows share budgets; remote workers enforce inherited limits.
 
-`ApplicationRunStore` adds mandatory output redaction to native persistence and
-composes same-trace receipts. Known credential values and keys, recovery
-`data_base64`, and terminal controls are removed from presentation snapshots.
+`SQLiteRunStore(..., redaction_policy=...)` applies native redaction before every
+task, report and caller metadata write. Known credential values use native
+`RedactionPolicy.sensitive_values`; default sensitive keys include recovery
+`data_base64`. ProtoAgent selects credentials and adds terminal-control stripping.
 The complete recovery and approval records live only in protected storage.
 RunReplay remains read-only inspection, not task resumption.
 

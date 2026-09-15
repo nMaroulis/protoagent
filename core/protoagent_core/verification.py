@@ -31,7 +31,16 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     def read_revision(path):
         return resources.read(path).revision
 
-    receipts = [event for event in report.events if event.type == "action.completed"]
+    # The complete native stream also contains model action annotations whose
+    # payload.action is a string. Only prepared-action receipts prove effects.
+    receipts = sorted(
+        (
+            event
+            for event in report.events
+            if event.type == "action.completed" and isinstance(event.payload.get("action"), dict)
+        ),
+        key=lambda event: event.timestamp,
+    )
     checks = []
     write_events = [
         event
@@ -116,14 +125,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     results = await CompletionValidator(checks).validate(task, report=report)
     validations = [result.to_dict() for result in results]
     statuses = [result.status for result in results]
-    from .checkpoints import changes
-
-    uncertain_changes = [
-        change
-        for change in changes(attempt.checkpoints)
-        if change.run_id in attempt.authorization.run_ids
-        and change.state in {"prepared", "restoring", "uncertain"}
-    ]
+    uncertain_changes = attempt.has_uncertain_changes()
     stopped = (
         attempt.denied
         or bool(task.metadata.get("blockers"))

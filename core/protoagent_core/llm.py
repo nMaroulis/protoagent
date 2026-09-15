@@ -162,6 +162,7 @@ def validate_protolink() -> dict[str, Any]:
         from protolink.llms.factory import create_llm  # noqa: F401
         from protolink.logging import QuietLogger
         from protolink.security.auth import APIKeyAuth
+        from protolink.storage import SQLiteRunStore
         from protolink.tools.builtins import filesystem_tools, process_tool
         from protolink.transport import Transport, TransportCapabilities, TransportRequestContext
         from protolink.transport.http_transport import HTTPTransport
@@ -173,7 +174,12 @@ def validate_protolink() -> dict[str, Any]:
         metrics_ready = hasattr(LLM, "configure_metrics") and LLMModelProfile is not None
         compaction_ready = hasattr(LLM, "compact_history") and HistoryCompactor is not None
         context_manifest_ready = ContextManifest is not None
-        run_report_ready = RunRecorder is not None and RedactionPolicy is not None
+        run_report_ready = (
+            RunRecorder is not None
+            and "redaction_policy" in inspect.signature(SQLiteRunStore).parameters
+            and "sensitive_values" in inspect.signature(RedactionPolicy).parameters
+            and callable(getattr(StorageCheckpointStore, "list_changes", None))
+        )
         state_ready = (
             StateOperationResult is not None
             and hasattr(Agent, "describe_state")

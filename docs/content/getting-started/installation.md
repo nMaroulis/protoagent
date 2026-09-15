@@ -24,7 +24,7 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.7.0"
+pip install "protolink[http,llms]>=0.7.1"
 pip install -e core
 ```
 
@@ -34,10 +34,11 @@ provider extras can be found when the binary starts from either the repo root or
 the `cli/` folder. The editable core install exposes the `protoagent-core`
 package metadata and keeps `protoagent_core.__version__` available to tools.
 
-ProtoLink 0.7.0 is required for native process/filesystem tools, managed agent
+ProtoLink 0.7.1 is required for live streaming, native delegated receipts,
+persistence redaction, checkpoint inventory, process/filesystem tools, managed agent
 groups, approval brokers, normalized run handles and completion checks.
-If a package index does not yet contain 0.7.0, ProtoLink must be published there
-before ProtoAgent 0.2.2 can be installed from that index.
+If a package index does not yet contain 0.7.1, ProtoLink must be published there
+before ProtoAgent 0.2.3 can be installed from that index.
 
 ## Build The CLI
 

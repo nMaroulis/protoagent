@@ -53,6 +53,7 @@ def create_scout_agent(
             ),
             "url": agent_url,
             "capabilities": {
+                "streaming": True,
                 "delegation": False,
                 "tool_calling": True,
                 "multi_step_reasoning": False,

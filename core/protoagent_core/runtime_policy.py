@@ -17,7 +17,6 @@ from protolink import (
 from protolink.tools.builtins.filesystem import FilesystemResource
 
 from . import config
-from .checkpoints import changes
 
 
 @dataclass
@@ -68,15 +67,27 @@ class AttemptState:
         self.attempt += 1
         self.checking = False
 
+    def file_changes(self):
+        """Read this application's admitted run changes through native paginated inventory."""
+        for run_id in sorted(self.authorization.run_ids):
+            offset = 0
+            while page := self.checkpoints.list_changes(run_id=run_id, limit=100, offset=offset):
+                yield from page
+                offset += len(page)
+
+    def has_uncertain_changes(self) -> bool:
+        """Stop work when native inventory records an unresolved effect in this run."""
+        return any(
+            self.checkpoints.list_changes(run_id=run_id, state=state, limit=1)
+            for run_id in self.authorization.run_ids
+            for state in ("prepared", "restoring", "uncertain")
+        )
+
     def prepare_check(self, action_id: str) -> None:
         """Freeze edits and bind checks to the native revisions of this run's files."""
         self.checking = True
         resources = FilesystemResource([self.workspace])
-        paths = {
-            item.before.revision.resource_id
-            for item in changes(self.checkpoints)
-            if item.run_id in self.authorization.run_ids
-        }
+        paths = {item.before.revision.resource_id for item in self.file_changes()}
         self.command_revisions[action_id] = tuple(
             resources.read(path).revision for path in sorted(paths)
         )
@@ -108,11 +119,7 @@ class WorkspacePolicy(CapabilityPolicy):
         if self.attempt is not None and action.capabilities.intersection(
             {"filesystem.write", "filesystem.restore", "process.execute"}
         ):
-            if any(
-                change.run_id in self.attempt.authorization.run_ids
-                and change.state in {"prepared", "restoring", "uncertain"}
-                for change in changes(self.attempt.checkpoints)
-            ):
+            if self.attempt.has_uncertain_changes():
                 return self.deny(
                     "An earlier file effect is uncertain; inspect it before requesting new work"
                 )

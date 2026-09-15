@@ -3,13 +3,13 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Current package version: `0.2.2`. The source of truth is
+Current package version: `0.2.3`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.7.0 or newer with the HTTP and LLM extras:
+Install ProtoLink 0.7.1 or newer with the HTTP and LLM extras:
 
 ```bash
-pip install "protolink[http,llms]>=0.7.0"
+pip install "protolink[http,llms]>=0.7.1"
 ```
 
 Recoverable Coder writes require POSIX. The runtime uses the native execution,
@@ -24,6 +24,7 @@ context, configuration, acceptance criteria and terminal presentation.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic Architect token-budget compaction plus explicit history/compact/reset commands.
 - `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
+- `protoagent_core/command_reference.json` - Packaged TUI/shell reference shared by Guide and Rust command completion. Guide streams via native `AgentGroup`/`RunHandle`, with cancellation and redacted settings on every call.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
 - `protoagent_core/config.py` - Provider, prompt-profile, optional-agent, and API-key config at `~/.protoagent/config.json`.
 - `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.
@@ -51,10 +52,12 @@ no model. Native recovery requires POSIX and existing parent directories, reject
 symlinks and changed revisions, and does not roll back command effects. Legacy
 v0.2.1 snapshots remain inspection-only in the original database.
 
-`runtime_storage.py` applies output redaction to native `SQLiteRunStore`
-persistence and composes same-trace worker receipts. ProtoLink 0.7.0 delegation
-does not merge child execution events into its parent report, so persisted native
-worker snapshots supply that evidence. RunReplay is read-only inspection.
+`SQLiteRunStore(..., redaction_policy=...)` handles persistence redaction,
+including automatic snapshots and caller metadata. `runtime_storage.py` selects
+application credentials for native `sensitive_values` masking and strips terminal
+controls. Native parent reports already include delegated worker receipts;
+completion no longer scans stored worker tasks. Checkpoint inventory uses native
+`list_changes()` filters and pagination. RunReplay is read-only inspection.
 See the [runtime guide](../docs/content/core/runtime.md) and
 [verification/recovery manual](../docs/content/cli/verification-and-recovery.md).
 
@@ -107,7 +110,7 @@ approvals auto-denied.
 
 Useful runtime switches:
 
-- `PROTOAGENT_STREAM=0` suppresses incremental UI summaries; native handles still consume execution once.
+- `PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native handles still consume execution once.
 - `PROTOAGENT_AGENT_TRANSPORT=http` forces the older HTTP-only agent mesh.
 - `PROTOAGENT_STREAM_TRACE_LIMIT=120` controls how many stream summaries are retained for the Rust UI.
 - `PROTOAGENT_TRACE=1` enables `LocalTraceTelemetry` JSONL traces at `~/.protoagent/traces.jsonl`.
@@ -128,7 +131,7 @@ current run.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.7.0's
+apply to the next run. When enabled, Scout receives ProtoLink 0.7.1's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless

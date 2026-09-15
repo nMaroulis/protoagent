@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use crate::{
     empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
-    load_visible_config, progress::ContextUsage, AgentSettings, CoreResponse, DoctorReport,
-    ModelInventory, INPUT_HISTORY_CAPACITY,
+    load_visible_config,
+    progress::{ContextUsage, LiveOutput},
+    AgentSettings, CoreResponse, DoctorReport, ModelInventory, INPUT_HISTORY_CAPACITY,
 };
 
 pub(super) struct TerminalApp {
@@ -11,7 +13,7 @@ pub(super) struct TerminalApp {
     pub(super) panel: PanelView,
     pub(super) status: StatusSnapshot,
     pub(super) agent_settings: AgentSettings,
-    pub(super) messages: Vec<TerminalMessage>,
+    pub(super) messages: Vec<Arc<TerminalMessage>>,
     pub(super) input_history: VecDeque<String>,
     pub(super) last_query: String,
     pub(super) last_response: Option<CoreResponse>,
@@ -20,12 +22,21 @@ pub(super) struct TerminalApp {
     pub(super) activity: String,
     pub(super) scroll_offset: usize,
     pub(super) context_usage: ContextUsage,
+    pub(super) live_output: LiveOutput,
+    pub(super) active_response: Option<usize>,
+    answer_revision: Option<u64>,
     pub(super) models_loading: bool,
+    pub(super) debug_mode: bool,
 }
 
 impl TerminalApp {
-    pub(super) fn new() -> Self {
-        let mut app = Self {
+    #[cfg(test)]
+    pub(super) fn for_test() -> Self {
+        Self::empty()
+    }
+
+    fn empty() -> Self {
+        Self {
             turn: 0,
             panel: PanelView::Dashboard,
             status: StatusSnapshot::default(),
@@ -39,8 +50,16 @@ impl TerminalApp {
             activity: "idle".to_string(),
             scroll_offset: 0,
             context_usage: ContextUsage::default(),
+            live_output: LiveOutput::default(),
+            active_response: None,
+            answer_revision: None,
             models_loading: false,
-        };
+            debug_mode: false,
+        }
+    }
+
+    pub(super) fn new() -> Self {
+        let mut app = Self::empty();
         app.refresh(None);
         if let Some(project) = crate::active_project_dir() {
             app.push(
@@ -111,41 +130,33 @@ impl TerminalApp {
 
     pub(super) fn push(&mut self, role: Role, label: &str, body: &str) {
         self.jump_to_bottom();
-        self.messages.push(TerminalMessage {
+        self.messages.push(Arc::new(TerminalMessage {
             role,
             label: label.to_string(),
             body: body.to_string(),
             meta: Vec::new(),
             details: Vec::new(),
-        });
+        }));
     }
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
-        self.jump_to_bottom();
-        if !response.run_events.is_empty() || !response.events.is_empty() {
-            let trace = crate::timeline::format_run_trace(&response.run_events, &response.events);
-            let trace_lines = trace.lines().map(str::to_string).collect::<Vec<_>>();
-            let trace_body = compact_agent_trace(&trace_lines);
-            self.messages.push(TerminalMessage {
-                role: Role::System,
-                label: "Agent Trace".to_string(),
-                body: trace_body,
-                meta: vec![format!(
-                    "{} event(s)",
-                    response.run_events.len().max(response.events.len())
-                )],
-                details: vec![("Full trace".to_string(), trace)],
-            });
+        if self.active_response.is_none() {
+            self.jump_to_bottom();
         }
         let body = response
             .answer
             .trim()
             .if_empty_then(response.headline.trim())
             .if_empty_then("(no answer text)");
+        let body = self
+            .active_response
+            .and_then(|index| self.messages.get(index))
+            .filter(|message| message.body.trim() == body)
+            .map_or_else(|| body.to_string(), |message| message.body.clone());
         let mut message = TerminalMessage {
             role: Role::Assistant,
             label: crate::response_actor(response),
-            body: body.to_string(),
+            body,
             meta: vec![
                 format!("status {}", response.status),
                 format!("provider {}", empty_as_unknown(&response.provider)),
@@ -239,7 +250,67 @@ impl TerminalApp {
                     .push(("Approval decisions".to_string(), approvals));
             }
         }
-        self.messages.push(message);
+        if let Some(index) = self.active_response.take() {
+            self.messages[index] = Arc::new(message);
+        } else {
+            self.messages.push(Arc::new(message));
+        }
+    }
+
+    pub(super) fn begin_response(&mut self, agent: &str) {
+        self.answer_revision = None;
+        self.active_response = Some(self.messages.len());
+        self.push(Role::Assistant, agent, "");
+        self.update_streaming_response(0);
+    }
+
+    pub(super) fn update_streaming_response(&mut self, tick: usize) {
+        if let Some(index) = self.active_response {
+            let revision = self.live_output.answer_revision();
+            let meta = vec![if self.live_output.answer().is_empty() {
+                format!("status thinking{:<3}", ".".repeat((tick / 4) % 3 + 1))
+            } else {
+                "status streaming".into()
+            }];
+            if self.answer_revision != Some(revision) || self.messages[index].meta != meta {
+                // Replacing the immutable message invalidates its cached layout.
+                // Animation-only ticks retain it without copying answer text.
+                self.messages[index] = Arc::new(TerminalMessage {
+                    role: Role::Assistant,
+                    label: self.messages[index].label.clone(),
+                    body: self.live_output.answer().to_string(),
+                    meta,
+                    details: Vec::new(),
+                });
+                self.answer_revision = Some(revision);
+            }
+        }
+    }
+
+    pub(super) fn configure_debug(&mut self, argument: &str) {
+        match argument.trim() {
+            "on" => self.debug_mode = true,
+            "off" => self.debug_mode = false,
+            "" => {}
+            _ => {
+                self.push(Role::Error, "/debug", "Usage: /debug [on|off]");
+                return;
+            }
+        }
+        self.push(Role::Command, "/debug", &format!(
+            "Debug {} for this TUI session. {} Use /trace for the full run trace and retained worker output.",
+            if self.debug_mode { "on" } else { "off" },
+            if self.debug_mode { "Response metadata is visible below completed answers." }
+            else { "Response metadata is hidden; /debug on reveals it." },
+        ));
+    }
+
+    pub(super) fn fail_streaming_response(&mut self, error: &str) {
+        if let Some(index) = self.active_response.take() {
+            let message = Arc::make_mut(&mut self.messages[index]);
+            message.meta = vec!["status interrupted".into()];
+            message.body = format!("{}\n\n{error}", message.body).trim().to_string();
+        }
     }
 
     pub(super) fn scroll_up(&mut self, amount: usize) {
@@ -253,19 +324,6 @@ impl TerminalApp {
     pub(super) fn jump_to_bottom(&mut self) {
         self.scroll_offset = 0;
     }
-}
-
-fn compact_agent_trace(events: &[String]) -> String {
-    let limit = 14usize;
-    let mut rows = events
-        .iter()
-        .take(limit)
-        .map(|event| format!("- {event}"))
-        .collect::<Vec<_>>();
-    if events.len() > limit {
-        rows.push(format!("- ...{} more event(s)", events.len() - limit));
-    }
-    rows.join("\n")
 }
 
 trait EmptyFallback<'a> {
@@ -324,12 +382,144 @@ pub(super) enum Role {
     Error,
 }
 
+#[derive(Clone)]
 pub(super) struct TerminalMessage {
     pub(super) role: Role,
     pub(super) label: String,
     pub(super) body: String,
     pub(super) meta: Vec<String>,
     pub(super) details: Vec<(String, String)>,
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use crate::progress::OutputUpdate;
+
+    #[test]
+    fn thinking_dots_animate_in_a_fixed_width_status() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("guide");
+        let mut states = vec![];
+        for tick in [0, 4, 8, 12] {
+            app.update_streaming_response(tick);
+            states.push(app.messages[0].meta[0].clone());
+        }
+        assert_eq!(
+            states,
+            [
+                "status thinking.  ",
+                "status thinking.. ",
+                "status thinking...",
+                "status thinking.  "
+            ]
+        );
+    }
+
+    #[test]
+    fn animation_ticks_retain_the_same_streaming_message() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("guide");
+        app.live_output.observe(OutputUpdate {
+            id: "answer".into(),
+            agent: "guide".into(),
+            channel: "answer".into(),
+            text: "**A long answer**".repeat(100),
+            replace: false,
+        });
+        app.update_streaming_response(1);
+        let message = Arc::clone(&app.messages[0]);
+        for tick in 2..30 {
+            app.update_streaming_response(tick);
+        }
+        assert!(Arc::ptr_eq(&message, &app.messages[0]));
+    }
+
+    #[test]
+    fn debug_is_opt_in_and_invalid_arguments_preserve_the_mode() {
+        let mut app = TerminalApp::empty();
+        assert!(!app.debug_mode);
+        app.configure_debug("on");
+        assert!(app.debug_mode);
+        assert!(app.messages.last().unwrap().body.contains("/trace"));
+        app.configure_debug("invalid");
+        assert!(app.debug_mode);
+        app.configure_debug("off");
+        assert!(!app.debug_mode);
+        app.configure_debug("");
+        assert!(!app.debug_mode);
+    }
+
+    #[test]
+    fn final_whitespace_normalization_does_not_move_the_answer() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("guide");
+        Arc::make_mut(&mut app.messages[0]).body = "A complete answer\n\n".into();
+        app.scroll_offset = 2;
+        let response = serde_json::from_value(serde_json::json!({
+            "status":"completed", "responder":"guide", "answer":"A complete answer"
+        }))
+        .unwrap();
+        app.push_response(&response);
+        assert_eq!(app.messages[0].body, "A complete answer\n\n");
+        assert_eq!(app.scroll_offset, 2);
+    }
+
+    #[test]
+    fn live_message_is_finalized_in_place_for_every_terminal_status() {
+        for status in [
+            "completed",
+            "canceled",
+            "failed",
+            "uncertain",
+            "blocked",
+            "incomplete",
+        ] {
+            let mut app = TerminalApp::empty();
+            app.push(Role::System, "Working", "trace");
+            app.begin_response("architect");
+            app.live_output.observe(OutputUpdate {
+                id: "attempt-1".into(),
+                agent: "architect".into(),
+                channel: "answer".into(),
+                text: "Early text".into(),
+                replace: false,
+            });
+            app.update_streaming_response(4);
+            assert_eq!(app.messages[1].body, "Early text");
+            assert_eq!(app.active_response, Some(1));
+            let response: CoreResponse = serde_json::from_value(serde_json::json!({
+                "status": status, "responder": "architect", "answer": "Native final answer",
+                "events": ["run ended"], "run_report": {"status": status}
+            }))
+            .unwrap();
+            app.push_response(&response);
+            assert_eq!(
+                app.messages.len(),
+                2,
+                "No duplicate answer or inserted trace"
+            );
+            assert!(app.active_response.is_none());
+            assert_eq!(app.messages[1].body, "Native final answer");
+            assert!(app.messages[1].meta.contains(&format!("status {status}")));
+            assert!(app.messages[1]
+                .details
+                .iter()
+                .any(|(label, _)| label == "RunReport"));
+        }
+    }
+
+    #[test]
+    fn stream_failure_clears_cursor_and_keeps_partial_text() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("architect");
+        Arc::make_mut(&mut app.messages[0]).body = "Partial answer".into();
+        app.fail_streaming_response("Connection interrupted");
+        assert!(app.active_response.is_none());
+        assert_eq!(app.messages.len(), 1);
+        assert!(app.messages[0].body.contains("Partial answer"));
+        assert!(app.messages[0].body.contains("Connection interrupted"));
+    }
 }
 
 #[derive(Default)]

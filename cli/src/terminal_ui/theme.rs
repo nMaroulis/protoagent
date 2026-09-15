@@ -5,7 +5,7 @@ use crossterm::{
     style::{Attribute, Color, Print, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal,
 };
-use std::io::Stdout;
+use std::io::Write;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -16,7 +16,7 @@ pub(super) fn size() -> (u16, u16) {
 }
 
 pub(super) fn write_line(
-    out: &mut Stdout,
+    out: &mut impl Write,
     y: u16,
     width: u16,
     text_value: &str,
@@ -29,7 +29,7 @@ pub(super) fn write_line(
 
 #[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 pub(super) fn write_at(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: u16,
     y: u16,
     width: u16,
@@ -48,6 +48,8 @@ pub(super) fn write_at(
         MoveTo(x, y),
         SetForegroundColor(fg),
         SetBackgroundColor(background),
+        // Plain UI rows retain the terminal's own colors/background. Explicit
+        // fills belong to the existing bold chips and selected surfaces.
         SetAttribute(if bold {
             Attribute::Bold
         } else {

@@ -4,30 +4,47 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from contextlib import suppress
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from protolink import Agent, CapabilityPolicy, Task
+from protolink import Agent, AgentGroup, CapabilityPolicy, RunBudget, RunContext, Task
 
 from .config import CONFIG_DIR, optional_agent_enabled, visible_config
 from .llm import create_llm_from_config
 from .prompt_profiles import prompt_profile_status
+from .runtime import _content_to_text, _run_event_summary, _streaming_enabled
+from .runtime_bridge import RuntimeBridge
+from .streaming import LiveOutput
 
 GUIDE_SYSTEM_PROMPT = """You are Guide, ProtoAgent's isolated interactive help agent.
 
 You answer questions about using ProtoAgent itself. You are not part of the
 coding-agent mesh. You have no tools, no registry, no
 delegation, no project memory, and no access to the user's workspace. Answer
-only from this manual. If the manual does not cover a detail, say so clearly.
-
-Return exactly one JSON object:
-{"type":"final","content":"your concise answer"}
+only from this manual and the bundled command reference. Distinguish TUI slash
+commands from shell commands. If they do not cover a detail, say so clearly.
+Never claim to have changed settings or inspected the project.
 
 Manual:
 - ProtoAgent is a local-first coding-agent console. The Rust CLI/TUI embeds the
   Python core through PyO3. ProtoLink is the agent runtime engine.
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
 - One-shot task: `proto-cli run "task"`.
+- The TUI streams answers under AGENT / architect or AGENT / guide with a
+  steady mint cursor on the text background and animated thinking dots. Bold,
+  italic, headings and highlighted inline/fenced code render while streaming;
+  saved answers retain their original Markdown. JSON-action wrappers stay hidden.
+  Runtime activity appears only in the bottom status area; /trace shows
+  detailed events and worker output. Empty input has a dim keyboard-hint
+  placeholder and a slow-blinking cursor. Two muted horizontal borders frame the
+  input, which expands upward for up to three visible lines. Slash-command
+  suggestions appear in the lower border; context and status stay below it.
+  Final task status determines completion. Guide also streams via /help QUESTION.
+  `PROTOAGENT_STREAM=0` hides live previews without changing execution.
+  Ctrl-C in shell mode requests native cancellation and waits for cleanup.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts
@@ -57,6 +74,12 @@ Manual:
   creation needs an approved host command and a later edit run.
 - `/model` opens the provider/model picker. `/models` opens model inventory.
   From the shell, use `proto-cli model`.
+- `/config` opens the redacted configuration panel. `proto-cli config` prints
+  the configuration in the shell. Both are read-only, not configuration editors.
+  Use `/model` to select a model, `/key PROVIDER` to store a key,
+  `/context window 16k` for Ollama context, and `/agents profile MODE` or
+  `/agents scout on|off` for agent settings. Never suggest a nonexistent
+  `config set` command. Paths below use the configured directory when overridden.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
   or OpenAI-compatible providers. From the shell, use `proto-cli key openai`.
 - `/project` chooses the active workspace folder. `proto-cli project set PATH`
@@ -98,6 +121,10 @@ Manual:
   and model.
 - `/trace` shows the latest normalized ProtoLink run trace. `/timeline` shows a
   structured agent path. `/diff` shows proposed file changes from the last run.
+- `/debug on` reveals response metadata below completed answers, with a /trace
+  hint. `/debug off` hides it. `/debug` shows the current mode. Debug is off by
+  default and lasts for this TUI session; it does not change native tracing,
+  logging, approvals or execution. It also reveals existing response metadata.
 - `/sessions` shows saved project session records. `/last` reopens the last
   response in the current TUI process. `/clear` clears the visible transcript.
 - `/version` shows the current CLI, Python core, and planned ACP component
@@ -135,6 +162,20 @@ Manual:
   tools without another model loop. Guide is separate and only answers help
   questions.
 """
+
+
+def command_reference() -> str:
+    """Load the packaged catalog also used by the Rust command picker."""
+    catalog = json.loads(files("protoagent_core").joinpath("command_reference.json").read_text())
+    return "\n\n".join(
+        title
+        + "\n"
+        + "\n".join(f"- {command}: {description}" for command, description in catalog[key])
+        for key, title in (
+            ("tui", "TUI slash commands:"),
+            ("shell", "Shell commands (proto-cli ...):"),
+        )
+    )
 
 
 def _build_help_prompt(question: str, config: dict[str, Any]) -> str:
@@ -227,28 +268,42 @@ def _project_config_path(config: dict[str, Any]) -> Path:
     return CONFIG_DIR / "project.json"
 
 
-def answer_help_question(question: str) -> dict[str, Any]:
-    """Answer a ProtoAgent usage question with the isolated Guide agent."""
+def answer_help_question(question: str, progress_path: str | None = None) -> dict[str, Any]:
+    """Stream isolated Guide help through native runtime events and cancellation."""
     question = question.strip()
     if not question:
         raise ValueError("Help question cannot be empty")
-    return asyncio.run(_answer_help_question(question))
+    return asyncio.run(_answer_help_question(question, progress_path))
 
 
-async def _answer_help_question(question: str) -> dict[str, Any]:
+async def _answer_help_question(question: str, progress_path: str | None = None) -> dict[str, Any]:
+    started = time.monotonic()
+    bridge = RuntimeBridge(progress_path)
     config = visible_config()
     provider = str(config.get("active_provider", "ollama"))
     active = config.get("providers", {}).get(provider, {})
     model = str(active.get("model") or "")
     if not model:
         raise RuntimeError("No model is selected")
+    if reason := bridge.cancel_reason():
+        bridge.cleanup()
+        return {
+            "agent": "guide",
+            "responder": "guide",
+            "status": "canceled",
+            "provider": provider,
+            "model": model,
+            "answer": f"Help canceled: {reason}",
+        }
 
+    llm = create_llm_from_config(provider, model)
     agent = Agent(
         card={
             "name": "guide",
             "description": "Isolated ProtoAgent usage help agent.",
             "url": "runtime://protoagent-guide",
             "capabilities": {
+                "streaming": True,
                 "delegation": False,
                 "tool_calling": False,
                 "multi_step_reasoning": False,
@@ -257,30 +312,56 @@ async def _answer_help_question(question: str) -> dict[str, Any]:
         },
         transport=None,
         registry=None,
-        llm=create_llm_from_config(provider, model),
-        system_prompt=GUIDE_SYSTEM_PROMPT,
+        llm=llm,
+        system_prompt=GUIDE_SYSTEM_PROMPT + "\n\n" + command_reference(),
         storage=None,
         state=[],
         policy=CapabilityPolicy({}, default_effect="deny"),
-        override_system_prompt=True,
+        expose_chat=False,
         verbosity=0,
     )
-    task = Task.create_infer(prompt=_build_help_prompt(question, config))
-    result = await agent.handle_task(task)
-    return {
-        "agent": "guide",
-        "provider": provider,
-        "model": model,
-        "answer": _task_last_part_content(result) or "",
-    }
-
-
-def _task_last_part_content(task: Any) -> str:
-    content = task.get_last_part_content() if hasattr(task, "get_last_part_content") else None
-    if isinstance(content, dict):
-        for key in ("content", "text", "answer"):
-            value = content.get(key)
-            if value:
-                return str(value)
-        return str(content)
-    return str(content or "")
+    task = Task.create_infer(prompt=bridge.redaction.redact(_build_help_prompt(question, config)))
+    RunContext(
+        budget=RunBudget(max_steps=3, max_llm_calls=3, max_runtime_seconds=120)
+    ).attach_to_task(task)
+    output = LiveOutput(
+        bridge,
+        bridge.redaction,
+        answer_agent="guide",
+        json_agents={"guide"} if not llm.supports_native_action_stream else (),
+    )
+    try:
+        async with AgentGroup([agent]) as group:
+            handle = group.run(agent, task, redaction_policy=bridge.redaction)
+            controls = asyncio.create_task(bridge.serve(handle))
+            try:
+                async for event in handle.events():
+                    if _streaming_enabled():
+                        output.emit(event)
+                        data = event.to_dict(redaction_policy=bridge.redaction)
+                        if summary := _run_event_summary(data):
+                            bridge.emit(summary, run_event=data)
+                result = await handle.result()
+            finally:
+                controls.cancel()
+                with suppress(asyncio.CancelledError):
+                    await controls
+        answer = _content_to_text(result.output)
+        if result.status != "completed":
+            detail = (result.error or {}).get("message") or f"Help {result.status}."
+            answer = f"{answer}\n\n{detail}".strip()
+        return bridge.redaction.redact(
+            {
+                "agent": "guide",
+                "responder": "guide",
+                "provider": provider,
+                "model": model,
+                "status": result.status,
+                "answer": answer,
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+                "run_events": [event.to_dict() for event in result.report.events],
+                "run_report": result.report.to_dict(),
+            }
+        )
+    finally:
+        bridge.cleanup()

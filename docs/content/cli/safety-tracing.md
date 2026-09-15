@@ -63,11 +63,40 @@ per-run database; these temporary files are only the UI adapter. Fingerprints
 correlate decisions; authentication comes from the private local control channel
 and the application's trusted mesh authorization, not UI-supplied scopes.
 
+## Live output
+
+Live generation is enabled by default in `proto-cli run` and the TUI. The TUI
+streams answer text under **AGENT / architect** (or **AGENT / guide** for help),
+with a cyan prompt and steady mint `_` cursor on the text background. Markdown
+emphasis, headings and highlighted code render during generation; original
+answer text remains available in the saved response. JSON action wrappers stay
+hidden. Completion settles into the
+same message, updates its status and hides the cursor without changing layout. `/trace` opens the
+full run details without duplicating the answer in the conversation.
+
+Worker activity appears in the status area; `/trace` includes retained worker
+text and command stdout/stderr, labeled by agent and channel. These previews
+retain the last 4096 characters of up to four streams;
+the Architect answer stays complete. Streamed text remains provisional, and a
+repair can replace it. Worker completion and `llm_final` do not complete the
+whole run: the final response and status come from the native task result.
+
+Use `PROTOAGENT_STREAM=0` to hide live previews. Esc/Ctrl-C cancels in the TUI;
+Ctrl-C in shell mode also requests native cancellation and waits for cleanup.
+Guide help follows the same controls in both `/help QUESTION` and
+`proto-cli help "QUESTION"`, without joining the coding mesh or saving history.
+
+`/debug on` reveals metadata beneath completed answers and a `/trace` hint;
+`/debug off` hides it again. `/debug` shows the mode. This is a TUI display
+setting, off by default per session; it does not disable native traces or alter
+execution. Runtime activity remains in the bottom status bar in either mode.
+
 ## Trace Commands
 
 | Surface | Command | Output |
 | --- | --- | --- |
 | TUI | `/trace` | Latest normalized trace in the transcript. |
+| TUI | `/debug on` | Response metadata, report labels and a `/trace` hint below completed answers. |
 | TUI | `/timeline` | Structured agent path. |
 | TUI | `/diff` | Latest proposed diff or approval preview in a styled review modal with old/new line gutters. |
 | Shell | `proto-cli run "task"` | Prints `AGENT TRACE`, `AGENT TIMELINE`, answer, and a styled diff. |

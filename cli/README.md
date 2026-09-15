@@ -4,7 +4,7 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.2.2`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.2.3`, sourced from `cli/Cargo.toml`.
 
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.7.0"
+python -m pip install "protolink[http,llms]>=0.7.1"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -50,6 +50,22 @@ explain @src/auth.rs and suggest a safer JWT flow
 Enter submits the complete prompt; Ctrl-J inserts a newline. Bracketed paste
 retains multiline text without submitting. Tab opens slash-command completion
 and Ctrl-R searches recent input. Ctrl-P/Ctrl-N browse history from any row.
+
+Answers stream under `AGENT / architect` or `AGENT / guide`, with animated
+thinking dots and a steady mint cursor on the text background. Bold, italic,
+headings and highlighted inline/fenced code render as the answer streams,
+preserving the original Markdown in saved responses. Activity stays in the bottom bar. Input hints
+are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
+metadata below completed answers and a `/trace` hint; `/debug off` hides it.
+This display setting defaults off for each TUI session.
+
+Two muted horizontal borders frame the input. It expands upward for multiline
+text while the lower border and status stay anchored. Cached message layouts
+and changed-row painting keep streaming work independent of old answer sizes
+on animation-only ticks.
+
+`/help QUESTION` and `proto-cli help "QUESTION"` stream Guide help using the
+active model and bundled command reference, without requiring a project.
 
 Architect delegates checks to Verifier through ProtoLink. Each command requires
 approval of its argv, working directory and timeout; V opens the full preview.
@@ -115,6 +131,7 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 | `/context window 16k` | Set the Ollama request window and ProtoLink model profile together. |
 | `/index refresh` | Refresh the incremental Context Loom index. |
 | `/trace`, `/timeline`, `/diff` | Inspect the latest normalized run trace, event sequence, or diff preview. |
+| `/debug [on\|off]` | Show the mode, reveal response metadata with a `/trace` hint, or hide it. |
 | `/last` | Replay the last agent response. |
 | `/run TASK` | Run a task from a slash command. |
 | `/clear` | Clear the visible transcript. |

@@ -68,7 +68,7 @@ export default function Home() {
       <main className={styles.workspace}>
         <div className={styles.pathBar}>
           <span><span className={styles.pathRoot}>~/protoagent</span> / docs</span>
-          <span className={styles.version}>v0.2.2 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
+          <span className={styles.version}>v0.2.3 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
         </div>
         <section className={styles.hero} aria-labelledby="home-title">
           <div className={styles.heroCopy}>

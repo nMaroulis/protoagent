@@ -2,6 +2,91 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.2.3] - Unreleased
+
+### Added
+
+- Live model generation and delegated command stdout/stderr in shell and TUI,
+  using native `RunHandle.events()` and explicit streaming Agent capabilities.
+  Answers stream under a consistent `AGENT / architect` or `AGENT / guide`
+  heading with a cyan prompt and steady mint `_` cursor. Runtime activity
+  stays in the status area; `/trace` exposes details and up to four retained
+  worker/process previews of 4096 characters. Answers stay complete.
+- Streaming Guide help in `/help QUESTION` and `proto-cli help "QUESTION"`,
+  with native cancellation and no project or saved conversation required.
+- Packaged command reference shared by Guide and TUI command completion,
+  including `/config`, shell equivalents, settings commands and aliases.
+- `/debug [on|off]` reveals or hides response metadata and a `/trace` hint,
+  including on existing answers. It defaults off for each TUI session.
+- Animated three-dot thinking, faint hints inside the empty composer, and a
+  slow cursor blink (700 ms per phase) that does not repaint the chat.
+- Two muted composer borders and a lower single-line prompt that expands upward
+  for multiline input; command suggestions sit in the lower border.
+- Markdown styling during generation for Architect and Guide answers: bold,
+  italic, headings, highlighted inline code and indented fenced code blocks.
+  Formatting survives wrapped lines and partial delimiters; stored answers
+  retain their original Markdown.
+- Shell Ctrl-C requests native cancellation and waits for runtime cleanup.
+- Provider-free gated streaming tests for early HTTP model delivery, JSON-action
+  and native-tool modes, cancellation, cleanup, live delegated process output,
+  receipt deduplication, redacted persistence and checkpoint pagination.
+
+### Changed
+
+- Require ProtoLink 0.7.1; coordinate CLI/core/docs versions at 0.2.3.
+- Consume propagated worker receipts directly from native parent/Graph tasks.
+  Remove `ApplicationRunStore.trace_report()` and stored-worker evidence scans.
+- Configure `SQLiteRunStore(..., redaction_policy=...)` for automatic task,
+  report and caller metadata writes. Remove save overrides and custom credential
+  replacement in favor of native `RedactionPolicy.sensitive_values`.
+- Use native checkpoint `list_changes()` with state/run filters and pagination.
+  Remove the application inventory reader over the raw Storage namespace.
+- Read progress JSONL incrementally by byte offset, retaining partial writes for
+  the next poll. Live output is separate from the bounded trace-summary channel.
+- Cache immutable message layouts and repaint only changed transcript rows during
+  streaming. Animation ticks retain the answer without copying or reformatting
+  it; resize, debug and modal transitions refresh the relevant layout.
+- Bound live TUI ingestion to 256 records or 256 KiB checked between records per
+  poll, retain the latest 512 status summaries, and drain remaining records at
+  completion. Native traces and complete answers remain intact.
+- Update docstrings, runtime readiness checks, Guide help and documentation.
+
+### Fixed
+
+- Stop dropping model chunks before they reach the Rust frontend. An HTTP worker
+  mesh no longer disables live output from the locally invoked Architect.
+- Keep worker/step previews separate, replace final text without duplication and
+  retain valid UTF-8 when bounding previews or reading partial progress lines.
+- Hide JSON-action envelopes during generation: progressively decode final
+  answer text, including split escapes and Unicode, into the Architect message.
+  Native-tool models can still stream genuine JSON answers unchanged. Trace
+  details remain available through `/trace` without repeating the answer.
+- Mask configured secrets split across live output chunks and strip terminal
+  controls from presentation. Unknown secrets still require application handling.
+- Preserve failed, uncertain and input-required labels in the TUI.
+- Stop the answer jumping at completion: retain the same message layout and
+  cursor cell, avoid inserting report footnotes or collapsing a trace above it,
+  and synchronize terminal redraws where supported.
+- Keep runtime activity only in the bottom status bar. Remove the duplicate
+  top loading indicator and the bright input instructions beside the answer.
+- Give the response cursor the same background as its text and stop its blink.
+  Keep the terminal's default background for answers and the existing UI
+  palette; limit Markdown color changes to response text and code highlights.
+  Position styled spans by Unicode display width so emoji and wide characters
+  do not overlap the next span.
+- Give Guide explicit configuration guidance: `/config` and `proto-cli config`
+  inspect redacted settings; model, key, context and agent commands change them.
+
+### Boundaries
+
+- Streamed answers are provisional until the native task establishes completion,
+  failure, cancellation or uncertainty. Partial JSON is projected for display
+  only; actions remain assembled, authorized and executed by ProtoLink.
+- `PROTOAGENT_STREAM=0` hides previews without changing execution or replaying work.
+- Existing approvals, budgets, POSIX recovery constraints, legacy inspection and
+  bounded repairs remain. Native inventory includes original recovery bytes;
+  ProtoAgent exposes metadata only and keeps recovery storage private.
+
 ## [0.2.2] - 2026-09-12
 
 ### Changed

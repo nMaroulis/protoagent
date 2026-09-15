@@ -1,9 +1,9 @@
 use anyhow::Result;
 use crossterm::{
-    cursor::{Hide, MoveTo, Show},
+    cursor::{DisableBlinking, EnableBlinking, Hide, MoveTo, Show},
     event::{
-        read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyModifiers, MouseEventKind,
+        poll, read, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
+        EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
     },
     execute, queue,
     style::ResetColor,
@@ -19,14 +19,18 @@ use super::commands::matching_commands;
 use super::input::InputEditor;
 use super::modal::{draw_exit_modal, pick_choice_modal};
 use super::project::{format_file_tag, pick_project_file};
-use super::render::{draw_header, draw_input, draw_transcript};
+use super::render::{
+    composer_height, draw_header, draw_input, draw_runtime_status, draw_transcript, TranscriptCache,
+};
 use super::state::{PanelView, Role, TerminalApp};
 use super::theme::size;
-use super::{HEADER_ROWS, INPUT_ROWS, WHEEL_LINES};
+use super::{HEADER_ROWS, WHEEL_LINES};
 
 pub(super) struct TerminalSurface {
     active: bool,
     suppress_exit_escape_until: Option<Instant>,
+    transcript: TranscriptCache,
+    dimensions: Option<(u16, u16)>,
 }
 
 impl TerminalSurface {
@@ -51,6 +55,8 @@ impl TerminalSurface {
         Ok(Self {
             active: true,
             suppress_exit_escape_until: None,
+            transcript: TranscriptCache::default(),
+            dimensions: None,
         })
     }
 
@@ -59,6 +65,7 @@ impl TerminalSurface {
             let leave_result = execute!(
                 stdout(),
                 ResetColor,
+                EnableBlinking,
                 Show,
                 DisableMouseCapture,
                 DisableBracketedPaste,
@@ -75,26 +82,84 @@ impl TerminalSurface {
     }
 
     pub(super) fn render(&mut self, app: &TerminalApp, editor: Option<&InputEditor>) -> Result<()> {
+        self.render_frame(app, editor, true)
+    }
+
+    pub(super) fn render_streaming(&mut self, app: &TerminalApp) -> Result<()> {
+        self.render_frame(app, None, false)
+    }
+
+    fn render_frame(
+        &mut self,
+        app: &TerminalApp,
+        editor: Option<&InputEditor>,
+        force: bool,
+    ) -> Result<()> {
         let (width, height) = size();
+        let force = force || self.dimensions != Some((width, height));
         let mut out = stdout();
-        queue!(out, Hide)?;
-        draw_header(&mut out, width, app)?;
-        draw_transcript(&mut out, width, height, app)?;
-        let cursor = draw_input(&mut out, width, height, app, editor)?;
-        if editor.is_some() {
-            queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
-        } else {
-            queue!(out, Hide, ResetColor)?;
-        }
+        // Supported terminals present the complete frame together, avoiding
+        // a flash between clearing transcript rows and repainting the answer.
+        out.write_all(b"\x1b[?2026h")?;
+        let frame = (|| -> Result<()> {
+            queue!(out, Hide)?;
+            if force {
+                draw_header(&mut out, width, app)?;
+            }
+            draw_transcript(
+                &mut out,
+                width,
+                height.saturating_sub(composer_height(width, editor)),
+                app,
+                &mut self.transcript,
+                force,
+            )?;
+            let cursor = if force {
+                draw_input(&mut out, width, height, app, editor)?
+            } else {
+                draw_runtime_status(&mut out, width, height, app)?;
+                (0, 0)
+            };
+            if let Some(editor) = editor {
+                if editor.is_empty() {
+                    queue!(out, DisableBlinking)?;
+                } else {
+                    queue!(out, EnableBlinking)?;
+                }
+                queue!(out, MoveTo(cursor.0, cursor.1), Show, ResetColor)?;
+            } else {
+                queue!(out, Hide, ResetColor)?;
+            }
+            Ok(())
+        })();
+        out.write_all(b"\x1b[?2026l")?;
         out.flush()?;
-        Ok(())
+        if frame.is_ok() {
+            self.dimensions = Some((width, height));
+        }
+        frame
     }
 
     pub(super) fn read_input(&mut self, app: &mut TerminalApp) -> Result<Option<String>> {
         let mut editor = InputEditor::new(&app.input_history);
         // Mouse movement can be high-volume in some terminals, so repaint only after visible state changes.
         self.render(app, Some(&editor))?;
+        let blink_period = Duration::from_millis(700);
+        let mut next_blink = Instant::now() + blink_period;
+        let mut cursor_visible = true;
         loop {
+            if editor.is_empty() && !poll(next_blink.saturating_duration_since(Instant::now()))? {
+                // Blink only the hardware cursor; idle frames and model state
+                // do not need to be repainted for the placeholder animation.
+                cursor_visible = !cursor_visible;
+                if cursor_visible {
+                    execute!(stdout(), Show)?;
+                } else {
+                    execute!(stdout(), Hide)?;
+                }
+                next_blink = Instant::now() + blink_period;
+                continue;
+            }
             let mut needs_render = false;
             match read()? {
                 Event::Key(key) => match key.code {
@@ -157,12 +222,12 @@ impl TerminalSurface {
                     }
                     KeyCode::PageUp => {
                         let before = app.scroll_offset;
-                        app.scroll_up(chat_page_size());
+                        app.scroll_up(chat_page_size(&editor));
                         needs_render = app.scroll_offset != before;
                     }
                     KeyCode::PageDown => {
                         let before = app.scroll_offset;
-                        app.scroll_down(chat_page_size());
+                        app.scroll_down(chat_page_size(&editor));
                         needs_render = app.scroll_offset != before;
                     }
                     KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -279,6 +344,8 @@ impl TerminalSurface {
             }
             if needs_render {
                 self.render(app, Some(&editor))?;
+                cursor_visible = true;
+                next_blink = Instant::now() + blink_period;
             }
         }
     }
@@ -320,10 +387,10 @@ impl Drop for TerminalSurface {
     }
 }
 
-fn chat_page_size() -> usize {
-    let (_, height) = size();
+fn chat_page_size(editor: &InputEditor) -> usize {
+    let (width, height) = size();
     height
-        .saturating_sub(HEADER_ROWS + INPUT_ROWS)
+        .saturating_sub(HEADER_ROWS + composer_height(width, Some(editor)))
         .saturating_sub(1)
         .max(1) as usize
 }

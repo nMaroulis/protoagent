@@ -97,6 +97,57 @@ The picker:
 The Python core later resolves those tags with `safe_path()` and loads bounded
 read-only context.
 
+## Streaming answers
+
+Replies use an `AGENT / architect` or `AGENT / guide` heading. Each starts with
+a steady mint `_` cursor and animated `thinking.`, `thinking..`, `thinking...` dots.
+As answer text arrives, it appears in that same message with a `streaming`
+indicator. JSON action wrappers are hidden. Response text and its cursor retain
+your terminal's default background. The cursor does not blink and reserves a
+fixed cell through completion; the rest of the UI keeps its existing palette.
+
+Answers render Markdown while they stream: **bold**, *italic*, headings,
+yellow-highlighted inline code and mint fenced code blocks with preserved
+indentation. Opening and closing markers become styles instead of raw tags;
+partial delimiters are held at the live edge. Formatting crosses wrapped lines,
+and Unicode display widths keep emoji and wide characters aligned. These are
+presentation styles; the original Markdown stays in the saved answer.
+
+Completion updates the status in that same header. The answer stays in place:
+report footnotes and expanding trace blocks do not change its position. Terminal
+frames use synchronized updates where supported to reduce flicker.
+
+Unchanged messages reuse cached Markdown layouts. Streaming paints only changed
+transcript rows; spinner ticks do not copy or reformat an unchanged answer.
+Resize, debug changes and returning from a modal refresh the affected layout.
+
+Worker activity appears only in the bottom status bar; the top model row shows
+the provider and model. Use `/trace` for the full trace and
+retained worker/command output, or `/diff` for proposed changes. Esc or Ctrl-C
+cancels an active task or Guide answer.
+
+`/help QUESTION` streams from Guide using the active model, without requiring
+an active project. Guide receives a bundled command reference and a redacted
+settings snapshot on each call. For example, `/help what does config do?`
+can explain `/config`, `proto-cli config` and the commands for changing settings.
+
+## Quiet composer and debug details
+
+Keyboard hints are a faint placeholder inside the empty input. They disappear
+when you type; slash-command suggestions sit in the lower border. Two muted
+horizontal lines frame the composer, with a blank gap above it. The single-line
+prompt sits near the bottom and expands upward to show up to three lines while
+the lower border, context meter and status bar stay anchored. The empty input cursor
+blinks slowly, with 700 ms per phase, without repainting the conversation.
+
+`/debug on` shows the metadata previously displayed under answers: provider,
+model, status, elapsed time, transport metrics, event/approval counts and report
+labels, plus a `/trace` hint. It reveals metadata on existing answers too.
+`/debug off` returns to the clean view; `/debug` reports the current mode.
+Debug defaults off for each TUI session and does not change agent execution,
+approvals or trace recording. With debug on, details appear after completion;
+use the default off mode to keep the answer layout unchanged.
+
 ## Scrolling
 
 | Input | Behavior |

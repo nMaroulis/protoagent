@@ -91,6 +91,7 @@ def create_architect_agent(
             ),
             "url": agent_url,
             "capabilities": {
+                "streaming": True,
                 "delegation": True,
                 "tool_calling": True,
                 "multi_step_reasoning": True,

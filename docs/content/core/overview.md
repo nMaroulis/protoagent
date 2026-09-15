@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.2.2`. It is declared in
+The active core package version is `0.2.3`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:
@@ -31,7 +31,8 @@ The core is responsible for:
 | `runtime.py` | Embedded ProtoLink mesh runner. |
 | `runtime_bridge.py` | File-based progress, approval, and cancellation bridge. |
 | `runtime_policy.py` | Trusted authorization scope, workspace policy, edit/check phases. |
-| `runtime_storage.py` | Output redaction and persisted native receipt collection. |
+| `runtime_storage.py` | Credential selection and terminal sanitization for native redaction. |
+| `streaming.py` | Native model/process events projected into provisional UI output. |
 | `workflow.py` | Native Graph with bounded coding and repair attempts. |
 | `verification.py` | Application acceptance through native completion checks. |
 | `checkpoints.py` | Private native checkpoint storage, project lease and inventory. |

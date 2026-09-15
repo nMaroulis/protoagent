@@ -6,12 +6,15 @@ use crossterm::{
         Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
     },
 };
-use std::io::Stdout;
+use std::io::{Stdout, Write};
+use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 
 use crate::inline_style::{inline_code_segments, InlineKind};
 use crate::wrap_lines;
 
 use super::input::InputEditor;
+use super::markdown::{self, Code, Span, Style};
 use super::state::{PanelView, TerminalApp, TerminalMessage};
 use super::theme::{
     bg, black, clip_plain, cyan, green, input_bg, magenta, muted, panel_bg, red, role_color,
@@ -37,7 +40,7 @@ pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Re
     }
 
     let available_rows = controls_row.saturating_sub(1) as usize;
-    draw_model_activity_row(out, width, 1, app)?;
+    draw_model_row(out, width, 1, app)?;
     let rows = panel_rows(app);
     draw_panel_rows(out, width, &rows, available_rows.saturating_sub(1), 2)?;
 
@@ -54,40 +57,128 @@ pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Re
     Ok(())
 }
 
+/// Layouts hold immutable message references, so unchanged history is checked
+/// by identity without copying or scanning its text/reports every animation tick.
+#[derive(Default)]
+pub(super) struct TranscriptCache {
+    width: usize,
+    debug: bool,
+    entries: Vec<CachedMessage>,
+    painted: Vec<RenderLine>,
+    scroll: usize,
+    #[cfg(test)]
+    rebuilds: usize,
+}
+
+struct CachedMessage {
+    message: Arc<TerminalMessage>,
+    running: bool,
+    lines: Vec<RenderLine>,
+}
+
+impl TranscriptCache {
+    fn update(&mut self, app: &TerminalApp, width: usize) {
+        if self.width != width || self.debug != app.debug_mode {
+            self.entries.clear();
+            self.width = width;
+            self.debug = app.debug_mode;
+        }
+        self.entries.truncate(app.messages.len());
+        for (index, message) in app.messages.iter().enumerate() {
+            let running = app.active_response == Some(index);
+            if self.entries.get(index).is_some_and(|entry| {
+                Arc::ptr_eq(&entry.message, message) && entry.running == running
+            }) {
+                continue;
+            }
+            let mut lines = vec![];
+            append_message_lines(
+                &mut lines,
+                message,
+                width,
+                running.then_some(true),
+                app.debug_mode,
+            );
+            let entry = CachedMessage {
+                message: Arc::clone(message),
+                running,
+                lines,
+            };
+            if index < self.entries.len() {
+                self.entries[index] = entry;
+            } else {
+                self.entries.push(entry);
+            }
+            #[cfg(test)]
+            {
+                self.rebuilds += 1;
+            }
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|entry| entry.lines.len())
+            .sum::<usize>()
+            + self.entries.len().saturating_sub(1)
+    }
+
+    fn window(&self, mut skip: usize, count: usize) -> Vec<RenderLine> {
+        let mut rows = Vec::with_capacity(count);
+        for (index, entry) in self.entries.iter().enumerate() {
+            if rows.len() == count {
+                break;
+            }
+            if index > 0 {
+                if skip > 0 {
+                    skip -= 1;
+                } else {
+                    rows.push(RenderLine::blank());
+                }
+            }
+            if skip >= entry.lines.len() {
+                skip -= entry.lines.len();
+                continue;
+            }
+            rows.extend(entry.lines[skip..].iter().take(count - rows.len()).cloned());
+            skip = 0;
+        }
+        rows.resize_with(count, RenderLine::blank);
+        rows
+    }
+}
+
 pub(super) fn draw_transcript(
     out: &mut Stdout,
     width: u16,
-    height: u16,
+    bottom: u16,
     app: &TerminalApp,
+    cache: &mut TranscriptCache,
+    force: bool,
 ) -> Result<()> {
     let top = HEADER_ROWS;
-    let bottom = height.saturating_sub(INPUT_ROWS).max(top + 1);
-    for y in top..bottom {
-        write_line(out, y, width, "", text(), bg(), false)?;
-    }
-
-    let content_width = width.saturating_sub(4).max(20) as usize;
-    let mut lines = Vec::new();
-    for message in &app.messages {
-        if !lines.is_empty() {
-            lines.push(RenderLine::blank());
-        }
-        append_message_lines(&mut lines, message, content_width);
-    }
+    let bottom = bottom.max(top + 1);
+    cache.update(app, width.saturating_sub(4).max(1) as usize);
     let visible = bottom.saturating_sub(top) as usize;
-    let latest_start = lines.len().saturating_sub(visible);
-    let scroll_offset = app.scroll_offset.min(latest_start);
-    let start = latest_start.saturating_sub(scroll_offset);
-    for (idx, line) in lines.iter().skip(start).take(visible).enumerate() {
-        draw_render_line(out, top + idx as u16, width, line)?;
+    let latest_start = cache.row_count().saturating_sub(visible);
+    let scroll = app.scroll_offset.min(latest_start);
+    let rows = cache.window(latest_start - scroll, visible);
+    for (index, line) in rows.iter().enumerate() {
+        if force || cache.painted.get(index) != Some(line) || (index == 0 && cache.scroll != scroll)
+        {
+            draw_render_line(out, top + index as u16, width, line)?;
+        }
     }
-    if scroll_offset > 0 && visible > 0 {
-        draw_scroll_marker(out, top, width, scroll_offset)?;
+    cache.painted = rows;
+    cache.scroll = scroll;
+    if scroll > 0 && visible > 0 {
+        draw_scroll_marker(out, top, width, scroll)?;
     }
     Ok(())
 }
 
-fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> Result<()> {
+fn draw_render_line(out: &mut impl Write, y: u16, width: u16, line: &RenderLine) -> Result<()> {
     if line.footnote {
         let value = clip_plain(&line.text, width as usize);
         let padding = width as usize - unicode_width::UnicodeWidthStr::width(value.as_str());
@@ -107,34 +198,105 @@ fn draw_render_line(out: &mut Stdout, y: u16, width: u16, line: &RenderLine) -> 
     }
     write_line(out, y, width, "", line.color, bg(), false)?;
     let mut x = 0u16;
-    for segment in inline_code_segments(&line.text) {
-        match segment.kind {
-            InlineKind::Text => {
-                draw_text_segment(
-                    out,
-                    &mut x,
-                    y,
-                    width,
-                    &segment.text,
-                    line.color,
-                    bg(),
-                    line.bold,
-                )?;
-            }
-            InlineKind::Code => {
-                draw_text_segment(
-                    out,
-                    &mut x,
-                    y,
-                    width,
-                    &segment.text,
-                    black(),
-                    yellow(),
-                    true,
-                )?;
+    let body = if line.cursor.is_some() {
+        line.text.strip_suffix('_').unwrap_or(&line.text)
+    } else {
+        &line.text
+    };
+    if let Some(spans) = &line.spans {
+        for span in spans {
+            let (fg, background) = match span.style.code {
+                Code::None => (line.color, Color::Reset),
+                Code::Inline => (black(), yellow()),
+                Code::Block => (green(), Color::Reset),
+            };
+            draw_styled_segment(
+                out, &mut x, y, width, &span.text, fg, background, span.style,
+            )?;
+        }
+    } else {
+        for segment in inline_code_segments(body) {
+            match segment.kind {
+                InlineKind::Text => {
+                    draw_text_segment(
+                        out,
+                        &mut x,
+                        y,
+                        width,
+                        &segment.text,
+                        line.color,
+                        bg(),
+                        line.bold,
+                    )?;
+                }
+                InlineKind::Code => {
+                    draw_text_segment(
+                        out,
+                        &mut x,
+                        y,
+                        width,
+                        &segment.text,
+                        black(),
+                        yellow(),
+                        true,
+                    )?;
+                }
             }
         }
     }
+    if line.cursor == Some(true) {
+        draw_styled_segment(
+            out,
+            &mut x,
+            y,
+            width,
+            "_",
+            green(),
+            Color::Reset,
+            Style::default(),
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn composer_height(width: u16, editor: Option<&InputEditor>) -> u16 {
+    let available = width.saturating_sub(7).max(1) as usize;
+    let rows = editor.map_or(1, |editor| editor.layout(available, 3).0.len().max(1));
+    INPUT_ROWS + rows as u16 - 1
+}
+
+pub(super) fn draw_runtime_status(
+    out: &mut Stdout,
+    width: u16,
+    height: u16,
+    app: &TerminalApp,
+) -> Result<()> {
+    draw_context_usage(out, height.saturating_sub(2), width, app)?;
+    draw_bottom_status(out, height.saturating_sub(1), width, app)
+}
+
+fn draw_composer_border(out: &mut impl Write, y: u16, width: u16, hint: &str) -> Result<()> {
+    let columns = width.saturating_sub(4) as usize;
+    let label = clip_plain(hint.trim(), columns.saturating_sub(4));
+    let line = if label.is_empty() {
+        "─".repeat(columns)
+    } else {
+        format!(
+            "─ {} {}",
+            label,
+            "─".repeat(columns.saturating_sub(label.width() + 3))
+        )
+    };
+    queue!(
+        out,
+        MoveTo(2, y),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        SetForegroundColor(muted()),
+        SetAttribute(Attribute::Dim),
+        Print(line),
+        SetAttribute(Attribute::Reset)
+    )?;
     Ok(())
 }
 
@@ -145,21 +307,16 @@ pub(super) fn draw_input(
     app: &TerminalApp,
     editor: Option<&InputEditor>,
 ) -> Result<(u16, u16)> {
-    let top = height.saturating_sub(INPUT_ROWS);
-    write_line(
-        out,
-        top,
-        width,
-        &composer_hint(editor),
-        cyan(),
-        input_bg(),
-        false,
-    )?;
-    for row in 1..=3 {
+    let input_height = composer_height(width, editor);
+    let top = height.saturating_sub(input_height);
+    let rows = input_height - INPUT_ROWS + 1;
+    write_line(out, top, width, "", muted(), bg(), false)?;
+    for row in 1..=rows + 2 {
         write_line(out, top + row, width, "", text(), input_bg(), false)?;
     }
-    draw_context_usage(out, top + 4, width, app)?;
-    draw_bottom_status(out, top + 5, width, app)?;
+    draw_composer_border(out, top + 1, width, "")?;
+    draw_composer_border(out, top + rows + 2, width, &composer_hint(editor))?;
+    draw_runtime_status(out, width, height, app)?;
 
     let prompt = " > ";
     let available = width.saturating_sub(prompt.len() as u16 + 4).max(1) as usize;
@@ -169,7 +326,7 @@ pub(super) fn draw_input(
     for (row, visible) in lines.iter().enumerate() {
         queue!(
             out,
-            MoveTo(2, top + 1 + row as u16),
+            MoveTo(2, top + 2 + row as u16),
             SetForegroundColor(cyan()),
             SetBackgroundColor(input_bg()),
             Print(if row == 0 { prompt } else { " · " }),
@@ -177,10 +334,31 @@ pub(super) fn draw_input(
             Print(clip_plain(visible, available))
         )?;
     }
+    if let Some(placeholder) = input_placeholder(editor, app.active_response.is_some()) {
+        queue!(
+            out,
+            MoveTo(2 + prompt.len() as u16 + 1, top + 2),
+            SetForegroundColor(muted()),
+            SetAttribute(Attribute::Dim),
+            Print(clip_plain(placeholder, available.saturating_sub(1))),
+            SetAttribute(Attribute::Reset),
+        )?;
+    }
     Ok((
         2 + prompt.len() as u16 + cursor as u16,
-        top + 1 + cursor_row as u16,
+        top + 2 + cursor_row as u16,
     ))
+}
+
+fn input_placeholder(editor: Option<&InputEditor>, running: bool) -> Option<&'static str> {
+    if editor.is_some_and(|editor| !editor.is_empty()) {
+        return None;
+    }
+    Some(if running {
+        "Esc / Ctrl-C cancel"
+    } else {
+        "Ask anything · Enter sends · Ctrl-J newline · Tab commands · Ctrl-R history"
+    })
 }
 
 fn composer_hint(editor: Option<&InputEditor>) -> String {
@@ -199,7 +377,7 @@ fn composer_hint(editor: Option<&InputEditor>) -> String {
             );
         }
     }
-    " Enter sends · Ctrl-J newline · Tab commands · Ctrl-R history".to_string()
+    String::new()
 }
 
 fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
@@ -789,7 +967,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
     rows
 }
 
-fn draw_model_activity_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalApp) -> Result<()> {
+fn draw_model_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalApp) -> Result<()> {
     let label_width = 12usize;
     let body_x = label_width as u16 + 1;
     write_at(
@@ -805,8 +983,6 @@ fn draw_model_activity_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalA
     let mut x = body_x;
     let model = format!("{} / {}", app.status.provider, app.status.model);
     draw_text_segment(out, &mut x, y, width, &model, text(), panel_bg(), true)?;
-    draw_text_segment(out, &mut x, y, width, "  ", muted(), panel_bg(), false)?;
-    draw_activity_inline(out, &mut x, y, width, &app.activity, panel_bg())?;
     Ok(())
 }
 
@@ -1059,7 +1235,7 @@ fn draw_badge(
 
 #[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 fn draw_text_segment(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: &mut u16,
     y: u16,
     width: u16,
@@ -1071,12 +1247,13 @@ fn draw_text_segment(
     if *x >= width {
         return Ok(());
     }
-    let remaining = width.saturating_sub(*x) as usize;
-    let value = clip_plain(text_value, remaining);
-    let used = value.chars().count() as u16;
+    let value = clip_plain(text_value, width.saturating_sub(*x) as usize);
+    let used = value.width() as u16;
     if used == 0 {
         return Ok(());
     }
+    // Preserve the existing UI palette and terminal-default plain segments.
+    // Markdown styling is scoped to draw_styled_segment, not this shared path.
     queue!(
         out,
         MoveTo(*x, y),
@@ -1087,6 +1264,52 @@ fn draw_text_segment(
         } else {
             Attribute::Reset
         }),
+        Print(value),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    *x = (*x).saturating_add(used);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
+fn draw_styled_segment(
+    out: &mut impl Write,
+    x: &mut u16,
+    y: u16,
+    width: u16,
+    text_value: &str,
+    fg: Color,
+    background: Color,
+    style: Style,
+) -> Result<()> {
+    if *x >= width {
+        return Ok(());
+    }
+    let remaining = width.saturating_sub(*x) as usize;
+    let value = clip_plain(text_value, remaining);
+    let used = value.width() as u16;
+    if used == 0 {
+        return Ok(());
+    }
+    queue!(
+        out,
+        MoveTo(*x, y),
+        // Response styles are independent of the shared UI helpers. Normal
+        // text and the cursor use Color::Reset to retain the terminal background.
+        SetAttribute(Attribute::Reset),
+        SetAttribute(if style.bold || style.code == Code::Inline {
+            Attribute::Bold
+        } else {
+            Attribute::NormalIntensity
+        }),
+        SetAttribute(if style.italic {
+            Attribute::Italic
+        } else {
+            Attribute::NoItalic
+        }),
+        SetForegroundColor(fg),
+        SetBackgroundColor(background),
         Print(value),
         SetAttribute(Attribute::Reset),
         ResetColor
@@ -1208,15 +1431,62 @@ fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> 
     Ok(())
 }
 
-fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, width: usize) {
+fn append_message_lines(
+    lines: &mut Vec<RenderLine>,
+    message: &TerminalMessage,
+    width: usize,
+    cursor: Option<bool>,
+    debug: bool,
+) {
+    let running = cursor.is_some();
+    let agent = matches!(message.role, super::state::Role::Assistant);
     let color = role_color(message.role);
+    let heading = if agent {
+        let status = message
+            .meta
+            .iter()
+            .find_map(|item| item.strip_prefix("status "))
+            .unwrap_or("answered");
+        format!("  AGENT / {}  > {status}", message.label.to_lowercase())
+    } else {
+        format!("  {}", message.label.to_uppercase())
+    };
     lines.push(RenderLine {
-        text: format!("  {:<10}", message.label.to_uppercase()),
+        text: clip_plain(&heading, width),
         color,
         bold: true,
         footnote: false,
+        cursor: None,
+        spans: None,
     });
-    append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
+    let cursor = if agent {
+        Some(cursor.unwrap_or(false))
+    } else {
+        cursor
+    };
+    if agent {
+        append_answer_lines(lines, &message.body, width, running);
+    } else {
+        append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
+    }
+    if cursor.is_some() {
+        // Reserve the same cell during and after execution. Keep it out of the
+        // Markdown source so it cannot accidentally open/close emphasis.
+        if lines.last().is_some_and(|line| line.text.width() >= width) {
+            lines.push(answer_line(vec![]));
+        }
+        if let Some(last) = lines.last_mut() {
+            last.text.push('_');
+        }
+    }
+    if let Some(last) = lines.last_mut() {
+        last.cursor = cursor;
+    }
+    if agent && (!debug || running) {
+        // Native reports stay attached to the message and available through
+        // /trace. Revealing them here at completion would push the answer up.
+        return;
+    }
     if !message.meta.is_empty() {
         append_footnote_lines(lines, &format!("[{}]", message.meta.join("] [")), width);
     }
@@ -1244,6 +1514,35 @@ fn append_message_lines(lines: &mut Vec<RenderLine>, message: &TerminalMessage, 
         };
         append_footnote_lines(lines, &format!("details: {labels}{hint}"), width);
     }
+    if agent && debug {
+        append_footnote_lines(lines, "debug on · /trace shows full run events and worker output · /debug off hides these details", width);
+    }
+}
+
+fn append_answer_lines(lines: &mut Vec<RenderLine>, body: &str, width: usize, streaming: bool) {
+    lines.extend(
+        markdown::layout(body, width.saturating_sub(4).max(1), streaming)
+            .into_iter()
+            .map(answer_line),
+    );
+}
+
+fn answer_line(mut spans: Vec<Span>) -> RenderLine {
+    spans.insert(
+        0,
+        Span {
+            text: "  | ".into(),
+            style: Style::default(),
+        },
+    );
+    RenderLine {
+        text: spans.iter().map(|span| span.text.as_str()).collect(),
+        color: text(),
+        bold: false,
+        footnote: false,
+        cursor: None,
+        spans: Some(spans),
+    }
 }
 
 fn append_footnote_lines(lines: &mut Vec<RenderLine>, value: &str, width: usize) {
@@ -1254,6 +1553,8 @@ fn append_footnote_lines(lines: &mut Vec<RenderLine>, value: &str, width: usize)
             color: Color::Grey,
             bold: false,
             footnote: true,
+            cursor: None,
+            spans: None,
         });
     }
 }
@@ -1274,15 +1575,20 @@ fn append_wrapped_render_line(
             color,
             bold,
             footnote: false,
+            cursor: None,
+            spans: None,
         });
     }
 }
 
+#[derive(Clone, PartialEq)]
 struct RenderLine {
     text: String,
     color: Color,
     bold: bool,
     footnote: bool,
+    cursor: Option<bool>,
+    spans: Option<Vec<Span>>,
 }
 
 impl RenderLine {
@@ -1292,6 +1598,8 @@ impl RenderLine {
             color: muted(),
             bold: false,
             footnote: false,
+            cursor: None,
+            spans: None,
         }
     }
 }
@@ -1299,6 +1607,179 @@ impl RenderLine {
 #[cfg(test)]
 mod context_meter_tests {
     use super::{compact_tokens, meter_fill};
+
+    #[test]
+    fn cache_invalidates_edits_finalization_resize_debug_and_clear() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        let mut app = TerminalApp::for_test();
+        for _ in 0..100 {
+            app.push(Role::Assistant, "guide", "**Saved** `answer`\n");
+        }
+        app.begin_response("architect");
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 101);
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 101);
+        Arc::make_mut(&mut app.messages[100]).body = "**New text**".into();
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 102);
+        app.active_response = None;
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 103);
+        app.debug_mode = true;
+        cache.update(&app, 40);
+        assert_eq!(cache.rebuilds, 204);
+        cache.update(&app, 20);
+        assert_eq!(cache.rebuilds, 305);
+        app.messages.clear();
+        app.push(Role::User, "you", "new conversation");
+        cache.update(&app, 20);
+        assert_eq!(cache.entries.len(), 1);
+        assert!(cache
+            .window(0, 6)
+            .iter()
+            .any(|row| row.text.contains("conversation")));
+    }
+
+    #[test]
+    fn cached_viewports_match_full_layout_at_every_scroll_position() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        let mut app = TerminalApp::for_test();
+        app.push(Role::User, "you", "question");
+        app.push(
+            Role::Assistant,
+            "guide",
+            "**answer**\n```rust\n    let x = 2;\n```\n",
+        );
+        app.begin_response("architect");
+        let mut cache = TranscriptCache::default();
+        for width in [12, 40, 100] {
+            for debug in [false, true] {
+                app.debug_mode = debug;
+                cache.update(&app, width);
+                let mut full = vec![];
+                for (index, message) in app.messages.iter().enumerate() {
+                    if index > 0 {
+                        full.push(RenderLine::blank());
+                    }
+                    append_message_lines(
+                        &mut full,
+                        message,
+                        width,
+                        (app.active_response == Some(index)).then_some(true),
+                        debug,
+                    );
+                }
+                assert_eq!(cache.row_count(), full.len());
+                for start in 0..full.len() {
+                    let mut expected: Vec<_> = full.iter().skip(start).take(5).cloned().collect();
+                    expected.resize_with(5, RenderLine::blank);
+                    assert!(
+                        cache.window(start, 5) == expected,
+                        "width={width}, start={start}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn composer_expands_upward_while_its_bottom_border_stays_anchored() {
+        use super::*;
+        let mut editor = InputEditor::new(&Default::default());
+        assert_eq!(composer_height(80, Some(&editor)), 6);
+        editor.insert_str("first\nsecond");
+        assert_eq!(composer_height(80, Some(&editor)), 7);
+        editor.insert_str("\nthird\nfourth");
+        assert_eq!(composer_height(80, Some(&editor)), 8);
+        assert_eq!(composer_height(80, None), 6);
+        for width in [20, 80] {
+            let mut output = vec![];
+            draw_composer_border(&mut output, 27, width, "").unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(&"─".repeat(width as usize - 4)));
+            assert_eq!(background_before(&output, "─"), Color::Reset);
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode layout benchmark"]
+    fn benchmark_long_conversation_layout() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        use std::{hint::black_box, time::Instant};
+        let mut app = TerminalApp::for_test();
+        for _ in 0..500 {
+            app.push(
+                Role::Assistant,
+                "guide",
+                &"**A formatted answer** with `code`, words and Unicode 界.\n".repeat(20),
+            );
+        }
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 96);
+        let start = Instant::now();
+        for _ in 0..20 {
+            let mut full = vec![];
+            for message in &app.messages {
+                append_message_lines(&mut full, message, 96, None, false);
+            }
+            black_box(full);
+        }
+        let uncached = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..20 {
+            cache.update(&app, 96);
+            black_box(cache.window(cache.row_count().saturating_sub(25), 25));
+        }
+        println!("500 messages / 10,000 body lines, 20 unchanged ticks: uncached={uncached:?}, cached={:?}", start.elapsed());
+    }
+
+    #[test]
+    fn input_instructions_are_only_an_empty_composer_placeholder() {
+        use super::*;
+        let mut editor = InputEditor::new(&Default::default());
+        assert!(input_placeholder(Some(&editor), false)
+            .unwrap()
+            .contains("Enter sends"));
+        assert_eq!(input_placeholder(None, true), Some("Esc / Ctrl-C cancel"));
+        editor.insert_str("hello");
+        assert_eq!(input_placeholder(Some(&editor), false), None);
+        assert!(composer_hint(Some(&editor)).is_empty());
+        editor.replace("/debug");
+        assert!(composer_hint(Some(&editor)).contains("/debug"));
+    }
+
+    #[test]
+    fn debug_reveals_metadata_and_trace_hint_only_after_streaming() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        let message = TerminalMessage {
+            role: Role::Assistant,
+            label: "guide".into(),
+            body: "Use /config.".into(),
+            meta: vec!["status completed".into(), "provider mock".into()],
+            details: vec![("RunReport".into(), "report".into())],
+        };
+        let render = |cursor, debug| {
+            let mut lines = vec![];
+            append_message_lines(&mut lines, &message, 100, cursor, debug);
+            lines
+                .into_iter()
+                .map(|line| line.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!render(None, false).contains("provider mock"));
+        assert!(!render(Some(true), true).contains("provider mock"));
+        let debug = render(None, true);
+        assert!(debug.contains("provider mock"));
+        assert!(debug.contains("RunReport"));
+        assert!(debug.contains("/trace"));
+    }
 
     #[test]
     fn scales_context_pressure_into_fixed_cells() {
@@ -1312,5 +1793,209 @@ mod context_meter_tests {
         assert_eq!(compact_tokens(5116), "5.1k");
         assert_eq!(compact_tokens(8192), "8.2k");
         assert_eq!(compact_tokens(1_200_000), "1.2m");
+    }
+
+    #[test]
+    fn completion_keeps_answer_rows_fixed_despite_large_report_metadata() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        for width in [20, 60, 100] {
+            for body in [
+                "an answer",
+                "1234567890123456",
+                "line one\nline two\n",
+                "**bold** `code`\n```rust\n    let x = 1;\n```",
+                "**界👩‍💻**",
+            ] {
+                let mut message = TerminalMessage {
+                    role: Role::Assistant,
+                    label: "architect".into(),
+                    body: body.into(),
+                    meta: vec!["status streaming".into()],
+                    details: vec![],
+                };
+                let mut live = vec![];
+                append_message_lines(&mut live, &message, width, Some(true), false);
+                message.meta = vec!["status completed".into(), "model very long name".repeat(20)];
+                message.details = vec![("RunReport".into(), "full native report".repeat(100))];
+                let mut final_lines = vec![];
+                append_message_lines(&mut final_lines, &message, width, None, false);
+                assert_eq!(live.len(), final_lines.len());
+                assert!(final_lines[0].text.starts_with("  AGENT / architect"));
+                assert_eq!(
+                    live[1..].iter().map(|line| &line.text).collect::<Vec<_>>(),
+                    final_lines[1..]
+                        .iter()
+                        .map(|line| &line.text)
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn response_cursor_reserves_its_cell_without_changing_saved_text() {
+        use super::*;
+        use crate::terminal_ui::state::Role;
+        for body in ["", "1234567890123456", "hello\nworld", "`café` 🎉"] {
+            let message = TerminalMessage {
+                role: Role::Assistant,
+                label: "Architect".into(),
+                body: body.into(),
+                meta: vec![],
+                details: vec![],
+            };
+            let mut on = vec![];
+            let mut off = vec![];
+            append_message_lines(&mut on, &message, 20, Some(true), false);
+            append_message_lines(&mut off, &message, 20, Some(false), false);
+            assert_eq!(
+                on.iter().map(|line| &line.text).collect::<Vec<_>>(),
+                off.iter().map(|line| &line.text).collect::<Vec<_>>()
+            );
+            assert_eq!(on.last().unwrap().cursor, Some(true));
+            assert_eq!(off.last().unwrap().cursor, Some(false));
+            assert_eq!(message.body, body);
+            let mut finished = vec![];
+            append_message_lines(&mut finished, &message, 20, None, false);
+            assert_eq!(finished.last().unwrap().cursor, Some(false));
+            assert_eq!(finished.len(), on.len());
+        }
+    }
+
+    #[test]
+    fn response_cursor_uses_the_text_background_without_blink_attributes() {
+        use super::*;
+        let mut line = answer_line(markdown::layout("**bold** `code` plain", 80, true).remove(0));
+        line.text.push('_');
+        line.cursor = Some(true);
+        let mut output = vec![];
+        draw_render_line(&mut output, 0, 100, &line).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for text in ["bold", " plain", "_"] {
+            assert_eq!(background_before(&output, text), Color::Reset);
+        }
+        assert_eq!(background_before(&output, "code"), yellow());
+        assert!(output.contains(&SetAttribute(Attribute::Bold).to_string()));
+        assert!(!output.contains("**"));
+        assert!(!output.contains('`'));
+        assert!(!output.contains(&SetAttribute(Attribute::SlowBlink).to_string()));
+        assert!(!output.contains(&SetAttribute(Attribute::RapidBlink).to_string()));
+
+        line.cursor = Some(false);
+        output_final_has_no_cursor(&line);
+    }
+
+    // Interpret the emitted background at the point text is painted, including
+    // SGR resets. Merely checking that a color sequence exists misses regressions.
+    fn background_before(output: &str, text: &str) -> crossterm::style::Color {
+        use crossterm::style::Color;
+        let mut background = Color::Reset;
+        for sequence in output[..output.find(text).unwrap()].split("\x1b[").skip(1) {
+            let Some((parameters, _)) = sequence.split_once('m') else {
+                continue;
+            };
+            let Ok(codes) = parameters
+                .split(';')
+                .map(str::parse::<u8>)
+                .collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
+            };
+            match codes.as_slice() {
+                [0] | [49] => background = Color::Reset,
+                [48, 2, r, g, b] => {
+                    background = Color::Rgb {
+                        r: *r,
+                        g: *g,
+                        b: *b,
+                    }
+                }
+                [48, 5, value] => background = Color::AnsiValue(*value),
+                _ => {}
+            }
+        }
+        background
+    }
+
+    #[test]
+    fn shared_ui_helpers_keep_plain_terminal_backgrounds_and_existing_chips() {
+        use super::*;
+        for background in [bg(), panel_bg(), input_bg()] {
+            let mut output = vec![];
+            write_line(&mut output, 0, 40, "plain row", text(), background, false).unwrap();
+            assert_eq!(
+                background_before(&String::from_utf8(output).unwrap(), "plain row"),
+                Color::Reset
+            );
+            let mut output = vec![];
+            draw_text_segment(
+                &mut output,
+                &mut 0,
+                0,
+                40,
+                "plain segment",
+                text(),
+                background,
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                background_before(&String::from_utf8(output).unwrap(), "plain segment"),
+                Color::Reset
+            );
+        }
+        let mut output = vec![];
+        write_line(
+            &mut output,
+            0,
+            40,
+            "selected chip",
+            black(),
+            magenta(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            background_before(&String::from_utf8(output).unwrap(), "selected chip"),
+            magenta()
+        );
+
+        let line = answer_line(markdown::layout("```\nprint('hi')\n```", 80, true).remove(1));
+        let mut output = vec![];
+        draw_render_line(&mut output, 0, 80, &line).unwrap();
+        assert_eq!(
+            background_before(&String::from_utf8(output).unwrap(), "print('hi')"),
+            Color::Reset
+        );
+    }
+
+    fn output_final_has_no_cursor(line: &super::RenderLine) {
+        let mut output = vec![];
+        super::draw_render_line(&mut output, 0, 100, line).unwrap();
+        assert!(!output.contains(&b'_'));
+    }
+
+    #[test]
+    fn styled_segments_position_the_next_span_by_terminal_cells() {
+        use super::*;
+        let mut output = vec![];
+        let mut x = 4;
+        draw_text_segment(
+            &mut output,
+            &mut x,
+            0,
+            80,
+            "界👩‍💻e\u{301}",
+            text(),
+            bg(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(x, 9);
+        draw_text_segment(&mut output, &mut x, 0, 80, "_", green(), bg(), false).unwrap();
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains(&MoveTo(9, 0).to_string()));
     }
 }
