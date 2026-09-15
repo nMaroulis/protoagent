@@ -30,21 +30,6 @@ See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 - **Operator-visible behavior:** the Rust CLI exposes provider, model, context,
   agent, readiness, timeline, trace, diff, and session state.
 
-## New in 0.2.3
-
-- Show model generation and delegated command output live in the shell and TUI.
-  Previews remain provisional until the native task finishes; Ctrl-C cancels
-  shell runs through the same native runtime as the TUI.
-- Consume delegated receipts directly from native parent reports, removing the
-  stored-worker event join.
-- Configure automatic task/report/metadata redaction on native `SQLiteRunStore`,
-  and use native checkpoint filters and pagination instead of reading Storage.
-- Require ProtoLink 0.7.1 while preserving scoped approvals, recovery conflicts,
-  cancellation, native budgets and the two-repair ceiling.
-
-The multiline composer and terminal-styled operator manual remain available.
-Read [Verify & Recover](docs/content/cli/verification-and-recovery.md) for explicit
-environments, host execution, output bounds and recovery limitations.
 
 ## Architecture
 
@@ -85,6 +70,14 @@ best-effort search, and English Wikipedia is keyless factual search.
 
 For the complete design, read the [whitepaper](whitepaper.md) and the
 [maintainer documentation](https://nmaroulis.github.io/protoagent/).
+
+#### CLI Demo
+
+Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the fullscreen TUI, project and model controls, approvals, cancellation, traces,
+and session state while embedding the Python core through PyO3.
+
+![cli_tui](https://raw.githubusercontent.com/nMaroulis/protoagent/refs/heads/main/misc/assets/cli/simple_task.gif)
+
 
 ## Install
 
@@ -132,6 +125,22 @@ cargo run --locked --manifest-path cli/Cargo.toml -- agents
 
 Provider setup, every CLI command, Context Loom behavior, and troubleshooting
 are covered in the [documentation](https://nmaroulis.github.io/protoagent/docs/intro).
+
+## New in 0.2.3
+
+- Show model generation and delegated command output live in the shell and TUI.
+  Previews remain provisional until the native task finishes; Ctrl-C cancels
+  shell runs through the same native runtime as the TUI.
+- Consume delegated receipts directly from native parent reports, removing the
+  stored-worker event join.
+- Configure automatic task/report/metadata redaction on native `SQLiteRunStore`,
+  and use native checkpoint filters and pagination instead of reading Storage.
+- Require ProtoLink 0.7.1 while preserving scoped approvals, recovery conflicts,
+  cancellation, native budgets and the two-repair ceiling.
+
+The multiline composer and terminal-styled operator manual remain available.
+Read [Verify & Recover](docs/content/cli/verification-and-recovery.md) for explicit
+environments, host execution, output bounds and recovery limitations.
 
 ## Safety And Privacy
 
