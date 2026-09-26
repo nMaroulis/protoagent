@@ -66,6 +66,8 @@ PROVIDER_LABELS = {
 }
 
 OPTIONAL_AGENT_DEFAULTS = {
+    "tester": {"enabled": True},
+    "mcp": {"enabled": False},
     "scout": {
         "enabled": False,
     },
@@ -88,6 +90,7 @@ def default_config() -> dict[str, Any]:
         "active_provider": "ollama",
         "agent_prompt_profile": "auto",
         "optional_agents": deepcopy(OPTIONAL_AGENT_DEFAULTS),
+        "mcp_servers": {},
         "providers": providers,
     }
 
@@ -189,7 +192,10 @@ def optional_agent_enabled(
     config = config or load_config()
     agents = config.get("optional_agents", {})
     settings = agents.get(name, {}) if isinstance(agents, dict) else {}
-    return isinstance(settings, dict) and settings.get("enabled") is True
+    return (
+        isinstance(settings, dict)
+        and settings.get("enabled", OPTIONAL_AGENT_DEFAULTS[name]["enabled"]) is True
+    )
 
 
 def set_optional_agent_enabled(name: str, enabled: bool) -> dict[str, Any]:
@@ -234,6 +240,10 @@ def visible_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
         data["api_key_set"] = bool(key)
         data["api_key"] = redact_key(key) if key else ""
         data["from_env"] = bool(env_key and not stored_key)
+    servers = config.get("mcp_servers", {})
+    for server in servers.values() if isinstance(servers, dict) else ():
+        if isinstance(server, dict) and server.get("args"):
+            server["args"] = ["<configured; hidden from display>"]
     config["config_path"] = str(CONFIG_PATH)
     return config
 

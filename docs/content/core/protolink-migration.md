@@ -1,6 +1,6 @@
 ---
 title: ProtoLink 0.7 Integrations
-description: ProtoAgent 0.2.3 native delegation, redaction, checkpoint inventory and live streaming integrations.
+description: Native execution integrations through ProtoLink 0.7.4, including lazy MCP brokerage in ProtoAgent 0.3.0.
 ---
 
 ## Execution migration in 0.2.2
@@ -100,3 +100,20 @@ output bounds, native approval previews and fingerprint echoes.
 PYTHONPATH=core .venv/bin/python -m unittest discover -s core/tests -q
 cargo test --locked --manifest-path cli/Cargo.toml
 ```
+
+
+## ProtoLink 0.7.4 integration in ProtoAgent 0.3.0
+
+The dependency floor is now `protolink[http,llms,mcp]>=0.7.4`. The application
+uses native `Tool.from_callable` metadata/action builders for its fixed MCP
+surface, and `MCPToolAdapter.session()` / `get_tools_async()` for async MCP
+transports, pagination, original schemas, managed cleanup and rich results.
+Connection settings and exact tool allowances are frozen per run. Native
+capability policy, ApprovalBroker and parent receipts remain the execution path.
+
+ProtoLink also provides `Agent.add_mcp(include=..., prefix=...)` for eager direct
+mounting. ProtoAgent chooses lazy broker discovery so large catalogs do not
+consume every small model's initial context, and discovery starts processes or
+network connections only after approval. No remote wrapper is blindly trusted
+as read-only. See [MCP Broker](mcp.md) and the
+[ProtoLink progressive-control API](https://nmaroulis.github.io/protolink/docs/progressive-control/).

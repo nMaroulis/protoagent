@@ -4,7 +4,7 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.2.3`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.3.0`, sourced from `cli/Cargo.toml`.
 
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.7.1"
+python -m pip install "protolink[http,llms,mcp]>=0.7.4"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -186,3 +186,40 @@ fetches; returned content is untrusted and does not grant write authority.
 The Python orchestration logic is documented in the
 [core README](../core/README.md). The full command and TUI manual is in the
 [documentation site](https://nmaroulis.github.io/protoagent/docs/cli/overview).
+
+## v0.3.0 task workflow and coding evals
+
+The deck adds a read-only Tester, runtime task state, bounded Coder reads and exact
+edits. `run_check` selects a frozen project check by ID; baselines and preparation
+allow subsequent editing, while final verification closes the edit phase. Code
+changes without qualifying final checks remain incomplete. Configure unusual
+checks in `.protoagent/project.json`; see the
+[task workflow guide](../docs/content/core/task-workflow.md).
+
+```bash
+proto-cli eval coding --plan --json
+proto-cli eval coding --live --profile small --task empty-average --json
+```
+
+The coding harness compares the deck and a single agent using the same selected
+model on disposable fixtures. Live mode uses narrow fixture approvals and
+independent acceptance tests. Generated code executes on the host without sandbox
+isolation. Routing diagnostics remain available through `eval profiles`.
+
+
+## Optional workers and MCP in v0.3.0
+
+Tester defaults on, while Scout/MCP default off. `proto-cli agents tester|scout|mcp
+on|off` and the matching `/agents` commands persist optional-worker settings for
+the next run. Disabled workers are not constructed or registered. Architect,
+Explorer, Coder and Verifier remain required; without Tester, Architect defines
+criteria and Coder writes regressions while all selected checks still run.
+
+`proto-cli mcp` (TUI `/mcp`) shows model-free setup/status. Import an explicit
+server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
+`mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
+not invoke server tools. The broker exposes three fixed tools for names, one
+schema and an approved allowlisted invocation. Architect uses `tool_call`,
+never another inference loop. ProtoLink 0.7.4 owns transports, schema validation,
+session cleanup and result/error normalization. See the
+[MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.

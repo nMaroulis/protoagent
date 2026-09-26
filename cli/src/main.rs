@@ -207,6 +207,8 @@ struct ProtolinkStatus {
     #[serde(default)]
     web_tools_ready: bool,
     #[serde(default)]
+    mcp_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
@@ -263,12 +265,18 @@ struct AgentSettings {
 }
 
 impl AgentSettings {
-    fn is_scout_enabled(&self) -> bool {
-        self.agents
-            .iter()
-            .find(|agent| agent.name.eq_ignore_ascii_case("scout"))
+    fn is_enabled(&self, name: &str) -> bool {
+        self.agent(name)
             .map(|agent| agent.enabled)
-            .unwrap_or(self.scout_enabled)
+            .unwrap_or_else(|| match name {
+                "tester" => true,
+                "scout" => self.scout_enabled,
+                _ => false,
+            })
+    }
+
+    fn is_scout_enabled(&self) -> bool {
+        self.is_enabled("scout")
     }
 
     fn agent(&self, name: &str) -> Option<&AgentManifest> {
@@ -361,6 +369,16 @@ async fn main() -> Result<()> {
             print_header()?;
             handle_agents_command(&args[1..])
         }
+        Some("mcp") => {
+            print_header()?;
+            let text = mcp_settings_text(&args[1..])?;
+            print_panel(
+                "MCP",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
         Some("eval") | Some("evals") => {
             if !args.iter().skip(1).any(|arg| arg == "--json") {
                 print_header()?;
@@ -438,7 +456,11 @@ fn print_cli_help() {
         "  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api"
     );
     println!("  proto-cli agents scout       Show or set optional Scout: on|off");
-    println!("  proto-cli eval profiles      Run prompt-profile evals; use --live for model calls");
+    println!("  proto-cli agents tester      Show or set optional test design: on|off");
+    println!("  proto-cli agents mcp         Show or set optional MCP broker: on|off");
+    println!("  proto-cli mcp                Setup: add NAME FILE.json, test NAME, tools NAME [TOOL], on|off, remove NAME");
+    println!("  proto-cli eval profiles      Routing diagnostics; --live contacts the model
+  proto-cli eval coding        Disposable coding exercises; --live includes a single-agent baseline");
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
     println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
@@ -899,10 +921,8 @@ fn show_dashboard() -> Result<()> {
     }
     print_panel("COCKPIT", &rows, PanelTone::Magenta);
 
-    let scout_enabled = load_agent_settings()
-        .map(|settings| settings.is_scout_enabled())
-        .unwrap_or(false);
-    print_agent_graph(scout_enabled);
+    let settings = load_agent_settings().unwrap_or_default();
+    print_agent_graph(&settings);
 
     if let Ok(inventory) = inventory {
         render_provider_strip(&inventory);
@@ -1519,7 +1539,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}, MCP {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1532,6 +1552,7 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.auth_ready),
                         readiness(report.protolink.transport_ready),
                         readiness(report.protolink.web_tools_ready),
+                        readiness(report.protolink.mcp_ready),
                     )
                 } else if report.protolink.installed {
                     format!(
@@ -1578,6 +1599,7 @@ enum AgentsCommand {
     Status,
     Profile(Option<String>),
     Scout(Option<bool>),
+    Optional(String, Option<bool>),
 }
 
 fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, String> {
@@ -1598,8 +1620,13 @@ fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, Str
         }
         ["enable", "scout"] => Ok(AgentsCommand::Scout(Some(true))),
         ["disable", "scout"] => Ok(AgentsCommand::Scout(Some(false))),
+        [name] if matches!(*name, "tester" | "mcp") => Ok(AgentsCommand::Optional((*name).to_string(), None)),
+        [name, value] if matches!(*name, "tester" | "mcp") => parse_scout_toggle(value)
+            .map(|enabled| AgentsCommand::Optional((*name).to_string(), Some(enabled))),
+        [command, name] if matches!(*command, "enable" | "disable") && matches!(*name, "tester" | "mcp") =>
+            Ok(AgentsCommand::Optional((*name).to_string(), Some(*command == "enable"))),
         _ => Err(
-            "Usage: agents [status | profile [auto|small|medium|large|api] | scout [on|off]]"
+            "Usage: agents [status | profile [auto|small|medium|large|api] | tester|scout|mcp [on|off]]. Architect, Explorer, Coder and Verifier are required."
                 .to_string(),
         ),
     }
@@ -1609,7 +1636,7 @@ fn parse_scout_toggle(value: &str) -> std::result::Result<bool, String> {
     match value {
         "on" | "enable" | "enabled" | "true" => Ok(true),
         "off" | "disable" | "disabled" | "false" => Ok(false),
-        _ => Err("Scout state must be `on` or `off`.".to_string()),
+        _ => Err("Agent state must be `on` or `off`.".to_string()),
     }
 }
 
@@ -1636,6 +1663,15 @@ fn handle_agents_command(args: &[String]) -> Result<()> {
             print_panel("SCOUT", &format_scout_settings(&settings), PanelTone::Cyan);
             Ok(())
         }
+        AgentsCommand::Optional(name, enabled) => {
+            let settings = optional_agent_settings(&name, enabled)?;
+            print_panel(
+                &name.to_uppercase(),
+                &format_optional_agent_settings(&settings, &name),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
     }
 }
 
@@ -1649,7 +1685,7 @@ fn readiness(ready: bool) -> &'static str {
 
 fn show_agents() -> Result<()> {
     let settings = load_agent_settings()?;
-    print_agent_graph(settings.is_scout_enabled());
+    print_agent_graph(&settings);
     print_panel(
         "RUNTIME ARCHITECTURE",
         &format_architecture_manifest(&settings.architecture),
@@ -1662,7 +1698,12 @@ fn show_agents() -> Result<()> {
     );
     print_panel(
         "OPTIONAL WORKERS",
-        &format_scout_settings(&settings),
+        &[
+            format_optional_agent_settings(&settings, "tester"),
+            format_scout_settings(&settings),
+            format_optional_agent_settings(&settings, "mcp"),
+        ]
+        .concat(),
         PanelTone::Magenta,
     );
     let rows: Vec<String> = settings.agents.iter().map(format_agent_manifest).collect();
@@ -1711,14 +1752,57 @@ fn load_agent_settings() -> Result<AgentSettings> {
 }
 
 fn scout_settings(enabled: Option<bool>) -> Result<AgentSettings> {
+    optional_agent_settings("scout", enabled)
+}
+
+fn optional_agent_settings(name: &str, enabled: Option<bool>) -> Result<AgentSettings> {
     match enabled {
         Some(enabled) => {
-            let raw = call_configure_optional_agent("scout".to_string(), enabled)
-                .map_err(|err| anyhow!("Python Scout configuration error: {err:?}"))?;
+            let raw = call_configure_optional_agent(name.to_string(), enabled)
+                .map_err(|err| anyhow!("Python {name} configuration error: {err:?}"))?;
             Ok(serde_json::from_str(&raw)?)
         }
         None => load_agent_settings(),
     }
+}
+
+fn format_optional_agent_settings(settings: &AgentSettings, name: &str) -> Vec<String> {
+    let agent = settings.agent(name);
+    vec![
+        format!(
+            "{name}: {}",
+            if settings.is_enabled(name) {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "Role: {}",
+            agent.map(|a| a.role.as_str()).unwrap_or("optional worker")
+        ),
+        format!(
+            "Contract: {}",
+            agent.map(|a| a.contract.as_str()).unwrap_or("")
+        ),
+        format!("Next run: /agents {name} on|off | proto-cli agents {name} on|off"),
+    ]
+}
+
+fn mcp_settings_text(args: &[String]) -> Result<String> {
+    let raw = call_mcp_configuration(serde_json::to_string(args)?, false)
+        .map_err(|err| anyhow!("Python MCP setup error: {err:?}"))?;
+    Ok(serde_json::to_string_pretty(
+        &serde_json::from_str::<Value>(&raw)?,
+    )?)
+}
+
+fn mcp_settings_text_input(text: &str) -> Result<String> {
+    let raw = call_mcp_configuration(text.to_string(), true)
+        .map_err(|err| anyhow!("Python MCP setup error: {err:?}"))?;
+    Ok(serde_json::to_string_pretty(
+        &serde_json::from_str::<Value>(&raw)?,
+    )?)
 }
 
 fn format_scout_settings(settings: &AgentSettings) -> Vec<String> {
@@ -1872,6 +1956,21 @@ mod agent_command_tests {
         );
         assert!(parse_agents_command(&["status", "extra"]).is_err());
         assert!(parse_agents_command(&["scout", "maybe"]).is_err());
+        assert_eq!(
+            parse_agents_command(&["tester", "off"]).unwrap(),
+            AgentsCommand::Optional("tester".to_string(), Some(false))
+        );
+        assert_eq!(
+            parse_agents_command(&["enable", "mcp"]).unwrap(),
+            AgentsCommand::Optional("mcp".to_string(), Some(true))
+        );
+        assert_eq!(
+            parse_agents_command(&["mcp"]).unwrap(),
+            AgentsCommand::Optional("mcp".to_string(), None)
+        );
+        for name in ["architect", "explorer", "coder", "verifier"] {
+            assert!(parse_agents_command(&[name, "off"]).is_err());
+        }
     }
 
     #[test]
@@ -1961,18 +2060,26 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
     let (subcommand, rest) = match args.first().map(String::as_str) {
         None => ("profiles", args),
         Some("profiles") | Some("profile") => ("profiles", &args[1..]),
+        Some("coding") => ("coding", &args[1..]),
         Some("tasks") | Some("list") => ("tasks", &args[1..]),
         Some(value) if value.starts_with('-') || is_prompt_profile_value(value) => {
             ("profiles", args)
         }
         Some(other) => {
             return Err(anyhow!(
-                "Unknown eval command: {other}. Use `proto-cli eval profiles`."
+                "Unknown eval command: {other}. Use `proto-cli eval profiles` or `proto-cli eval coding`."
             ))
         }
     };
 
-    let options = parse_eval_options(rest)?;
+    let mut options = parse_eval_options(rest)?;
+    if subcommand == "coding"
+        && !rest
+            .iter()
+            .any(|arg| arg == "--live" || arg == "--scaffold")
+    {
+        options.mode = "plan".to_string();
+    }
     if subcommand == "tasks" {
         let raw = call_list_quality_eval_tasks()
             .map_err(|err| anyhow!("Python quality eval task error: {err:?}"))?;
@@ -1992,8 +2099,15 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
     };
     let profiles = join_optional(&options.profiles);
     let tasks = join_optional(&options.tasks);
-    let raw = call_run_quality_eval(mode, profiles, tasks, options.limit, workspace_dir_string())
-        .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
+    let raw = call_run_quality_eval(
+        mode,
+        profiles,
+        tasks,
+        options.limit,
+        workspace_dir_string(),
+        subcommand == "coding",
+    )
+    .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
     if options.json {
         println!("{raw}");
         return Ok(());
@@ -2102,17 +2216,18 @@ fn print_quality_eval_report(value: &Value) {
                         .map(|value| format!("{:.1}%", value * 100.0))
                         .unwrap_or_else(|| "not scored".to_string());
                     let error = value_str(task, "error");
+                    let architecture = value_str(task, "architecture");
+                    let task_label = if architecture.is_empty() {
+                        value_str(task, "task_id")
+                    } else {
+                        format!("{} [{}]", value_str(task, "task_id"), architecture)
+                    };
                     let suffix = if error.is_empty() {
                         String::new()
                     } else {
                         format!(" | error: {}", truncate_plain(&error, 64))
                     };
-                    profile_rows.push(format!(
-                        "{} | {}{}",
-                        value_str(task, "task_id"),
-                        score,
-                        suffix
-                    ));
+                    profile_rows.push(format!("{} | {}{}", task_label, score, suffix));
                 }
             }
             print_panel(
@@ -2531,7 +2646,7 @@ fn show_sessions() -> Result<()> {
     Ok(())
 }
 
-fn print_agent_graph(scout_enabled: bool) {
+fn print_agent_graph(settings: &AgentSettings) {
     let rows = vec![
         "[USER]".to_string(),
         "   |".to_string(),
@@ -2548,7 +2663,27 @@ fn print_agent_graph(scout_enabled: bool) {
         "   |".to_string(),
         format!(
             "   +--> [SCOUT] optional network worker: {} (web_search, fetch_url)",
-            if scout_enabled { "on" } else { "off" }
+            if settings.is_scout_enabled() {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "   +--> [TESTER] optional read-only test designer: {}",
+            if settings.is_enabled("tester") {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "   +--> [MCP] optional tool-only broker: {} (discover, schema, approved call)",
+            if settings.is_enabled("mcp") {
+                "on"
+            } else {
+                "off"
+            }
         ),
         "   |".to_string(),
         "   +--> [CODER] stateless write worker: approved edits, checkpoints, undo".to_string(),
@@ -2818,7 +2953,7 @@ fn render_brand_header() {
     println!("{}", style(TAGLINE).cyan().bold());
     println!(
         "{}",
-        style("RunContract -> Architect -> stateless workers // approval-gated local ops").dim()
+        style("TaskRecord -> focused workers -> required checks // approval-gated local ops").dim()
     );
     println!("{}", style(repeat_char('=', width)).magenta().bold());
     println!();
@@ -3110,6 +3245,21 @@ fn call_configure_optional_agent(name: String, enabled: bool) -> PyResult<String
     })
 }
 
+fn call_mcp_configuration(value: String, text: bool) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr(if text {
+                "configure_mcp_text"
+            } else {
+                "configure_mcp"
+            })?
+            .call1((value,))?
+            .extract()
+    })
+}
+
 fn call_answer_help_question(question: String, progress_path: Option<String>) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
@@ -3127,12 +3277,17 @@ fn call_run_quality_eval(
     task_ids: Option<String>,
     limit: Option<usize>,
     workspace: String,
+    coding: bool,
 ) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module
-            .getattr("run_quality_eval")?
+            .getattr(if coding {
+                "run_coding_eval"
+            } else {
+                "run_quality_eval"
+            })?
             .call1((mode, profiles, task_ids, limit, workspace))?
             .extract()
     })

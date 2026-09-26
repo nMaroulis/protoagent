@@ -7,7 +7,7 @@ ProtoLink owns process and recoverable filesystem execution. ProtoAgent supplies
 its project roots, capability policy, authenticated approval UI, storage paths
 and coding acceptance criteria. Tool registration performs no command execution.
 
-## Explorer and Scout
+## Explorer, Tester and Scout
 
 Explorer keeps the application-specific `read_file`, `list_directory`,
 `search_regex`, `get_git_status` and `build_context_pack` tools. `safe_path`
@@ -17,7 +17,7 @@ still pass through the path boundary.
 
 | Explorer tool | Limit or behavior |
 | --- | --- |
-| `read_file` | UTF-8, at most 240000 bytes, optional line numbers |
+| `read_file` | UTF-8 source up to 8 MiB; bounded line spans, 4000/8192 default characters, full-file revision |
 | `list_directory` | Ignores build/cache directories; returns size/type metadata |
 | `search_regex` | At most 120 matches; skips binary/large files |
 | `get_git_status` | Short, bounded `git status --short` probe |
@@ -37,6 +37,8 @@ for tool in filesystem_tools(roots=[project], checkpoints=store):
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |
+| `read_file(path, start_line, end_line)` | `workspace.read` | Read a bounded span and revision |
+| `edit_file(path, old, new, expected_revision)` | `filesystem.write` | One exact match at the read revision, prepared as native replacement |
 | `create_file(path, content)` | `filesystem.write` | Create an absent file after diff approval |
 | `replace_file(path, content)` | `filesystem.write` | Replace an existing file after diff approval |
 | `preview_change(change_id)` | `filesystem.read` | Inspect native state, conflict, uncertainty and reverse diff |
@@ -60,7 +62,8 @@ Legacy checkpoints stay readable without being imported as native execution.
 verifier.add_tool(process_tool(max_timeout_seconds=600, max_output_bytes=32768))
 ```
 
-Architect submits `execute_command` with explicit argv, absolute cwd, env,
+Architect normally submits `run_check(check_id, phase)` with a captured repository
+specification. Arbitrary preparation uses `execute_command` with explicit argv, absolute cwd, env,
 timeout_seconds and max_output_bytes. `WorkspacePolicy` keeps cwd in the project,
 then native `process.execute` policy requires approval. The local backend runs
 with host permissions and provides **no sandbox isolation**. Environment is
@@ -88,9 +91,9 @@ also understands older typed preview records for history compatibility.
 
 | Agent | Explicit grants; other protected capabilities are denied |
 | --- | --- |
-| Architect | Delegation and state/history operations |
-| Explorer | `workspace.read` |
-| Coder | `filesystem.read`; approval for write and restore |
+| Architect | Delegation, state/history and `task.manage` operations |
+| Explorer / Tester | `workspace.read`, `task.manage` |
+| Coder | `workspace.read`, `filesystem.read`, `task.manage`; approval for write and restore |
 | Verifier | Approval for `process.execute` |
 | Scout | `network.read`, when enabled |
 | Guide | No tools, state or delegation |

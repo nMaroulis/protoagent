@@ -17,6 +17,7 @@ from protolink import (
 from protolink.tools.builtins.filesystem import FilesystemResource
 
 from . import config
+from .task_record import TaskRecord
 
 
 @dataclass
@@ -61,6 +62,10 @@ class AttemptState:
     command_revisions: dict[str, tuple[ResourceRevision, ...]] = field(default_factory=dict)
     command_attempts: dict[str, int] = field(default_factory=dict)
     denied: bool = False
+    record: TaskRecord | None = None
+    command_phases: dict[str, str] = field(default_factory=dict)
+    command_checks: dict[str, str | None] = field(default_factory=dict)
+    external_uncertain: bool = False
 
     def begin(self) -> None:
         """Start an edit phase only when dispatched by the bounded native Graph."""
@@ -76,22 +81,31 @@ class AttemptState:
                 offset += len(page)
 
     def has_uncertain_changes(self) -> bool:
-        """Stop work when native inventory records an unresolved effect in this run."""
-        return any(
+        """Stop effects after an interrupted external call or unresolved native write."""
+        return self.external_uncertain or any(
             self.checkpoints.list_changes(run_id=run_id, state=state, limit=1)
             for run_id in self.authorization.run_ids
             for state in ("prepared", "restoring", "uncertain")
         )
 
-    def prepare_check(self, action_id: str) -> None:
-        """Freeze edits and bind checks to the native revisions of this run's files."""
-        self.checking = True
+    def prepare_check(
+        self, action_id: str, phase: str = "prepare", check_id: str | None = None
+    ) -> None:
+        """Bind evidence to sources; only final checks close the edit phase."""
+        if phase == "verify":
+            self.checking = True
+            if self.record:
+                self.record.frozen = True
         resources = FilesystemResource([self.workspace])
         paths = {item.before.revision.resource_id for item in self.file_changes()}
+        if self.record:
+            paths.update(self.record.dependencies())
         self.command_revisions[action_id] = tuple(
             resources.read(path).revision for path in sorted(paths)
         )
         self.command_attempts[action_id] = self.attempt
+        self.command_phases[action_id] = phase
+        self.command_checks[action_id] = check_id
 
 
 class WorkspacePolicy(CapabilityPolicy):
@@ -121,7 +135,7 @@ class WorkspacePolicy(CapabilityPolicy):
         ):
             if self.attempt.has_uncertain_changes():
                 return self.deny(
-                    "An earlier file effect is uncertain; inspect it before requesting new work"
+                    "An earlier effect is uncertain; inspect it before requesting new work"
                 )
         args = action.payload.get("arguments", {})
         if "process.execute" in action.capabilities:
@@ -129,13 +143,26 @@ class WorkspacePolicy(CapabilityPolicy):
             if not cwd.is_relative_to(self.workspace):
                 return self.deny("Command working directory must remain inside the project")
             if self.attempt is not None:
-                self.attempt.prepare_check(action.action_id)
+                check_id = self.attempt.record.check_for(args) if self.attempt.record else None
+                phase = action.metadata.get("check_phase", "verify" if check_id else "prepare")
+                self.attempt.prepare_check(action.action_id, phase, check_id)
         if "filesystem.write" in action.capabilities or "filesystem.restore" in action.capabilities:
             recovery = action.payload.get("recovery", {})
             before = recovery.get("before", recovery.get("change", {}).get("before", {}))
             path = args.get("path") or before.get("revision", {}).get("resource_id")
             if path and Path(path).resolve().is_relative_to(config.CONFIG_DIR.resolve()):
                 return self.deny("The application's private storage is not a Coder target")
+            if path and Path(path).resolve() == self.workspace / ".protoagent" / "project.json":
+                return self.deny(
+                    "Check configuration is frozen for this run; edit it outside the coding run"
+                )
+            if self.attempt is not None and self.attempt.record is not None:
+                record = self.attempt.record
+                if record.forbids_write:
+                    return self.deny("The user explicitly requested a read-only task")
+                if record.allowed_paths and path not in record.allowed_paths:
+                    return self.deny("Write is outside the task's planned file scope")
+                record.frozen = True
             if self.attempt is not None and self.attempt.checking:
                 return self.deny(
                     "This attempt is already checking. Return the measured result; "

@@ -252,10 +252,10 @@ def _context_item(
 
 
 def _snippet_for_entry(path: str, terms: list[str], workspace: str) -> tuple[str, str]:
-    loaded = read_file(path, workspace, with_line_numbers=False)
+    loaded = read_file(path, workspace, with_line_numbers=False, end_line=100000, max_chars=240000)
     if not loaded.get("success"):
         return "", ""
-    raw = str(loaded.get("raw_content", ""))
+    raw = str(loaded.get("content", ""))
     lines = raw.splitlines()
     if not lines:
         return "", ""

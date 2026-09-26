@@ -13,7 +13,7 @@ from protolink.state.conversation import ConversationState
 from .agents.common import QUIET_LOGGER, conversation_storage, with_workspace_contract
 
 STATEFUL_AGENT_NAMES = ("architect",)
-STATELESS_WORKER_NAMES = ("explorer", "coder", "scout")
+STATELESS_WORKER_NAMES = ("explorer", "coder", "tester", "scout")
 AGENT_NAMES = STATEFUL_AGENT_NAMES
 DEFAULT_HISTORY_BUDGET_RATIO = 0.7
 
@@ -408,7 +408,11 @@ def _architect_system_prompt(workspace: str | None) -> str:
     from .config import optional_agent_enabled
 
     return with_workspace_contract(
-        architect_system_prompt(scout_enabled=optional_agent_enabled("scout")),
+        architect_system_prompt(
+            scout_enabled=optional_agent_enabled("scout"),
+            tester_enabled=optional_agent_enabled("tester"),
+            mcp_enabled=optional_agent_enabled("mcp"),
+        ),
         workspace,
         "Architect",
     )

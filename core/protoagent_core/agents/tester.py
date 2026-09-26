@@ -1,4 +1,4 @@
-"""Explorer agent factory."""
+"""Tester agent factory."""
 
 from __future__ import annotations
 
@@ -20,22 +20,19 @@ from .common import (
     with_workspace_contract,
 )
 
-EXPLORER_SYSTEM_PROMPT = """You are the ProtoAgent Explorer.
-
-You are a stateless, task-local context worker. Do not rely on prior
-conversation memory; use only the task, Context Loom, and read-only tools.
-
-Build dense context maps for coding tasks. You may read files, list directories,
-search with regexes, ask Context Loom for a source-cited pack, and inspect git
-status. You must never modify files or execute arbitrary shell commands.
-
-Return compact markdown with exact file paths and line references when useful.
-Prioritize the smallest context that lets Architect and Coder act safely.
-Always state the project-relative paths you inspected.
+TESTER_SYSTEM_PROMPT = """You are ProtoAgent Tester, a task-local read-only test designer.
+Inspect the requested behavior, relevant source and existing tests. Read task_status
+for repository check IDs. Return a small test plan: acceptance criteria, selected
+check IDs, regression cases and test files Coder should change. If a failure is
+provided, distinguish a code failure from an environment problem using evidence.
+Use report_task(done, summary) when the plan is ready, needs_context when evidence
+is missing, or blocked when no meaningful check exists. You cannot edit or execute
+commands. Never claim tests passed. Prefer a regression that fails before the fix
+and passes afterwards. Keep existing tests intact and do not weaken assertions.
 """
 
 
-def create_explorer_agent(
+def create_tester_agent(
     registry=None,
     provider: str = "ollama",
     model: str | None = None,
@@ -49,14 +46,13 @@ def create_explorer_agent(
     record=None,
 ):
     """Create the stateless read-only repository worker."""
-    agent_url = resolve_agent_url("explorer", url)
+    agent_url = resolve_agent_url("tester", url)
     agent = Agent(
         card={
-            "name": "explorer",
+            "name": "tester",
             "description": (
-                "Stateless read-only repository worker. Lists files, reads "
-                "files, searches regexes, reports git status, and summarizes "
-                "precise workspace context for coding tasks."
+                "Read-only regression designer. Inspects source and tests, selects "
+                "repository check IDs, proposes edge cases and classifies failures."
             ),
             "url": agent_url,
             "capabilities": {
@@ -65,7 +61,7 @@ def create_explorer_agent(
                 "tool_calling": True,
                 "multi_step_reasoning": True,
             },
-            "tags": ["protoagent", "context", "read-only", "coding"],
+            "tags": ["protoagent", "testing", "read-only", "coding"],
         },
         transport=create_configured_transport(
             transport,
@@ -77,14 +73,14 @@ def create_explorer_agent(
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
             with_prompt_profile(
-                EXPLORER_SYSTEM_PROMPT,
-                "explorer",
+                TESTER_SYSTEM_PROMPT,
+                "tester",
                 provider,
                 model,
                 prompt_profile,
             ),
             workspace,
-            "Explorer",
+            "Tester",
         ),
         storage=None,
         state=[],
@@ -151,5 +147,5 @@ def create_explorer_agent(
     def build_context_pack(query: str) -> dict[str, Any]:
         return loom_context_pack(query, workspace)
 
-    add_task_tools(agent, record, "explorer")
+    add_task_tools(agent, record, "tester")
     return agent

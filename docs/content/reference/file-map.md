@@ -79,3 +79,20 @@ pages that should usually move with them.
 | `docs/src/pages/index.module.css` | Landing page styling. |
 | `docs/src/css/custom.css` | Global Docusaurus theme overrides. |
 | `docs/content/` | Documentation pages. |
+
+## v0.3.0 orchestration additions
+
+| File | Documentation |
+| --- | --- |
+| `core/protoagent_core/task_record.py` | `Core / Task Workflow` |
+| `core/protoagent_core/editing.py` | `Core / Task Workflow`, `Core / Safety And Tools` |
+| `core/protoagent_core/request_budget.py` | `Core / Task Workflow`, `Core / Context Loom` |
+| `core/protoagent_core/agents/tester.py` | `Core / Agent Deck` |
+| `core/protoagent_core/coding_eval.py` | `Core / Quality Evals` |
+| `whitepaper.md` | Architecture thesis, enforced boundaries and measurement limits |
+
+
+- `core/protoagent_core/mcp.py`: validated MCP config, setup/probes, fixed broker tools and native policy.
+- `core/protoagent_core/agents/mcp.py`: optional model-free broker factory.
+- `core/tests/test_optional_agents_mcp.py`: optional-worker composition, real stdio MCP, approvals, errors, cancellation and delegated receipts.
+- `docs/content/core/mcp.md`: MCP setup and architecture guide.

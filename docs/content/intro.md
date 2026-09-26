@@ -15,8 +15,8 @@ The current monorepo has three main product surfaces:
 
 | Surface | Path | Version | Status | Responsibility |
 | --- | --- | --- | --- | --- |
-| Rust CLI and TUI | `cli/` | `0.2.3` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
-| Python core | `core/protoagent_core/` | `0.2.3` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
+| Rust CLI and TUI | `cli/` | `0.3.0` | Active | Terminal UX, project selection, model setup, live progress, approvals, cancellation, traces, sessions. |
+| Python core | `core/protoagent_core/` | `0.3.0` | Active | ProtoLink agent deck, model/provider wiring, Context Loom, config, history, tools, runtime bridge. |
 | ACP server | `acp/` | `0.0.0-dev.0` | Planned | Editor-facing Agent Client Protocol server. Current docs mark implementation details as TBD. |
 
 The rest of the repo supports those surfaces:
@@ -42,7 +42,7 @@ split into small, inspectable components:
 4. **Context is visible.** Context Loom builds a deterministic, source-cited
    evidence pack before the model reasons.
 5. **State is deliberate.** Architect keeps durable conversation memory, while
-   Explorer, Coder, Verifier, and optional Scout are task-local stateless workers.
+   Explorer, Coder, Verifier and enabled optional Tester/Scout/MCP are task-local stateless workers.
 6. **Runs have contracts.** Write tasks need executed file changes at their
    current native resource revisions. Approvals cannot satisfy completion.
 7. **Writes are approval-gated.** Native tools prepare exact diff artifacts.
@@ -103,7 +103,14 @@ Useful source entrypoints:
 | `cli/src/sessions.rs` | Rust UI session ledger. |
 | `core/protoagent_core/agent_engine.py` | PyO3-facing functions called by Rust. |
 | `core/protoagent_core/runtime.py` | ProtoLink runtime mesh startup and streaming execution. |
-| `core/protoagent_core/agents/` | Architect, Explorer, Coder, optional Scout, and deck assembly. |
+| `core/protoagent_core/agents/` | Required Architect/Explorer/Coder/Verifier, optional Tester/Scout/MCP, and deck assembly. |
+
+Optional workers are user-controlled: `/agents tester on|off` changes test design
+(default on), while Scout/MCP default off. Disabling Tester removes its model
+without bypassing required checks. `/mcp` configures named external tool servers
+without an LLM. The broker returns one schema and executes approved allowlisted
+calls through ProtoLink 0.7.4, keeping large catalogs out of small-model prompts.
+See [MCP Broker](core/mcp.md) for setup and effect boundaries.
 | `core/protoagent_core/context/` | Context Loom index, SQLite store, pack builder, schemas. |
 | `core/protoagent_core/history.py` | ProtoLink state describe, compact, reset, and persistence helpers. |
 | `core/protoagent_core/tools.py` | Workspace-safe read, search, diff preview, and writes. |

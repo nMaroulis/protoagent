@@ -215,6 +215,34 @@
     [
       "/debug off",
       "Hide response metadata to keep the chat clean. This does not disable traces or change agent execution."
+    ],
+    [
+      "/mcp",
+      "Set up MCP without a model. Usage: /mcp [status | add NAME FILE.json | remove NAME | on | off | test NAME | tools NAME [TOOL]]. test/tools explicitly connect; no server tool is invoked. Quote paths containing spaces."
+    ],
+    [
+      "/agents tester",
+      "Show optional test design (default on); required checks stay enforced."
+    ],
+    [
+      "/agents tester on",
+      "Enable test design (default on); required checks stay enforced."
+    ],
+    [
+      "/agents tester off",
+      "Disable test design (default on); required checks stay enforced."
+    ],
+    [
+      "/agents mcp",
+      "Show optional the tool-only MCP broker (default off)."
+    ],
+    [
+      "/agents mcp on",
+      "Enable the tool-only MCP broker (default off)."
+    ],
+    [
+      "/agents mcp off",
+      "Disable the tool-only MCP broker (default off)."
     ]
   ],
   "shell": [
@@ -296,7 +324,7 @@
     ],
     [
       "agents",
-      "Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Scout state, and tool isolation."
+      "Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Tester/Scout/MCP state, and tool isolation."
     ],
     [
       "agents profile [auto|small|medium|large|api]",
@@ -365,6 +393,22 @@
     [
       "help \"question\"",
       "Ask the isolated Guide agent about ProtoAgent usage."
+    ],
+    [
+      "eval coding [--plan|--live] [--profile MODE] [--task ID] [--limit N] [--json]",
+      "Compare the deck with a single agent on disposable coding exercises using the same selected model. Default: plan, small profile. Live mode approves only fixture edits and the captured fixture check; independent acceptance measures correctness. Host execution is not sandboxed."
+    ],
+    [
+      "agents tester [on|off]",
+      "Toggle optional test design. Architect defines criteria and Coder adds regression tests when off; Verifier remains required."
+    ],
+    [
+      "agents mcp [on|off]",
+      "Toggle the optional MCP broker. Changes apply to the next run."
+    ],
+    [
+      "mcp [status|add NAME FILE.json|remove NAME|on|off|test NAME|tools NAME [TOOL]]",
+      "Configure MCP servers, explicit tool allowlists and HTTP auth environment references. Probes connect without invoking tools. No model is used."
     ]
   ]
 }

@@ -13,7 +13,7 @@ from .config import load_config, set_agent_prompt_profile, visible_config
 from .prompt_profiles import RESOLVED_PROMPT_PROFILES, normalize_prompt_profile
 from .tools import workspace_root
 
-EVAL_VERSION = 1
+EVAL_VERSION = 2
 DEFAULT_PROFILES = ("small", "medium", "large", "api")
 EVAL_MODES = ("plan", "scaffold", "live")
 
@@ -280,7 +280,7 @@ def score_response(
     checks = [
         _check(
             "completed",
-            str(response.get("status") or "") in {"answered", "ready"},
+            str(response.get("status") or "") in {"completed", "answered", "ready"},
             "Run returned a terminal answer or scaffold diagnostic.",
         ),
         _check(

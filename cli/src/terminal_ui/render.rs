@@ -584,7 +584,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
             rows.push(row(
                 "agents",
-                "RunContract -> Architect -> stateless workers -> policy gate",
+                "TaskRecord -> Architect -> optional Tester -> Coder -> required checks",
                 yellow(),
                 false,
             ));
@@ -746,6 +746,23 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                 },
                 true,
             ));
+            for name in ["tester", "mcp"] {
+                let enabled = app.agent_settings.is_enabled(name);
+                rows.push(row(
+                    name,
+                    format!(
+                        "{} | /agents {name} on|off{}",
+                        if enabled { "ON" } else { "OFF" },
+                        if name == "mcp" {
+                            " | /mcp setup/status"
+                        } else {
+                            " | test design; Verifier remains required"
+                        }
+                    ),
+                    if enabled { green() } else { yellow() },
+                    true,
+                ));
+            }
         }
         PanelView::Context => {
             rows.push(row(
@@ -916,7 +933,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             ));
             rows.push(row(
                 "agents",
-                "/agents profile | /agents scout on|off",
+                "/agents profile | /agents tester|scout|mcp on|off | /mcp",
                 cyan(),
                 false,
             ));

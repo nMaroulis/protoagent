@@ -18,9 +18,9 @@ thin but important adaptation layer around the rest of the Python core.
 | `answer_help_question(question)` | `help QUESTION`, `/help QUESTION` | Guide answer JSON. |
 | `get_context_settings()` | `/context window` | Active provider context-window settings. |
 | `configure_context_window(value)` | `/context window 16k` | Updated context-window settings. |
-| `get_agent_settings()` | `agents`, `/agents` | Prompt profile, architecture manifest, agent list, and Scout state. |
+| `get_agent_settings()` | `agents`, `/agents` | Prompt profile, architecture manifest, agent list, and Tester/Scout/MCP state. |
 | `configure_agent_prompt_profile(value)` | `agents profile`, `/agents profile` | Updated prompt-profile settings. |
-| `configure_optional_agent(name, enabled)` | `agents scout`, `/agents scout` | Updated optional-agent settings and manifest. |
+| `configure_optional_agent(name, enabled)` | `agents tester|scout|mcp`, `/agents tester|scout|mcp` | Updated optional-agent settings and manifest. |
 | `compact_protolink_history(session_id, strategy, limit)` | `/context compact` | ProtoLink state compaction report JSON. |
 | `reset_protolink_history(session_id)` | `/context reset` | ProtoLink state reset report JSON. |
 | `describe_protolink_history(session_id)` | `/context history` | ProtoLink state summary JSON. |
@@ -30,7 +30,11 @@ thin but important adaptation layer around the rest of the Python core.
 | `context_pack(query, workspace)` | `context QUERY`, `/context QUERY` | Context Pack JSON. |
 | `checkpoint_inventory(workspace)` | `checkpoints`, `/checkpoints` | Project snapshot metadata JSON. |
 | `undo_checkpoint(workspace, checkpoint_id, session_id, progress_path)` | `undo`, `/undo` | Coder recovery result using ProtoLink approval without an LLM. |
+| `run_coding_eval(mode, profiles, task_ids, limit)` | `eval coding` | Disposable exercises with independent acceptance and same-model baseline. |
 | `process_prompt(prompt, workspace, session_id, progress_path)` | `run`, TUI task loop | Core response JSON. |
+
+The response also exposes `task_record`, `completion_validation`, `verification`
+and estimated `context_admission` diagnostics. See [Task Workflow](task-workflow.md).
 
 Every function returns a JSON string through `_json()`, which normalizes values
 for Rust.
@@ -142,3 +146,6 @@ numbers. Paths are resolved by `safe_path()`.
 Fallback mode also uses this response shape when startup fails before submission.
 That makes the CLI robust enough to show actionable diagnostics even before a
 model/provider is fully configured.
+
+
+`configure_mcp(args_json)` and `configure_mcp_text(text)` provide model-free MCP setup and discovery probes to shell/TUI frontends. `mcp.py` uses ProtoLink 0.7.4 native adapters behind the optional tool-only broker; see [MCP Broker](mcp.md).

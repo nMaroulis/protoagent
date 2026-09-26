@@ -32,13 +32,19 @@ class CodingWorkflow:
             async def execute(self, task):
                 workflow.attempt.begin()
                 instruction = workflow.prompt
+                if workflow.attempt.record:
+                    packet = workflow.attempt.record.snapshot()
+                    packet.pop("available_checks", None)
+                    instruction += "\n\nRuntime task packet:\n" + json.dumps(packet)
                 if workflow.attempt.attempt > 1:
                     assert workflow.acceptance is not None
                     instruction += (
                         "\n\nThis is a new bounded repair attempt after a completed failing check. "
                         "Inspect the failure, apply one focused repair, then rerun the affected checks. "
                         "Do not replay interrupted or denied actions. Return after checking.\n"
-                        + json.dumps(workflow.acceptance.verification, ensure_ascii=True)
+                        + json.dumps(workflow.acceptance.verification["latest"], ensure_ascii=True)[
+                            :12000
+                        ]
                     )
                 task.add_message(Message.infer(prompt=instruction))
                 handle = workflow.group.run("architect", task, redaction_policy=workflow.redaction)

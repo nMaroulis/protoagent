@@ -243,6 +243,15 @@ def validate_protolink() -> dict[str, Any]:
             )
         except Exception:
             web_tools_ready = False
+        try:
+            from protolink.tools.adapters.mcp_adapter import MCPToolAdapter
+
+            mcp_ready = all(
+                hasattr(MCPToolAdapter, name)
+                for name in ("session", "get_tools_async", "list_tools_async")
+            )
+        except ImportError:
+            mcp_ready = False
         agent_ready = all(
             (
                 streaming_ready,
@@ -274,6 +283,7 @@ def validate_protolink() -> dict[str, Any]:
             "auth_ready": auth_ready,
             "transport_ready": transport_ready,
             "web_tools_ready": web_tools_ready,
+            "mcp_ready": mcp_ready,
             "error": "",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics

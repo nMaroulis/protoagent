@@ -2,6 +2,62 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.3.0] - 2026-09-26
+
+### Added
+
+- Runtime-owned TaskRecord with criteria, check selection, scoped worker packets
+  and explicit done/needs_context/blocked worker reports.
+- Stateless, read-only Tester for regression planning and failure analysis.
+- Persistent optional-agent controls for Tester (default on), Scout and MCP
+  (default off). Disabled workers are not constructed or registered; required
+  Architect/Explorer/Coder/Verifier roles cannot be disabled.
+- `mcp` and `/mcp` setup, explicit discovery probes, server/tool allowlists and
+  environment-referenced HTTP authentication. Model-free MCP broker with three
+  fixed discovery/schema/call tools, native approvals and bounded model handoffs.
+- Repository check discovery, `.protoagent/project.json` configuration, and
+  Verifier `run_check(check_id, phase)` with baseline and final verification.
+- Coder bounded source reads and exact single-occurrence `edit_file` with a
+  source revision guard, native diff approval and native recovery.
+- Compact small-profile protocol prompts and worker cards with exact input
+  schemas, omitting repetitive examples and large output schemas.
+- Per-request context admission through public ProtoLink action methods,
+  reserving output tokens and retaining the current task and runtime record.
+  Small profiles with unknown capacity receive an 8192-token application cap.
+- Disposable coding evals with independent acceptance scripts and a same-model
+  single-agent baseline: `proto-cli eval coding --plan|--live`.
+
+### Changed
+
+- Code changes require selected repository checks executed at current revisions.
+  Preparation and unrelated successful commands do not satisfy verification.
+  Applied, verified and criteria-supported states are reported separately.
+- Baseline and preparation commands allow subsequent edits; final checks close
+  the edit phase and preserve the two-repair ceiling.
+- Source tools return one bounded source span with line range and SHA-256 revision;
+  the duplicated `raw_content` field is removed.
+- Explicit small-model hints take priority over provider hosting location.
+- Intent classification handles polite requests and explicit no-write instructions.
+- CLI/core/docs coordinated versions advance to 0.3.0; ProtoLink floor advances
+  to 0.7.4 with the HTTP, LLM and MCP extras.
+
+### Migration and limits
+
+- Existing code-change runs without a repository check now remain incomplete.
+  Configure explicit argv, cwd, env and dependency paths for uncommon projects.
+- `execute_command` remains approved host execution; only frozen repository checks
+  qualify as verification. Passing checks supports criteria, not arbitrary semantics.
+- Tester is enabled by default and can be disabled with `agents tester off`.
+  Architect/Coder then handle criteria and regressions; required checks remain.
+- MCP tool access is optional and off by default. Calls use managed ProtoLink
+  sessions without automatic retries. Failed started invocations mark external
+  effects uncertain and block further effectful work in the run.
+  Approvals/allowlists do not sandbox server
+  effects; remote receipts cannot satisfy repository verification. Resources,
+  prompts, OAuth and server installation are not part of this integration.
+- Request admission uses token estimates. Durable task state survives observation
+  eviction. Live model performance remains to be measured with coding evals.
+
 ## [0.2.3] - 2026-09-15
 
 ### Added

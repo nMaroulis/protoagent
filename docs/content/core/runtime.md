@@ -3,7 +3,7 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.2.3 requires **ProtoLink 0.7.1**. `runtime.py` configures an embedded
+ProtoAgent 0.3.0 requires **ProtoLink 0.7.4**. `runtime.py` configures an embedded
 mesh; `workflow.py` defines coding acceptance and repair routing. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
@@ -15,7 +15,7 @@ run_selected_model(prompt, workspace=None, session_id=None, progress_path=None, 
 
 The application loads model configuration, builds a trusted `RunContext`, leases
 the project's checkpoint namespace, and constructs its agents. Each LLM-capable
-role gets its own configured LLM instance. Verifier and optional Scout have no
+role gets its own configured LLM instance. Verifier and optional Scout/MCP have no
 LLM. Architect retains its conversation state; workers remain task-local.
 
 | Native object | Application configuration |
@@ -31,7 +31,8 @@ LLM. Architect retains its conversation state; workers remain task-local.
 
 The tool-only workflow controller exposes an application `run_workflow` tool to
 its local handle. It has no model and is not advertised in worker discovery.
-There is no application subprocess launcher or transport-final-event parser.
+The interactive workflow uses native process execution; the separate evaluation
+harness runs its independent acceptance scripts outside the fixture workspace.
 
 ## Bounded application workflow
 
@@ -44,19 +45,21 @@ flowchart LR
 ```
 
 Architect receives repository context and delegates through normal ProtoLink
-`agent_call` execution. All edits precede command checks within one attempt.
-The application policy prevents further file changes after checking starts.
+`agent_call` execution. A runtime-owned TaskRecord holds criteria, scope, discovered
+check IDs and worker reports. Baseline and preparation commands allow later edits;
+final verification closes the edit phase. The check plan freezes at the first
+write or final check. See [Task Workflow](task-workflow.md).
 Only Graph dispatch opens a new repair attempt. Graph limits and shared native
 budgets bound repair work independently of `RetryPolicy`.
 
 `run_contracts.py` classifies the original prompt. Write contracts require a
 native applied-file receipt at its current revision; verification requests
-require executed commands. Approval, previews, delegation and blocker prose
+require all selected repository checks. Successful unrelated commands do not count. Approval, previews, delegation and blocker prose
 cannot satisfy execution checks. Structured denials and blockers are preserved
 as unsuccessful outcomes. A write without any command is explicitly unverified.
 
-Command acceptance records the revisions of this run's changed files at
-preparation and rechecks them through `CompletionCheck.read_revision`. It detects
+Command acceptance records revisions of changed files, directly read source and
+configured check dependencies (up to 512 files) at preparation and rechecks them through `CompletionCheck.read_revision`. It detects
 later changes to those resources, including external edits. It does not capture
 all repository inputs. See [Verify & Recover](../cli/verification-and-recovery.md)
 for the exact acceptance and restoration boundaries.
@@ -64,7 +67,7 @@ for the exact acceptance and restoration boundaries.
 ## Authorization and controls
 
 The top-level context grants `agent.delegate`, `workspace.read`,
-`filesystem.read`, `filesystem.write`, `filesystem.restore`, `process.execute`
+`task.manage`, `filesystem.read`, `filesystem.write`, `filesystem.restore`, `process.execute`
 and `network.read`. Each agent still applies a restrictive native capability
 policy. Coder requires approval for writes and restoration; Verifier requires
 approval for command execution. Native policies otherwise allow actions by
@@ -92,7 +95,7 @@ in-process Registry and transport identities. JSON-RPC aliases map to SSE.
 
 `PROTOAGENT_RUNTIME_HOST` defaults to `127.0.0.1`. Registry and worker URLs can
 be overridden with `PROTOAGENT_REGISTRY_URL`, `PROTOAGENT_ARCHITECT_URL`,
-`PROTOAGENT_EXPLORER_URL`, `PROTOAGENT_CODER_URL`, `PROTOAGENT_VERIFIER_URL` and
+`PROTOAGENT_EXPLORER_URL`, `PROTOAGENT_CODER_URL`, `PROTOAGENT_TESTER_URL`, `PROTOAGENT_VERIFIER_URL` and
 `PROTOAGENT_SCOUT_URL`; the corresponding older `*_AGENT_URL` aliases remain.
 The entry handle invokes owned agents locally; there is no separate CLI task
 client to configure.
@@ -143,7 +146,7 @@ handles still consume execution once. Peer capabilities determine whether
 delegated output arrives live or with the final snapshot. Even an HTTP worker
 mesh can show live output from the locally invoked Architect.
 
-ProtoLink 0.7.1 puts delegated events and receipts directly in parent streams,
+ProtoLink 0.7.4 puts delegated events and receipts directly in parent streams,
 tasks and reports, with native identity preservation and deduplication. Completion
 uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
 handle's complete report events into the Graph task, preserving model metrics
@@ -185,3 +188,15 @@ RunReplay remains read-only inspection, not task resumption.
 `${PROTOAGENT_CONFIG_DIR:-~/.protoagent}/traces.jsonl`, using the same redactor.
 Private directories use 0700 and storage files use 0600. Source diffs and unknown
 secrets printed by project code can still be sensitive.
+
+
+## Frozen optional-worker configuration
+
+`run_selected_model()` snapshots Tester/Scout/MCP toggles and MCP server
+contracts before assembling the deck. Tester defaults on; Scout/MCP default
+off. Disabled optional workers are not constructed, registered or included in
+the runtime transport report. The Architect prompt carries their availability.
+Required checks stay enforced when Tester is off. Native MCP tools are used
+through lazy, approved broker operations rather than eager server discovery
+at startup; see [MCP Broker](mcp.md). The broker has no context-admission/model
+entry because it never calls an LLM.

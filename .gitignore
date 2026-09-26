@@ -3,6 +3,7 @@
 
 # Python
 .venv/
+core/build/
 __pycache__/
 *.pyc
 *.egg-info/

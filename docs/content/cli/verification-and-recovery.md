@@ -10,7 +10,9 @@ description: Inspect exact command approvals, native execution evidence, and rec
 ```
 
 Architect gathers repository evidence, delegates edits to Coder, then calls
-Verifier's native `execute_command` tool. Each command requires a separate
+Verifier's `run_check(check_id, phase)` tool, prepared as native `execute_command`.
+Check IDs and specifications are captured from the project before model execution
+(see [Task Workflow](../core/task-workflow.md)). Each command requires a separate
 `process.execute` approval. Press **V** to inspect its argv, absolute working
 directory, explicit environment, timeout, output limit and host execution
 boundary. Scroll with arrows or PageUp/PageDown; return and press **Y** to
@@ -48,23 +50,28 @@ processes can escape this cleanup. Command effects have no automatic rollback.
 
 A write task needs an **executed native file change at its current revision**.
 A proposed diff, approval, delegation or model claim cannot satisfy that check.
-A requested verification needs an actual executed command.
+Code changes and verification requests need all selected repository checks.
+Unrelated successful commands do not qualify. Explicit documentation-only requests can
+complete with `applied=true` and `verified=false`.
 
 | Verification status | Meaning |
 | --- | --- |
 | `passed` | Latest recorded executions passed and their recorded resource revisions are current. |
 | `failed` | A recorded command failed or its execution evidence cannot be accepted. |
 | `stale` | A resource referenced by a check changed. |
-| `unverified` | No test/build command was executed. |
+| `unverified` | No qualifying final repository check was executed. |
 
-Checks reference the native revisions of files changed by this run, captured
-when a command is proposed. An external edit to those files also invalidates
+Checks reference native revisions of changed files, worker-read sources and
+configured dependencies, bounded to 512 files and captured at preparation.
+An external edit to those files also invalidates
 the check. This does not track every repository input, dependency or file a
 command can modify. A passing exit status is evidence for that command, not a
 proof that all behavior is correct. A write can be applied but remain unverified.
 
-All edits happen before checking within an attempt. Once a command is proposed,
-further file mutations are denied for that attempt. A native **Graph** permits
+Baseline and preparation commands permit subsequent edits. Final verification
+closes the edit phase, and further file mutations are denied for that attempt.
+The plan freezes at the first write or final check. A known empty unittest suite
+is rejected; zero exit status alone does not establish useful coverage. A native **Graph** permits
 one initial attempt and at most **two repair attempts** after completed nonzero
 checks. Its limits are enforced in code and share native workflow budgets.
 Denials, stale revisions, timeouts, interrupted effects and missing evidence

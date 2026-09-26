@@ -6,8 +6,9 @@ use tokio::time::sleep;
 use crate::{
     agent_profile_text, call_process_prompt_with_progress, compact_context_history,
     component_version_text, context_history_text, context_memory_text, context_pack_text,
-    context_status_text, context_window_text, empty_as_unknown, format_scout_settings,
-    help_availability_text, load_doctor, parse_agents_command,
+    context_status_text, context_window_text, empty_as_unknown, format_optional_agent_settings,
+    format_scout_settings, help_availability_text, load_doctor, mcp_settings_text_input,
+    optional_agent_settings, parse_agents_command,
     progress::{progress_activity, ProgressBatch, ProgressFile},
     refresh_context_text, reset_context_history, scout_settings, set_context_memory_text,
     AgentsCommand, CoreResponse,
@@ -111,6 +112,19 @@ async fn handle_command(
         "/agents" => {
             let arg = parts.collect::<Vec<_>>().join(" ");
             handle_agents_command(app, command, arg.trim())?;
+            Ok(true)
+        }
+        "/mcp" => {
+            let arg = command.strip_prefix("/mcp").unwrap_or("").trim();
+            match mcp_settings_text_input(arg) {
+                Ok(text) => {
+                    app.panel = PanelView::Agents;
+                    app.refresh(None);
+                    app.refresh_agent_settings()?;
+                    app.push(Role::Command, command, &text);
+                }
+                Err(err) => app.push(Role::Error, command, &err.to_string()),
+            }
             Ok(true)
         }
         "/context" | "/loom" => {
@@ -360,6 +374,16 @@ fn handle_agents_command(app: &mut TerminalApp, command: &str, arg: &str) -> Res
             }
             Err(err) => app.push(Role::Error, command, &err.to_string()),
         },
+        AgentsCommand::Optional(name, enabled) => match optional_agent_settings(&name, enabled) {
+            Ok(settings) => {
+                let text = format_optional_agent_settings(&settings, &name).join("\n");
+                app.panel = PanelView::Agents;
+                app.refresh(None);
+                app.apply_agent_settings(settings);
+                app.push(Role::Command, command, &text);
+            }
+            Err(err) => app.push(Role::Error, command, &err.to_string()),
+        },
     }
     Ok(())
 }
@@ -371,7 +395,9 @@ fn agents_panel_pinned_text(app: &TerminalApp) -> String {
         "off"
     };
     format!(
-        "Agents panel pinned. Runtime kernel uses a RunContract, stateful Architect, and stateless Explorer/Coder workers. Optional Scout is {scout}; changes apply to the next run. Toggle with /agents scout on|off. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
+        "Agents panel pinned. Architect, Explorer, Coder and Verifier are required. Optional Tester is {}, Scout is {scout}, MCP is {}. Toggle with /agents tester|scout|mcp on|off; /mcp configures servers. Changes apply to the next run. Current prompt profile: {}. Change it with /agents profile auto|small|medium|large|api.",
+        if app.agent_settings.is_enabled("tester") { "on" } else { "off" },
+        if app.agent_settings.is_enabled("mcp") { "on" } else { "off" },
         empty_as_unknown(&app.status.prompt_profile),
     )
 }

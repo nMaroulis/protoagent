@@ -61,6 +61,9 @@ def run_selected_model(
                 profile,
                 user_prompt=user_prompt,
                 scout_enabled=optional_agent_enabled("scout", config),
+                tester_enabled=optional_agent_enabled("tester", config),
+                mcp_enabled=optional_agent_enabled("mcp", config),
+                mcp_config=config,
                 run_state=run_state,
             )
         )
@@ -102,7 +105,11 @@ async def _run_agent_deck(
     prompt_profile: dict[str, Any],
     user_prompt: str | None = None,
     scout_enabled: bool = False,
+    tester_enabled: bool = True,
+    mcp_enabled: bool = False,
+    mcp_config: dict[str, Any] | None = None,
     run_state: dict[str, Any] | None = None,
+    architecture: str = "deck",
 ) -> dict[str, Any]:
     """Own the embedded mesh with AgentGroup and consume native RunHandle results."""
     from protolink import (
@@ -120,9 +127,12 @@ async def _run_agent_deck(
 
     from . import config
     from .checkpoints import checkpoint_store, private_file, workspace_writer
+    from .mcp import server_settings
+    from .request_budget import install_request_budget
     from .runtime_policy import AttemptState, RunAuthorization
     from .runtime_storage import output_redaction
     from .streaming import LiveOutput
+    from .task_record import TaskRecord
     from .workflow import CodingWorkflow
 
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
@@ -137,6 +147,11 @@ async def _run_agent_deck(
             "interface": "rust-cli",
             "prompt_profile": prompt_profile,
             "run_contract": contract.to_dict(),
+            "optional_agents": {
+                "tester": tester_enabled,
+                "scout": scout_enabled,
+                "mcp": mcp_enabled and architecture != "single",
+            },
         },
     )
     context.trace_id = context.run_id
@@ -193,7 +208,8 @@ async def _run_agent_deck(
                 "approval_decisions": [],
             }
         checkpoints = checkpoint_store(project)
-        attempt = AttemptState(project, checkpoints, authorization)
+        record = TaskRecord.create(project, user_prompt or prompt)
+        attempt = AttemptState(project, checkpoints, authorization, record=record)
         urls = _runtime_urls()
         transport = _agent_transport()
         registry_transport = create_configured_transport(
@@ -204,6 +220,7 @@ async def _run_agent_deck(
         assert registry_transport is not None
         registry = Registry(transport=registry_transport, verbosity=0)
         deck = create_agent_deck(
+            single_agent=architecture == "single",
             registry=registry,
             provider=provider,
             model=model,
@@ -214,13 +231,38 @@ async def _run_agent_deck(
             telemetry=_trace_telemetry(redaction),
             prompt_profile=str(prompt_profile["resolved"]),
             scout_enabled=scout_enabled,
+            tester_enabled=tester_enabled,
+            mcp_enabled=mcp_enabled and architecture != "single",
+            mcp_servers=server_settings(mcp_config)
+            if mcp_enabled and architecture != "single"
+            else {},
             auth=auth,
             checkpoints=checkpoints,
             authorization=authorization,
             attempt=attempt,
         )
+        if architecture == "single":
+            from .task_record import add_task_tools
+
+            single = deck["coder"]
+            single.card.name = "architect"
+            for worker in (deck["explorer"], deck["verifier"]):
+                for name, tool in worker.tools.items():
+                    if name not in single.tools and name != "report_task":
+                        single.add_tool(tool)
+            add_task_tools(single, record, "architect")
+            deck = {"architect": single}
+        elif architecture != "deck":
+            raise ValueError("Unknown evaluation architecture")
         for agent in deck.values():
             agent.run_store = store
+            if agent.llm is not None:
+                install_request_budget(
+                    agent.llm,
+                    record,
+                    fallback_window=8192 if prompt_profile["resolved"] == "small" else None,
+                    compact_protocol=prompt_profile["resolved"] == "small",
+                )
         live_output = LiveOutput(
             bridge,
             redaction,
@@ -330,6 +372,12 @@ async def _run_agent_deck(
                         "run_contract": contract.to_dict(),
                         "completion_validation": acceptance.completion,
                         "verification": acceptance.verification,
+                        "task_record": record.snapshot(),
+                        "context_admission": {
+                            name: getattr(agent.llm, "protoagent_context_admission", {})
+                            for name, agent in deck.items()
+                            if agent.llm is not None
+                        },
                     },
                 )
                 store.save_report(report, run_id=context.run_id, agent_name="architect")
@@ -356,6 +404,12 @@ async def _run_agent_deck(
                 "run_contract": contract.to_dict(),
                 "completion_validation": acceptance.completion,
                 "verification": acceptance.verification,
+                "task_record": record.snapshot(),
+                "context_admission": {
+                    name: getattr(agent.llm, "protoagent_context_admission", {})
+                    for name, agent in deck.items()
+                    if agent.llm is not None
+                },
                 "transport_report": transport_report,
             }
         )
@@ -371,6 +425,8 @@ def _runtime_urls() -> dict[str, str]:
         "explorer": _env_url("PROTOAGENT_EXPLORER_URL", "EXPLORER_AGENT_URL") or _local_url(host),
         "coder": _env_url("PROTOAGENT_CODER_URL", "CODER_AGENT_URL") or _local_url(host),
         "scout": _env_url("PROTOAGENT_SCOUT_URL", "SCOUT_AGENT_URL") or _local_url(host),
+        "tester": _env_url("PROTOAGENT_TESTER_URL", "TESTER_AGENT_URL") or _local_url(host),
+        "mcp": _env_url("PROTOAGENT_MCP_URL", "MCP_AGENT_URL") or _local_url(host),
         "verifier": _env_url("PROTOAGENT_VERIFIER_URL", "VERIFIER_AGENT_URL") or _local_url(host),
     }
 

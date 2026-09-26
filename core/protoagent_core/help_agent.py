@@ -78,7 +78,7 @@ Manual:
   the configuration in the shell. Both are read-only, not configuration editors.
   Use `/model` to select a model, `/key PROVIDER` to store a key,
   `/context window 16k` for Ollama context, and `/agents profile MODE` or
-  `/agents scout on|off` for agent settings. Never suggest a nonexistent
+  `/agents tester|scout|mcp on|off` for agent settings. Never suggest a nonexistent
   `config set` command. Paths below use the configured directory when overridden.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
   or OpenAI-compatible providers. From the shell, use `proto-cli key openai`.
@@ -100,11 +100,22 @@ Manual:
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  RunContract, stateful Architect, stateless Explorer/Coder/Verifier workers, optional
+  TaskRecord and RunContract, stateful Architect, task-local Explorer/Tester/Coder workers, tool-only Verifier, optional
   Scout, policy gate, completion guard, and current prompt profile.
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
+- `/agents tester on|off` toggles optional test design (default on). Architect
+  defines criteria and Coder adds regressions when it is off; Verifier remains
+  required. Architect, Explorer, Coder and Verifier cannot be disabled.
+- `/mcp` shows model-free MCP setup/status. `/mcp add NAME FILE.json` imports a
+  stdio, SSE or Streamable HTTP server with explicit allow_tools. `/mcp on|off`
+  toggles the optional model-free broker (default off). `/mcp test NAME` discovers
+  only; `/mcp tools NAME TOOL` reads one schema. Both explicitly connect and never
+  invoke a server tool. `/mcp remove NAME` removes configuration. Shell equivalents
+  start with `proto-cli mcp`. Broker calls require approval, have no infer loop
+  and cannot certify workspace checks. Workers request external evidence through
+  Architect. Secrets for HTTP headers use headers_env environment references.
 - Scout exposes ProtoLink's first-party `web_search` and `fetch_url`
   tools under the explicit `network.read` policy. Brave search is the default
   and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
@@ -156,11 +167,17 @@ Manual:
   `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS`,
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
-  and builds context as a stateless worker; Coder prepares approval-gated file
+  and builds context as a stateless worker; Tester designs regressions read-only;
+  Coder reads bounded source and prepares revision-checked, approval-gated file
   changes as a stateless worker; Verifier executes approved checks without an
   LLM; optional Scout exposes bounded public-web
   tools without another model loop. Guide is separate and only answers help
   questions.
+- Code changes require all selected repository checks captured before execution.
+  Configure unusual checks in .protoagent/project.json. run_check baseline permits
+  later editing; final verify closes the edit phase. Documentation-only changes
+  can complete unverified. eval coding --plan shows disposable same-model deck and
+  single-agent exercises; --live runs them on the host with narrow fixture approvals.
 """
 
 
@@ -210,6 +227,10 @@ def _settings_context(config: dict[str, Any]) -> str:
     lines.append(
         f"- Optional Scout: {'enabled' if optional_agent_enabled('scout', config) else 'disabled'}"
     )
+    for name in ("tester", "mcp"):
+        lines.append(
+            f"- Optional {name}: {'enabled' if optional_agent_enabled(name, config) else 'disabled'}"
+        )
     label = str(active.get("label") or "")
     if label and label != provider:
         lines.append(f"- Provider label: {label}")

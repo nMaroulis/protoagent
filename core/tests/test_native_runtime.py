@@ -135,6 +135,26 @@ class NativeRuntimeTests(NativeRuntimeCase):
         task = checked.task
         report = RunReport.from_events((*written.report.events, *checked.report.events))
         contract = infer_run_contract("update a file")
+        from protoagent_core.task_record import CheckSpec
+
+        self.attempt.record.checks["native"] = CheckSpec(
+            "native", (sys.executable, "-c", "print('passed')"), str(self.root), {}
+        )
+        self.attempt.record.selected = ("native",)
+        self.attempt.command_checks.update(
+            {
+                item.action_id: "native"
+                for item in checked.report.events
+                if item.type == "action.completed"
+            }
+        )
+        self.attempt.command_phases.update(
+            {
+                item.action_id: "verify"
+                for item in checked.report.events
+                if item.type == "action.completed"
+            }
+        )
         before = await validate_completion(contract, task, report, self.attempt, self.broker)
         self.assertTrue(before.completion["satisfied"])
         self.assertEqual(before.verification["status"], "passed")
@@ -221,12 +241,15 @@ class NativeRuntimeTests(NativeRuntimeCase):
     async def test_sse_mesh_preserves_delegated_native_receipts(self):
         await self.exercise_embedded_mesh("sse")
 
-    async def exercise_embedded_mesh(self, transport, repairs=False):
+    async def test_single_agent_eval_path_preserves_native_approval_and_checks(self):
+        await self.exercise_embedded_mesh("runtime", architecture="single")
+
+    async def exercise_embedded_mesh(self, transport, repairs=False, architecture="deck"):
         from unittest.mock import patch
 
         from protoagent_core.runtime import _run_agent_deck
 
-        target = self.root / "actual.txt"
+        target = self.root / "actual.py"
         release_file = self.root / "release-process"
         saw_live_process = False
         responses = [
@@ -256,6 +279,11 @@ class NativeRuntimeTests(NativeRuntimeCase):
             },
             {"type": "final", "content": "Applied the file and checked it."},
         ]
+        if architecture == "single":
+            for response in responses[:2]:
+                response["type"] = "tool_call"
+                response.pop("agent")
+                response.pop("action")
         if repairs:
             import copy
 
@@ -263,6 +291,22 @@ class NativeRuntimeTests(NativeRuntimeCase):
             repair = copy.deepcopy(responses)
             repair[0]["tool"] = "replace_file"
             responses += copy.deepcopy(repair) + copy.deepcopy(repair)
+        (self.root / ".protoagent").mkdir()
+        command = responses[1]["args"]
+        (self.root / ".protoagent" / "project.json").write_text(
+            json.dumps(
+                {
+                    "checks": [
+                        {
+                            "id": "native",
+                            "argv": command["argv"],
+                            "env": command["env"],
+                            "paths": ["actual.py"],
+                        }
+                    ]
+                }
+            )
+        )
         llm = create_llm("mock", sequential_responses=responses)
 
         async def resolve_ui():
@@ -299,8 +343,12 @@ class NativeRuntimeTests(NativeRuntimeCase):
             with (
                 patch.dict("os.environ", {"PROTOAGENT_AGENT_TRANSPORT": transport}),
                 patch("protoagent_core.agents.architect.create_selected_llm", return_value=llm),
-                patch("protoagent_core.agents.coder.create_selected_llm", return_value=None),
+                patch(
+                    "protoagent_core.agents.coder.create_selected_llm",
+                    return_value=llm if architecture == "single" else None,
+                ),
                 patch("protoagent_core.agents.explorer.create_selected_llm", return_value=None),
+                patch("protoagent_core.agents.tester.create_selected_llm", return_value=None),
                 patch(
                     "protolink.storage.SQLiteRunStore.list_task_records",
                     side_effect=AssertionError("Parent evidence must not scan stored worker tasks"),
@@ -315,6 +363,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
                         None,
                         self.bridge,
                         {"resolved": "small", "label": "Small", "configured": "small"},
+                        architecture=architecture,
                     ),
                     15,
                 )
@@ -328,6 +377,12 @@ class NativeRuntimeTests(NativeRuntimeCase):
             self.assertEqual(len(result["approval_decisions"]), 6)
             return
         self.assertEqual(result["status"], "completed", result["answer"])
+        admission = result["context_admission"]["architect"]
+        self.assertEqual(admission["window_tokens"], 8192)
+        self.assertGreater(admission["request_count"], 0)
+        self.assertLessEqual(
+            admission["estimated_input_tokens"] + admission["reserved_output_tokens"], 8192
+        )
         self.assertTrue(
             saw_live_process, "Worker stdout must arrive while the process is still running"
         )
@@ -349,9 +404,10 @@ class NativeRuntimeTests(NativeRuntimeCase):
             and event["payload"].get("action", {}).get("name") in {"create_file", "execute_command"}
         ]
         self.assertEqual(len(receipts), 2)
-        self.assertTrue(
-            all(event["delegation_id"] and event["parent_action_id"] for event in receipts)
-        )
+        if architecture == "deck":
+            self.assertTrue(
+                all(event["delegation_id"] and event["parent_action_id"] for event in receipts)
+            )
 
     async def test_uncertain_checkpoint_stops_further_mutation_without_replay(self):
         from unittest.mock import patch

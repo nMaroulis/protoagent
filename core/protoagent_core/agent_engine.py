@@ -135,13 +135,19 @@ def get_agent_settings() -> str:
     active = config.get("providers", {}).get(provider, {})
     profile = prompt_profile_status(config, provider=provider, model=str(active.get("model", "")))
     scout_enabled = optional_agent_enabled("scout", config)
-    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
+    tester_enabled = optional_agent_enabled("tester", config)
+    mcp_enabled = optional_agent_enabled("mcp", config)
+    manifest = agent_manifest(
+        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+    )
     return _json(
         {
             "prompt_profile": profile,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
             "scout_enabled": scout_enabled,
+            "tester_enabled": tester_enabled,
+            "mcp_enabled": mcp_enabled,
         }
     )
 
@@ -150,6 +156,23 @@ def configure_optional_agent(name: str, enabled: bool) -> str:
     """Enable or disable a supported optional agent and return deck settings."""
     set_optional_agent_enabled(name, enabled)
     return get_agent_settings()
+
+
+def configure_mcp(args_json: str = "[]") -> str:
+    """Expose explicit MCP setup/probes to frontends without a model."""
+    from .mcp import mcp_command
+
+    args = json.loads(args_json)
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        raise ValueError("MCP command arguments must be a JSON string array")
+    return _json(mcp_command(args))
+
+
+def configure_mcp_text(text: str = "") -> str:
+    """Parse quoted paths for the terminal UI's /mcp command."""
+    import shlex
+
+    return configure_mcp(json.dumps(shlex.split(text)))
 
 
 def run_quality_eval(
@@ -171,6 +194,19 @@ def run_quality_eval(
             limit=limit,
         )
     )
+
+
+def run_coding_eval(
+    mode: str = "plan",
+    profiles: str | None = None,
+    task_ids: str | None = None,
+    limit: int | None = None,
+    workspace: str | None = None,
+) -> str:
+    """Run disposable coding exercises with independent acceptance tests."""
+    from .coding_eval import run_coding_eval as run_eval
+
+    return _json(run_eval(mode=mode, profiles=profiles, task_ids=task_ids, limit=limit))
 
 
 def list_quality_eval_tasks() -> str:
@@ -294,7 +330,11 @@ def doctor(workspace: str | None = None) -> str:
         None,
     )
     scout_enabled = optional_agent_enabled("scout", config)
-    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
+    tester_enabled = optional_agent_enabled("tester", config)
+    mcp_enabled = optional_agent_enabled("mcp", config)
+    manifest = agent_manifest(
+        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+    )
     return _json(
         {
             "python": platform.python_version(),
@@ -310,6 +350,8 @@ def doctor(workspace: str | None = None) -> str:
             else "unknown",
             "prompt_profile": profile,
             "scout_enabled": scout_enabled,
+            "tester_enabled": tester_enabled,
+            "mcp_enabled": mcp_enabled,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
         }
@@ -586,9 +628,11 @@ def _model_response(
         "elapsed_ms": int((time.time() - started) * 1000),
         "run_contract": run_contract,
         "completion_validation": completion,
+        "verification": result.get("verification", {}),
+        "task_record": result.get("task_record", {}),
+        "context_admission": result.get("context_admission", {}),
         "run_report": result.get("run_report", {}),
         "transport_report": result.get("transport_report", {}),
-        "verification": result.get("verification", {}),
     }
 
 

@@ -41,7 +41,7 @@ def workspace_key(workspace: str | None) -> str:
 def checkpoint_store(workspace: str | None = None) -> StorageCheckpointStore:
     """Configure a dedicated native Storage namespace, separate from conversations."""
     if os.name != "posix":
-        raise NotImplementedError("Recoverable Coder writes require POSIX with ProtoLink 0.7.1")
+        raise NotImplementedError("Recoverable Coder writes require POSIX with ProtoLink 0.7.4")
     database = private_file(config.CONFIG_DIR / "recovery" / f"{workspace_key(workspace)}.sqlite")
     return StorageCheckpointStore(
         SQLiteStorage(str(database), table_name="recovery", namespace="file-changes")
