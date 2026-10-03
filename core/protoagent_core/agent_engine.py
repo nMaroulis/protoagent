@@ -35,7 +35,7 @@ from .context import (
     context_status as loom_status,
 )
 from .llm import ollama_context_window_details, validate_protolink
-from .models import discover_models, remember_valid_provider
+from .models import discover_models, model_startup_problem, remember_valid_provider
 from .prompt_profiles import prompt_profile_status
 from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
 
@@ -393,6 +393,9 @@ def process_prompt(
     """
     started = time.time()
     workspace = str(workspace_root(workspace))
+    if progress_path and os.getenv("PROTOAGENT_SCAFFOLD") != "1":
+        if problem := model_startup_problem():
+            return _json({**problem, "elapsed_ms": round((time.time() - started) * 1000)})
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
     _emit_progress(progress_path, f"CLI accepted task for workspace {workspace}.")
     _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
@@ -433,19 +436,19 @@ def process_prompt(
         )
     except Exception as exc:
         _emit_progress(progress_path, f"ProtoLink agent run failed: {exc}")
-        fallback = _fallback_response(
-            prompt,
-            workspace,
-            started,
-            tagged_context,
-            progress_path,
-            loom_context,
+        from .runtime_storage import output_redaction
+
+        return _json(
+            output_redaction().redact(
+                {
+                    "status": "failed",
+                    "answer": "The agent run failed. Check /config and /check, then retry. Details are available in /trace.",
+                    "warning": str(exc),
+                    "events": [f"ProtoLink agent run failed: {exc}"],
+                    "elapsed_ms": round((time.time() - started) * 1000),
+                }
+            )
         )
-        fallback["status"] = "fallback"
-        fallback["headline"] = "ProtoLink agent run failed; showing core diagnostics."
-        fallback["warning"] = str(exc)
-        fallback["events"].append(f"ProtoLink agent run failed: {exc}")
-        return _json(fallback)
 
 
 def _fallback_response(

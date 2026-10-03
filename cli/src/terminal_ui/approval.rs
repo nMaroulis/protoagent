@@ -13,8 +13,9 @@ pub(super) fn approval_prompt(
     app: &TerminalApp,
     approval: &RuntimeApproval,
 ) -> Result<bool> {
+    let mut modal_dimensions = None;
     loop {
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_approval_modal(approval)?;
         let Event::Key(key) = read()? else {
             continue;
@@ -33,6 +34,7 @@ pub(super) fn approval_prompt(
                 } else {
                     show_command_preview(terminal, app, &approval.preview)?;
                 }
+                modal_dimensions = None;
             }
             _ => {}
         }
@@ -46,6 +48,7 @@ fn show_command_preview(
     preview: &str,
 ) -> Result<()> {
     let mut offset = 0usize;
+    let mut modal_dimensions = None;
     loop {
         let (width, height) = super::theme::size();
         let columns = (width.saturating_mul(2) / 3).saturating_sub(8).max(1) as usize;
@@ -54,7 +57,7 @@ fn show_command_preview(
         offset = offset.min(lines.len().saturating_sub(count));
         let mut rows: Vec<_> = lines.iter().skip(offset).take(count).cloned().collect();
         rows.push("Up/Down scroll · Enter/Esc returns to approval".to_string());
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_modal("Command Preview", &rows)?;
         if let Event::Key(key) = read()? {
             match key.code {

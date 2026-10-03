@@ -6,7 +6,7 @@ use crossterm::{
     style::{Print, ResetColor, SetBackgroundColor, SetForegroundColor},
 };
 use std::collections::VecDeque;
-use std::io::{stdout, Stdout, Write};
+use std::io::Write;
 
 use super::input::InputEditor;
 use super::state::TerminalApp;
@@ -45,8 +45,9 @@ fn prompt_input_modal(
 ) -> Result<Option<String>> {
     let history = VecDeque::new();
     let mut editor = InputEditor::with_initial(&history, initial);
+    let mut modal_dimensions = None;
     loop {
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_input_modal(title, rows, &editor, masked)?;
         let key = match read()? {
             Event::Key(key) => key,
@@ -88,10 +89,11 @@ pub(super) fn pick_choice_modal(
 
     let mut filter = String::new();
     let mut selected = initial.min(choices.len().saturating_sub(1));
+    let mut modal_dimensions = None;
     loop {
         let matches = filtered_choices(choices, &filter);
         selected = selected.min(matches.len().saturating_sub(1));
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_choice_picker_modal(title, rows, &filter, &matches, selected)?;
         let Event::Key(key) = read()? else {
             continue;
@@ -127,13 +129,13 @@ pub(super) fn pick_choice_modal(
     }
 }
 
-pub(super) fn draw_modal_backdrop(out: &mut Stdout, _width: u16, _height: u16) -> Result<()> {
+pub(super) fn draw_modal_backdrop(out: &mut impl Write, _width: u16, _height: u16) -> Result<()> {
     queue!(out, Hide, ResetColor)?;
     Ok(())
 }
 
 pub(super) fn draw_modal_shadow(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: u16,
     y: u16,
     width: u16,
@@ -162,7 +164,7 @@ pub(super) fn draw_modal_shadow(
 }
 
 pub(super) fn draw_modal_sides(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: u16,
     y: u16,
     width: u16,
@@ -219,7 +221,7 @@ pub(super) fn draw_exit_modal() -> Result<()> {
     draw_status_modal(
         "Leave ProtoAgent?",
         &[
-            "Leaving already? We were just getting somewhere.".to_string(),
+            "Return to your shell?".to_string(),
             "Esc again exits. Any other key stays.".to_string(),
         ],
         StatusModalKind::Exit,
@@ -235,6 +237,9 @@ enum StatusModalKind {
 
 fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(2)
         .saturating_div(3)
@@ -243,7 +248,7 @@ fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Res
     let modal_height = (rows.len() as u16 + 4).max(7).min(height.saturating_sub(4));
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
     write_at(
@@ -301,7 +306,7 @@ fn draw_status_modal(title: &str, rows: &[String], kind: StatusModalKind) -> Res
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }
 
@@ -312,6 +317,9 @@ pub(super) fn draw_input_modal(
     masked: bool,
 ) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(3)
         .saturating_div(4)
@@ -321,7 +329,7 @@ pub(super) fn draw_input_modal(
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
     let inner_width = modal_width.saturating_sub(4).max(8) as usize;
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
     write_at(
@@ -402,7 +410,7 @@ pub(super) fn draw_input_modal(
         Show,
         ResetColor
     )?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }
 
@@ -414,6 +422,9 @@ fn draw_choice_picker_modal(
     selected: usize,
 ) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
@@ -432,7 +443,7 @@ fn draw_choice_picker_modal(
         .saturating_sub(info_rows as u16)
         .saturating_sub(5) as usize;
     let inner = modal_width.saturating_sub(4).max(10) as usize;
-    let mut out = stdout();
+    let mut out = Vec::new();
 
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
@@ -553,7 +564,7 @@ fn draw_choice_picker_modal(
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }
 

@@ -24,6 +24,16 @@ cargo build --release --locked --manifest-path cli/Cargo.toml
 
 The built binary is `cli/target/release/proto-cli`.
 
+Development and test builds omit debug symbols and incremental compilation
+caches to reduce disk usage. Dependencies remain cached, but recompiling changed
+code may take longer. For source debugging, set `CARGO_PROFILE_DEV_DEBUG=2` when
+building. Generated files in `cli/target/` are disposable; this command removes
+debug build output while keeping the release executable:
+
+```bash
+cargo clean --manifest-path cli/Cargo.toml --profile dev
+```
+
 ## Use
 
 Select a workspace, then start the TUI:
@@ -64,6 +74,31 @@ text while the lower border and status stay anchored. Cached message layouts
 and changed-row painting keep streaming work independent of old answer sizes
 on animation-only ticks.
 
+The header, composer and footer are cached independently. Unchanged frames write
+nothing; input and progress are checked every 32 ms, with 120 ms animation steps.
+Mouse-wheel/PageUp scrolling, resize and Ctrl-L redraw work during replies.
+Pickers use buffered modal frames and keep their background between keystrokes.
+Small windows show a resize hint and preserve the conversation and draft.
+
+No LLM is needed to open the TUI, use static `/help`, change settings or toggle
+agents. Coding requests and `/help QUESTION` need the selected model. An offline
+local server produces an inline setup message before indexing; provider and JSON
+errors leave the interface open. For Ollama, start `ollama serve` and select an
+installed model. `/config` shows its URL, `/model` changes the selection and
+`/trace` shows bounded, redacted diagnostics. Pre-bound SDK console loggers are
+captured so their tracebacks cannot scroll away the terminal UI.
+
+Model discovery and `/check` run in background workers; Esc/Ctrl-C dismisses
+their read-only results. Discovery uses parallel metadata probes and never
+constructs an LLM merely to open the model picker.
+
+Real terminal regression tests use isolated configuration and local mock models:
+
+```bash
+cargo build --release --locked --manifest-path cli/Cargo.toml
+.venv/bin/python cli/tests/tui_smoke.py
+```
+
 `/help QUESTION` and `proto-cli help "QUESTION"` stream Guide help using the
 active model and bundled command reference, without requiring a project.
 
@@ -84,16 +119,17 @@ changes use ProtoLink's revision-aware restoration.
 
 ## Agent Controls
 
-The default runtime has a stateful Architect and task-local Explorer/Coder
-workers plus a tool-only Verifier for approved test/build/lint commands.
-Scout is an optional task-local web research worker and is off by
-default.
+Architect, Explorer, Coder and the tool-only Verifier are required. Tester is an
+optional test-design worker and defaults on. Scout web research and the tool-only
+MCP broker default off. `/agents` shows all three optional workers and their
+toggle commands.
 
 ```bash
 proto-cli agents
 proto-cli agents profile small
+proto-cli agents tester off
 proto-cli agents scout on
-proto-cli agents scout off
+proto-cli agents mcp on
 ```
 
 The same controls are available in the TUI:
@@ -101,11 +137,18 @@ The same controls are available in the TUI:
 ```text
 /agents
 /agents profile small
+/agents tester off
 /agents scout on
-/agents scout off
+/agents mcp on
 ```
 
-Agent-setting changes apply to the next run. When Scout is enabled, the Python
+Use `on` or `off` for any optional worker. Settings persist user-wide and apply
+to the next run; they do not change a running task. Turning Tester off removes
+its inference while required verification remains enforced. `/mcp` sets up the
+broker's servers. Guide knows these controls: `/help how do I disable Tester?`
+returns instructions and current settings without changing them.
+
+When Scout is enabled, the Python
 core registers ProtoLink's `web_search` and `fetch_url` tools with
 `network.read`; Scout has no workspace-write capability.
 
@@ -120,9 +163,11 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 | `/config` | Show redacted configuration. |
 | `/check` | Refresh Python, ProtoLink, web-tool, transport, auth, and provider readiness. |
 | `/version` | Show CLI, core, and planned ACP versions. |
-| `/agents` | Show the agent manifest, prompt profile, and optional Scout state. |
+| `/agents` | Show required roles, prompt profile, and optional Tester/Scout/MCP states. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile. |
 | `/agents scout [on\|off]` | Enable or disable Scout for subsequent runs. |
+| `/agents tester [on\|off]` | Enable or disable test-design inference; required checks remain enforced. |
+| `/agents mcp [on\|off]` | Enable or disable the external-tool broker; use `/mcp` to set up servers. |
 | `/context [QUERY]` | Show Context Loom status or build a source-cited Context Pack. |
 | `/context on`, `/context off` | Enable or disable persistent project conversation memory. |
 | `/context history` | Inspect ProtoLink-owned Architect memory. |

@@ -478,7 +478,7 @@ fn print_cli_help() {
 pub(crate) fn help_availability_text() -> String {
     match selected_model_label() {
         Some(selection) => {
-            format!("Guide is available on {selection}. Ask ProtoAgent usage questions with `/help <question>`.")
+            format!("Guide is configured to use {selection}; its model server must be running. Ask usage questions with `/help <question>`. Static help and setup commands work without an LLM.")
         }
         None => {
             "Static help is available now. Choose a model with `/model` or `proto-cli model`, then ask Guide with `/help <question>`.".to_string()
@@ -510,7 +510,7 @@ async fn stream_help_question(question: &str) -> Result<()> {
                     }
                 }
                 result = &mut task => {
-                    break result?.map_err(|err| anyhow!("Python Guide help error: {err:?}"))?;
+                    break result?.map_err(|err| anyhow!("Python Guide help error: {err}"))?;
                 }
                 _ = tokio::time::sleep(Duration::from_millis(80)) => {
                     print_help_output(progress.read_new_batch(), &mut shown)?;
@@ -595,7 +595,7 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
                     Err(err) => break Err(err.into()),
                 };
                 ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
-                break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
+                break raw.map_err(|err| anyhow!("Python core error: {err}"));
             }
             _ = tokio::time::sleep(Duration::from_millis(140)) => {
                 ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
@@ -935,7 +935,7 @@ fn show_dashboard() -> Result<()> {
         "Use @ inside a task to tag project files".to_string(),
         "/agents shows runtime kernel, RunContract, and worker state".to_string(),
         "/agents profile controls small/medium/large/API prompt modes".to_string(),
-        "/agents scout on|off toggles optional web research for the next run".to_string(),
+        "/agents tester|scout|mcp on|off toggles optional workers for the next run".to_string(),
         "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch RunContract -> Architect -> workers".to_string(),
@@ -1239,7 +1239,7 @@ fn ensure_cli_provider_key(provider: &mut ModelProvider) -> Result<()> {
     );
     let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.id.clone(), api_key)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     if let Some(updated) = load_inventory_with_validation(true)?
         .providers
         .into_iter()
@@ -1378,7 +1378,7 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
     };
 
     call_set_model(provider.id.clone(), model.clone(), base_url)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     print_panel(
         "MODEL SELECTED",
         &[format!("{} / {}", provider.id, model)],
@@ -1403,7 +1403,7 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
 
     let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.clone(), api_key)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     let rows = match load_inventory_with_validation(true)
         .ok()
         .and_then(|inventory| {
@@ -1521,7 +1521,7 @@ fn format_component_version_rows(versions: &[ComponentVersion]) -> Vec<String> {
 
 fn load_component_versions() -> Result<Vec<ComponentVersion>> {
     let json = call_component_versions(env!("CARGO_PKG_VERSION").to_string())
-        .map_err(|err| anyhow!("Python component version error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python component version error: {err}"))?;
     let inventory: ComponentVersionInventory = serde_json::from_str(&json)?;
     Ok(inventory.components)
 }
@@ -1747,7 +1747,7 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
 
 fn load_agent_settings() -> Result<AgentSettings> {
     let raw = call_no_args("get_agent_settings")
-        .map_err(|err| anyhow!("Python agent settings error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python agent settings error: {err}"))?;
     Ok(serde_json::from_str(&raw)?)
 }
 
@@ -1759,7 +1759,7 @@ fn optional_agent_settings(name: &str, enabled: Option<bool>) -> Result<AgentSet
     match enabled {
         Some(enabled) => {
             let raw = call_configure_optional_agent(name.to_string(), enabled)
-                .map_err(|err| anyhow!("Python {name} configuration error: {err:?}"))?;
+                .map_err(|err| anyhow!("Python {name} configuration error: {err}"))?;
             Ok(serde_json::from_str(&raw)?)
         }
         None => load_agent_settings(),
@@ -1791,7 +1791,7 @@ fn format_optional_agent_settings(settings: &AgentSettings, name: &str) -> Vec<S
 
 fn mcp_settings_text(args: &[String]) -> Result<String> {
     let raw = call_mcp_configuration(serde_json::to_string(args)?, false)
-        .map_err(|err| anyhow!("Python MCP setup error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python MCP setup error: {err}"))?;
     Ok(serde_json::to_string_pretty(
         &serde_json::from_str::<Value>(&raw)?,
     )?)
@@ -1799,7 +1799,7 @@ fn mcp_settings_text(args: &[String]) -> Result<String> {
 
 fn mcp_settings_text_input(text: &str) -> Result<String> {
     let raw = call_mcp_configuration(text.to_string(), true)
-        .map_err(|err| anyhow!("Python MCP setup error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python MCP setup error: {err}"))?;
     Ok(serde_json::to_string_pretty(
         &serde_json::from_str::<Value>(&raw)?,
     )?)
@@ -1861,9 +1861,9 @@ fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<Stri
 pub(crate) fn agent_profile_text(value: Option<String>) -> Result<String> {
     let raw = match value {
         Some(value) => call_configure_agent_prompt_profile(Some(value))
-            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+            .map_err(|err| anyhow!("Python prompt profile error: {err}"))?,
         None => call_no_args("get_agent_prompt_profile")
-            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+            .map_err(|err| anyhow!("Python prompt profile error: {err}"))?,
     };
     let status: PromptProfileStatus = serde_json::from_str(&raw)?;
     let selection = if status.model.trim().is_empty() {
@@ -2082,7 +2082,7 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
     }
     if subcommand == "tasks" {
         let raw = call_list_quality_eval_tasks()
-            .map_err(|err| anyhow!("Python quality eval task error: {err:?}"))?;
+            .map_err(|err| anyhow!("Python quality eval task error: {err}"))?;
         if options.json {
             println!("{raw}");
         } else {
@@ -2107,7 +2107,7 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
         workspace_dir_string(),
         subcommand == "coding",
     )
-    .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
+    .map_err(|err| anyhow!("Python quality eval error: {err}"))?;
     if options.json {
         println!("{raw}");
         return Ok(());
@@ -2329,7 +2329,7 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
         None | Some("status") => call_no_args("get_context_settings"),
         Some(value) => call_configure_context_window(Some(value.to_string())),
     }
-    .map_err(|err| anyhow!("Python context configuration error: {err:?}"))?;
+    .map_err(|err| anyhow!("Python context configuration error: {err}"))?;
     let settings: Value = serde_json::from_str(&raw)?;
     let provider = settings
         .get("provider")
@@ -2372,7 +2372,7 @@ pub(crate) fn compact_context_history(values: &[&str]) -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_compact_protolink_history(session_id, strategy.to_string(), limit)
-        .map_err(|err| anyhow!("Python ProtoLink compaction error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink compaction error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let summary = report
         .get("summary")
@@ -2394,7 +2394,7 @@ pub(crate) fn reset_context_history() -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_reset_protolink_history(session_id)
-        .map_err(|err| anyhow!("Python ProtoLink history reset error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink history reset error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let summary = report
         .get("summary")
@@ -2418,7 +2418,7 @@ pub(crate) fn context_history_text() -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_describe_protolink_history(session_id)
-        .map_err(|err| anyhow!("Python ProtoLink history inspection error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink history inspection error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let mut rows = vec![report
         .get("summary")
@@ -2611,7 +2611,7 @@ fn show_context_status() -> Result<()> {
 fn show_context_pack(query: &str) -> Result<()> {
     let workspace = require_project_dir_string()?;
     let raw = call_context_pack(query.to_string(), workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     print_panel(
         "CONTEXT LOOM PACK",
@@ -2705,24 +2705,24 @@ fn load_inventory() -> Result<ModelInventory> {
 
 fn load_inventory_with_validation(validate_api_keys: bool) -> Result<ModelInventory> {
     let json = call_list_models(validate_api_keys)
-        .map_err(|err| anyhow!("Python model discovery error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python model discovery error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 fn load_visible_config() -> Result<VisibleConfig> {
-    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err:?}"))?;
+    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 fn load_doctor() -> Result<DoctorReport> {
-    let json = call_doctor(workspace_dir_string())
-        .map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
+    let json =
+        call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 pub(crate) fn context_status_text(workspace: String) -> Result<String> {
     let raw = call_context_status(workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = vec![context_memory_text()];
     rows.extend(context_status_rows(&value));
@@ -2731,14 +2731,14 @@ pub(crate) fn context_status_text(workspace: String) -> Result<String> {
 
 pub(crate) fn refresh_context_text(workspace: String) -> Result<String> {
     let raw = call_refresh_context(workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     Ok(context_status_rows(&value).join("\n"))
 }
 
 pub(crate) fn context_pack_text(query: String, workspace: String) -> Result<String> {
     let raw = call_context_pack(query, workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = context_pack_rows(&value);
     if let Some(items) = value.get("items").and_then(Value::as_array) {

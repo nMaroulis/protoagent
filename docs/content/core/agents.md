@@ -295,6 +295,10 @@ Guide is not part of the coding mesh. It is used by `/help QUESTION` and has:
 
 Guide receives a static manual and a redacted current-settings snapshot. It
 answers ProtoAgent usage questions, not project coding questions.
+The manual covers Tester, Scout and MCP toggles in both TUI and shell form,
+their defaults, required roles and when settings take effect. Every help call
+receives their current enabled/disabled states. Guide explains how to configure
+the harness; it has no tools to change settings itself.
 
 ## Agent Manifest
 

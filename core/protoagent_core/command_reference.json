@@ -26,7 +26,7 @@
     ],
     [
       "/agents",
-      "Agent roles and capabilities"
+      "Required roles, prompt profile and optional Tester/Scout/MCP states. Toggle an optional worker with /agents NAME on|off; settings apply to the next run."
     ],
     [
       "/agents profile",
@@ -234,7 +234,7 @@
     ],
     [
       "/agents mcp",
-      "Show optional the tool-only MCP broker (default off)."
+      "Show the optional tool-only MCP broker (default off)."
     ],
     [
       "/agents mcp on",

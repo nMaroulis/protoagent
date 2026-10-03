@@ -2,7 +2,6 @@ use anyhow::Result;
 use crossterm::event::{read, Event, KeyCode, KeyModifiers};
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{stdout, Write};
 use std::path::Path;
 
 use super::input::InputEditor;
@@ -102,10 +101,11 @@ pub(super) fn pick_project_file(
 
     let mut filter = String::new();
     let mut selected = 0usize;
+    let mut modal_dimensions = None;
     loop {
         let matches = filtered_files(&files, &filter);
         selected = selected.min(matches.len().saturating_sub(1));
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_file_picker_modal(&root, &filter, &matches, selected)?;
         let Event::Key(key) = read()? else {
             continue;
@@ -154,8 +154,9 @@ fn project_prompt(terminal: &mut TerminalSurface, app: &TerminalApp) -> Result<O
         .to_string();
     let history = VecDeque::new();
     let mut editor = InputEditor::with_initial(&history, &initial);
+    let mut modal_dimensions = None;
     loop {
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         draw_input_modal(
             "Choose Project Folder",
             &[
@@ -293,6 +294,9 @@ fn draw_file_picker_modal(
     selected: usize,
 ) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
@@ -307,7 +311,7 @@ fn draw_file_picker_modal(
     let y = height.saturating_sub(modal_height) / 2;
     let list_rows = modal_height.saturating_sub(7) as usize;
     let inner = modal_width.saturating_sub(4).max(10) as usize;
-    let mut out = stdout();
+    let mut out = Vec::new();
 
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
@@ -423,6 +427,6 @@ fn draw_file_picker_modal(
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }

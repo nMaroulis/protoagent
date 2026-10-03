@@ -6,12 +6,12 @@ use crossterm::{
         Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
     },
 };
-use std::io::{Stdout, Write};
+use std::io::Write;
 use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::inline_style::{inline_code_segments, InlineKind};
-use crate::wrap_lines;
+use crate::{empty_as_unknown, wrap_lines};
 
 use super::input::InputEditor;
 use super::markdown::{self, Code, Span, Style};
@@ -22,7 +22,7 @@ use super::theme::{
 };
 use super::{HEADER_ROWS, INPUT_ROWS};
 
-pub(super) fn draw_header(out: &mut Stdout, width: u16, app: &TerminalApp) -> Result<()> {
+pub(super) fn draw_header(out: &mut impl Write, width: u16, app: &TerminalApp) -> Result<()> {
     let controls_row = HEADER_ROWS.saturating_sub(2);
     let separator_row = HEADER_ROWS.saturating_sub(1);
     write_line(
@@ -66,6 +66,7 @@ pub(super) struct TranscriptCache {
     entries: Vec<CachedMessage>,
     painted: Vec<RenderLine>,
     scroll: usize,
+    requested_scroll: usize,
     #[cfg(test)]
     rebuilds: usize,
 }
@@ -150,7 +151,7 @@ impl TranscriptCache {
 }
 
 pub(super) fn draw_transcript(
-    out: &mut Stdout,
+    out: &mut impl Write,
     width: u16,
     bottom: u16,
     app: &TerminalApp,
@@ -159,11 +160,26 @@ pub(super) fn draw_transcript(
 ) -> Result<()> {
     let top = HEADER_ROWS;
     let bottom = bottom.max(top + 1);
-    cache.update(app, width.saturating_sub(4).max(1) as usize);
+    let columns = width.saturating_sub(4).max(1) as usize;
+    let layout_changed = cache.width != columns || cache.debug != app.debug_mode;
+    let previous_rows = cache.row_count();
+    cache.update(app, columns);
     let visible = bottom.saturating_sub(top) as usize;
     let latest_start = cache.row_count().saturating_sub(visible);
-    let scroll = app.scroll_offset.min(latest_start);
+    let scroll = if app.scroll_offset == 0 || layout_changed {
+        app.scroll_offset
+    } else {
+        // Preserve the viewport while the live answer grows below it; apply
+        // wheel/page deltas relative to the anchored position.
+        cache
+            .scroll
+            .saturating_add(app.scroll_offset.saturating_sub(cache.requested_scroll))
+            .saturating_sub(cache.requested_scroll.saturating_sub(app.scroll_offset))
+            .saturating_add(cache.row_count().saturating_sub(previous_rows))
+    }
+    .min(latest_start);
     let rows = cache.window(latest_start - scroll, visible);
+    let redraw_marker = force || cache.scroll != scroll || cache.painted.first() != rows.first();
     for (index, line) in rows.iter().enumerate() {
         if force || cache.painted.get(index) != Some(line) || (index == 0 && cache.scroll != scroll)
         {
@@ -172,7 +188,8 @@ pub(super) fn draw_transcript(
     }
     cache.painted = rows;
     cache.scroll = scroll;
-    if scroll > 0 && visible > 0 {
+    cache.requested_scroll = app.scroll_offset;
+    if scroll > 0 && visible > 0 && redraw_marker {
         draw_scroll_marker(out, top, width, scroll)?;
     }
     Ok(())
@@ -266,7 +283,7 @@ pub(super) fn composer_height(width: u16, editor: Option<&InputEditor>) -> u16 {
 }
 
 pub(super) fn draw_runtime_status(
-    out: &mut Stdout,
+    out: &mut impl Write,
     width: u16,
     height: u16,
     app: &TerminalApp,
@@ -301,7 +318,7 @@ fn draw_composer_border(out: &mut impl Write, y: u16, width: u16, hint: &str) ->
 }
 
 pub(super) fn draw_input(
-    out: &mut Stdout,
+    out: &mut impl Write,
     width: u16,
     height: u16,
     app: &TerminalApp,
@@ -316,7 +333,6 @@ pub(super) fn draw_input(
     }
     draw_composer_border(out, top + 1, width, "")?;
     draw_composer_border(out, top + rows + 2, width, &composer_hint(editor))?;
-    draw_runtime_status(out, width, height, app)?;
 
     let prompt = " > ";
     let available = width.saturating_sub(prompt.len() as u16 + 4).max(1) as usize;
@@ -380,7 +396,7 @@ fn composer_hint(editor: Option<&InputEditor>) -> String {
     String::new()
 }
 
-fn draw_context_usage(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
+fn draw_context_usage(out: &mut impl Write, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
     write_line(out, y, width, "", muted(), input_bg(), false)?;
     let mut x = 1u16;
     draw_badge(out, &mut x, y, width, "CONTEXT", black(), cyan(), true)?;
@@ -549,27 +565,6 @@ fn row(label: &'static str, value: impl Into<String>, color: Color, bold: bool) 
     }
 }
 
-fn agent_state<'a>(agent: Option<&'a crate::AgentManifest>, fallback: &'a str) -> &'a str {
-    agent
-        .map(|agent| agent.state.trim())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(fallback)
-}
-
-fn agent_memory<'a>(agent: Option<&'a crate::AgentManifest>, fallback: &'a str) -> &'a str {
-    agent
-        .map(|agent| agent.memory.trim())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(fallback)
-}
-
-fn agent_tools(agent: Option<&crate::AgentManifest>, fallback: &str) -> String {
-    agent
-        .filter(|agent| !agent.tools.is_empty())
-        .map(|agent| agent.tools.join(" + "))
-        .unwrap_or_else(|| fallback.to_string())
-}
-
 fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
     let mut rows = Vec::new();
     match app.panel {
@@ -687,82 +682,35 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             }
         }
         PanelView::Agents => {
-            let architect = app.agent_settings.agent("architect");
-            let explorer = app.agent_settings.agent("explorer");
-            let coder = app.agent_settings.agent("coder");
-            let scout = app.agent_settings.agent("scout");
             rows.push(row(
-                "kernel",
-                "ProtoLink: context, budgets, events, policy, reports",
-                magenta(),
-                true,
-            ));
-            rows.push(row(
-                "contract",
-                "writes require Coder, diff/approval, or an explicit blocker",
-                green(),
-                true,
-            ));
-            rows.push(row(
-                "architect",
-                format!(
-                    "{} controller; durable memory {}",
-                    agent_state(architect, "stateful"),
-                    agent_memory(architect, "protoagent-architect"),
-                ),
-                magenta(),
-                true,
-            ));
-            rows.push(row(
-                "workers",
-                format!(
-                    "Explorer read/{} | Coder write/{} | Verifier approved checks",
-                    agent_state(explorer, "stateless"),
-                    agent_state(coder, "stateless"),
-                ),
+                "required",
+                "Architect Explorer Coder Verifier",
                 cyan(),
-                false,
-            ));
-            rows.push(row(
-                "scout",
-                format!(
-                    "{} | {} | /agents scout {}",
-                    if app.agent_settings.is_scout_enabled() {
-                        "ON"
-                    } else {
-                        "OFF"
-                    },
-                    agent_tools(scout, "web_search + fetch_url"),
-                    if app.agent_settings.is_scout_enabled() {
-                        "off"
-                    } else {
-                        "on"
-                    },
-                ),
-                if app.agent_settings.is_scout_enabled() {
-                    green()
-                } else {
-                    yellow()
-                },
                 true,
             ));
-            for name in ["tester", "mcp"] {
+            for name in ["tester", "scout", "mcp"] {
                 let enabled = app.agent_settings.is_enabled(name);
                 rows.push(row(
                     name,
                     format!(
-                        "{} | /agents {name} on|off{}",
+                        "{} | /agents {name} {}{}",
                         if enabled { "ON" } else { "OFF" },
-                        if name == "mcp" {
-                            " | /mcp setup/status"
-                        } else {
-                            " | test design; Verifier remains required"
-                        }
+                        if enabled { "off" } else { "on" },
+                        if name == "mcp" { " | /mcp" } else { "" },
                     ),
                     if enabled { green() } else { yellow() },
                     true,
                 ));
             }
+            rows.push(row(
+                "profile",
+                format!(
+                    "{} | /agents profile",
+                    empty_as_unknown(&app.agent_settings.prompt_profile.resolved),
+                ),
+                magenta(),
+                false,
+            ));
         }
         PanelView::Context => {
             rows.push(row(
@@ -984,7 +932,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
     rows
 }
 
-fn draw_model_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalApp) -> Result<()> {
+fn draw_model_row(out: &mut impl Write, width: u16, y: u16, app: &TerminalApp) -> Result<()> {
     let label_width = 12usize;
     let body_x = label_width as u16 + 1;
     write_at(
@@ -1004,7 +952,7 @@ fn draw_model_row(out: &mut Stdout, width: u16, y: u16, app: &TerminalApp) -> Re
 }
 
 fn draw_panel_rows(
-    out: &mut Stdout,
+    out: &mut impl Write,
     width: u16,
     rows: &[PanelRow],
     max_rows: usize,
@@ -1070,7 +1018,7 @@ fn draw_panel_rows(
 }
 
 fn draw_provider_segments(
-    out: &mut Stdout,
+    out: &mut impl Write,
     start_x: u16,
     y: u16,
     width: u16,
@@ -1113,7 +1061,12 @@ fn provider_segment_color(segment: &str) -> Color {
     }
 }
 
-fn draw_scroll_marker(out: &mut Stdout, y: u16, width: u16, scroll_offset: usize) -> Result<()> {
+fn draw_scroll_marker(
+    out: &mut impl Write,
+    y: u16,
+    width: u16,
+    scroll_offset: usize,
+) -> Result<()> {
     write_line(out, y, width, "", text(), bg(), false)?;
     let mut x = 2u16;
     draw_badge(
@@ -1149,7 +1102,7 @@ fn draw_scroll_marker(out: &mut Stdout, y: u16, width: u16, scroll_offset: usize
     Ok(())
 }
 
-fn draw_bottom_status(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
+fn draw_bottom_status(out: &mut impl Write, y: u16, width: u16, app: &TerminalApp) -> Result<()> {
     write_line(out, y, width, "", muted(), input_bg(), false)?;
     let mut x = 1u16;
     draw_badge(out, &mut x, y, width, "PROJECT", black(), magenta(), true)?;
@@ -1194,7 +1147,7 @@ fn draw_bottom_status(out: &mut Stdout, y: u16, width: u16, app: &TerminalApp) -
 }
 
 fn draw_activity_inline(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: &mut u16,
     y: u16,
     width: u16,
@@ -1229,7 +1182,7 @@ fn draw_activity_inline(
 
 #[allow(clippy::too_many_arguments)] // Terminal drawing primitives keep coordinates and style explicit.
 fn draw_badge(
-    out: &mut Stdout,
+    out: &mut impl Write,
     x: &mut u16,
     y: u16,
     width: u16,
@@ -1397,7 +1350,7 @@ fn activity_color(agent: &str) -> Color {
     }
 }
 
-fn draw_command_bar(out: &mut Stdout, y: u16, width: u16, active: PanelView) -> Result<()> {
+fn draw_command_bar(out: &mut impl Write, y: u16, width: u16, active: PanelView) -> Result<()> {
     write_line(out, y, width, "", muted(), panel_bg(), false)?;
     let commands = [
         (PanelView::Dashboard, "/dashboard"),
@@ -1624,6 +1577,75 @@ impl RenderLine {
 #[cfg(test)]
 mod context_meter_tests {
     use super::{compact_tokens, meter_fill};
+
+    #[test]
+    fn scrolling_stays_anchored_while_the_answer_grows() {
+        use super::*;
+        let mut app = TerminalApp::for_test();
+        app.push(
+            super::super::state::Role::User,
+            "You",
+            &(0..40)
+                .map(|n| format!("history line {n}\n"))
+                .collect::<String>(),
+        );
+        app.begin_response("guide");
+        let mut cache = TranscriptCache::default();
+        draw_transcript(&mut Vec::new(), 80, 20, &app, &mut cache, false).unwrap();
+        app.scroll_up(8);
+        draw_transcript(&mut Vec::new(), 80, 20, &app, &mut cache, false).unwrap();
+        let mut unchanged = Vec::new();
+        draw_transcript(&mut unchanged, 80, 20, &app, &mut cache, false).unwrap();
+        assert!(
+            unchanged.is_empty(),
+            "an unchanged scrolled viewport should not repaint its marker"
+        );
+        let before = cache.painted.clone();
+        let index = app.active_response.unwrap();
+        Arc::make_mut(&mut app.messages[index]).body = "new answer row\n".repeat(6);
+        draw_transcript(&mut Vec::new(), 80, 20, &app, &mut cache, false).unwrap();
+        assert!(
+            cache.painted == before,
+            "growing answer moved the historical viewport"
+        );
+        app.jump_to_bottom();
+        draw_transcript(&mut Vec::new(), 80, 20, &app, &mut cache, false).unwrap();
+        assert_eq!(cache.scroll, 0);
+        assert!(cache
+            .painted
+            .iter()
+            .any(|row| row.text.contains("new answer row")));
+    }
+
+    #[test]
+    fn agents_panel_displays_every_optional_worker_and_its_toggle() {
+        use super::*;
+        let mut app = TerminalApp::for_test();
+        app.panel = PanelView::Agents;
+        for width in [50, 80, 100] {
+            let mut output = vec![];
+            draw_header(&mut output, width, &app).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            for toggle in ["/agents tester off", "/agents scout on", "/agents mcp on"] {
+                assert!(output.contains(toggle), "width={width}, toggle={toggle}");
+            }
+            assert!(output.contains("Architect Explorer Coder Verifier"));
+        }
+        app.agent_settings = serde_json::from_value(serde_json::json!({
+            "agents": [
+                {"name": "tester", "role": "test design", "enabled": false},
+                {"name": "scout", "role": "web research", "enabled": true},
+                {"name": "mcp", "role": "external tools", "enabled": true}
+            ]
+        }))
+        .unwrap();
+        let mut output = vec![];
+        draw_header(&mut output, 80, &app).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for toggle in ["/agents tester on", "/agents scout off", "/agents mcp off"] {
+            assert!(output.contains(toggle));
+        }
+    }
 
     #[test]
     fn cache_invalidates_edits_finalization_resize_debug_and_clear() {

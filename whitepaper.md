@@ -421,6 +421,15 @@ The terminal UI provides corresponding `/agents` and `/mcp` commands. Optional
 settings persist in user configuration and apply to the next run. A run retains
 its own configuration snapshot.
 
+The operator interface remains usable without a model for setup and inspection.
+Model requests check local readiness before retrieval and agent construction;
+unavailability is an explicit failure or setup requirement. Rendering and input
+handling remain separate from model execution: the frontend caches unchanged
+regions, keeps navigation responsive during a run, and captures provider console
+diagnostics rather than allowing them to disrupt terminal output. These interface
+properties support operator control; they do not establish lower inference
+latency or better task accuracy.
+
 The coding evaluation creates disposable exercises for empty-input arithmetic,
 whitespace normalization and cross-file boolean conversion. It compares the
 deck with an internal single-agent condition, using an independent acceptance

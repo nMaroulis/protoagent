@@ -10,6 +10,11 @@ See [Verify & Recover](verification-and-recovery.md) for command approvals and f
 
 TUI recovery commands are `/checkpoints` and `/undo [id]`. Enter submits a prompt;
 Ctrl-J adds a newline, Tab completes slash commands, and Ctrl-R searches history.
+Ctrl-L redraws the screen. Scrolling and resize work during replies. Esc/Ctrl-C
+cancels a run or dismisses background model discovery and runtime checks.
+Static help and setup controls work without a running model; Guide questions
+and coding requests require one. See [Fullscreen TUI](tui.md) for offline errors
+and rendering behavior.
 
 ## Shell Commands
 
@@ -74,7 +79,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the runtime architecture panel; shows RunContract flow, worker state, prompt profile, and optional-worker ON/OFF states. |
+| `/agents` | Pin the Agents panel; shows required roles, prompt profile, all optional-worker ON/OFF states and their toggle commands. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the deck prompt profile. |
 | `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
 | `/agents scout [on\|off]` | Show or change optional Scout for subsequent runs. |

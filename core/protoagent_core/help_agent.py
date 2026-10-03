@@ -12,8 +12,10 @@ from typing import Any
 
 from protolink import Agent, AgentGroup, CapabilityPolicy, RunBudget, RunContext, Task
 
+from .agents.common import QUIET_LOGGER
 from .config import CONFIG_DIR, optional_agent_enabled, visible_config
 from .llm import create_llm_from_config
+from .models import model_startup_problem
 from .prompt_profiles import prompt_profile_status
 from .runtime import _content_to_text, _run_event_summary, _streaming_enabled
 from .runtime_bridge import RuntimeBridge
@@ -32,6 +34,16 @@ Manual:
 - ProtoAgent is a local-first coding-agent console. The Rust CLI/TUI embeds the
   Python core through PyO3. ProtoLink is the agent runtime engine.
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
+- The TUI and static `/help` work without a running LLM. Coding and
+  `/help QUESTION` require the selected model. For an unavailable Ollama server,
+  start `ollama serve`, ensure the chosen model is installed, then retry.
+  `/config` shows the URL; `/model` changes the selection. Setup errors stay
+  inline; `/trace` shows captured diagnostics. A configured model is not proof
+  that its server is reachable. Model discovery uses metadata, not inference.
+- Ctrl-L redraws the UI. Wheel/PageUp/PageDown and resize work during replies;
+  Ctrl-End returns to live output. Esc/Ctrl-C dismisses model discovery or
+  `/check`; an already-started read-only probe may finish in the background.
+  Small windows show a resize hint and retain the draft and conversation.
 - One-shot task: `proto-cli run "task"`.
 - The TUI streams answers under AGENT / architect or AGENT / guide with a
   steady mint cursor on the text background and animated thinking dots. Bold,
@@ -107,10 +119,14 @@ Manual:
   `proto-cli agents scout on|off`.
 - `/agents tester on|off` toggles optional test design (default on). Architect
   defines criteria and Coder adds regressions when it is off; Verifier remains
-  required. Architect, Explorer, Coder and Verifier cannot be disabled.
+  required. Shell: `proto-cli agents tester on|off`.
+  Architect, Explorer, Coder and Verifier cannot be disabled. Tester, Scout and
+  MCP settings persist user-wide and apply to the next run; a running task keeps
+  its original settings. Use `/agents` to inspect their current ON/OFF states.
 - `/mcp` shows model-free MCP setup/status. `/mcp add NAME FILE.json` imports a
   stdio, SSE or Streamable HTTP server with explicit allow_tools. `/mcp on|off`
-  toggles the optional model-free broker (default off). `/mcp test NAME` discovers
+  toggles the optional model-free broker (default off). `/agents mcp on|off` and
+  `proto-cli agents mcp on|off` toggle the same setting. `/mcp test NAME` discovers
   only; `/mcp tools NAME TOOL` reads one schema. Both explicitly connect and never
   invoke a server tool. `/mcp remove NAME` removes configuration. Shell equivalents
   start with `proto-cli mcp`. Broker calls require approval, have no infer loop
@@ -298,8 +314,40 @@ def answer_help_question(question: str, progress_path: str | None = None) -> dic
 
 
 async def _answer_help_question(question: str, progress_path: str | None = None) -> dict[str, Any]:
-    started = time.monotonic()
     bridge = RuntimeBridge(progress_path)
+    started = time.monotonic()
+    try:
+        with bridge.capture_console():
+            if progress_path and (problem := model_startup_problem()):
+                return {
+                    **problem,
+                    "agent": "guide",
+                    "responder": "guide",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
+                }
+            return await _run_help_question(question, bridge)
+    except Exception as exc:
+        if not progress_path:
+            raise
+        detail = f"Guide failed: {exc}"
+        bridge.emit(detail)
+        return bridge.redaction.redact(
+            {
+                "agent": "guide",
+                "responder": "guide",
+                "status": "failed",
+                "answer": "Guide could not answer. Check /config and /check, then retry. Static /help remains available; /trace shows diagnostics.",
+                "warning": str(exc),
+                "events": [detail],
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+            }
+        )
+    finally:
+        bridge.cleanup()
+
+
+async def _run_help_question(question: str, bridge: RuntimeBridge) -> dict[str, Any]:
+    started = time.monotonic()
     config = visible_config()
     provider = str(config.get("active_provider", "ollama"))
     active = config.get("providers", {}).get(provider, {})
@@ -339,6 +387,7 @@ async def _answer_help_question(question: str, progress_path: str | None = None)
         state=[],
         policy=CapabilityPolicy({}, default_effect="deny"),
         expose_chat=False,
+        logger=QUIET_LOGGER,
         verbosity=0,
     )
     task = Task.create_infer(prompt=bridge.redaction.redact(_build_help_prompt(question, config)))

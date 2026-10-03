@@ -2,8 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::{
-    empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
-    load_visible_config,
+    empty_as_unknown, format_prompt_profile, load_agent_settings, load_visible_config,
     progress::{ContextUsage, LiveOutput},
     AgentSettings, CoreResponse, DoctorReport, ModelInventory, INPUT_HISTORY_CAPACITY,
 };
@@ -26,6 +25,7 @@ pub(super) struct TerminalApp {
     pub(super) active_response: Option<usize>,
     answer_revision: Option<u64>,
     pub(super) models_loading: bool,
+    inventory_summary: Option<(String, String)>,
     pub(super) debug_mode: bool,
 }
 
@@ -54,6 +54,7 @@ impl TerminalApp {
             active_response: None,
             answer_revision: None,
             models_loading: false,
+            inventory_summary: None,
             debug_mode: false,
         }
     }
@@ -90,12 +91,18 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh(&mut self, doctor: Option<&DoctorReport>) {
-        self.status = StatusSnapshot::load(doctor, false);
-    }
-
-    pub(super) fn refresh_models(&mut self) {
-        self.status = StatusSnapshot::load(None, true);
-        self.models_loading = false;
+        let mut next = StatusSnapshot::load(doctor);
+        if let Some((models, providers)) = &self.inventory_summary {
+            next.model_summary = models.clone();
+            next.provider_summary = providers.clone();
+        }
+        if doctor.is_none()
+            && next.provider == self.status.provider
+            && next.model == self.status.model
+        {
+            next.runtime = self.status.runtime.clone();
+        }
+        self.status = next;
     }
 
     pub(super) fn refresh_agent_settings(&mut self) -> anyhow::Result<()> {
@@ -114,6 +121,10 @@ impl TerminalApp {
 
     pub(super) fn apply_model_inventory(&mut self, inventory: &ModelInventory) {
         self.status.apply_inventory(inventory);
+        self.inventory_summary = Some((
+            self.status.model_summary.clone(),
+            self.status.provider_summary.clone(),
+        ));
         self.models_loading = false;
     }
 
@@ -538,7 +549,7 @@ pub(super) struct StatusSnapshot {
 }
 
 impl StatusSnapshot {
-    fn load(doctor: Option<&DoctorReport>, validate_api_keys: bool) -> Self {
+    fn load(doctor: Option<&DoctorReport>) -> Self {
         let mut snapshot = Self {
             provider: "unknown".to_string(),
             model: "not selected".to_string(),
@@ -583,12 +594,6 @@ impl StatusSnapshot {
                 .count();
             snapshot.provider_summary =
                 format!("{configured} configured provider(s); /models scans live status");
-        }
-        if validate_api_keys {
-            if let Ok(inventory) = load_inventory_with_validation(true) {
-                snapshot.model_summary = model_summary(&inventory);
-                snapshot.provider_summary = provider_summary(&inventory);
-            }
         }
         if let Some(report) = doctor {
             snapshot.runtime = doctor_summary(report);

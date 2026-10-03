@@ -67,6 +67,7 @@ class StreamingTests(NativeRuntimeCase):
             with (
                 patch("protoagent_core.agents.architect.create_selected_llm", return_value=llm),
                 patch("protoagent_core.help_agent.create_llm_from_config", return_value=llm),
+                patch("protoagent_core.help_agent.model_startup_problem", return_value=None),
                 patch(
                     "protoagent_core.help_agent.visible_config",
                     return_value={

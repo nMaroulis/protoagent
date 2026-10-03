@@ -10,11 +10,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 from .config import (
     API_PROVIDERS,
+    DEFAULT_BASE_URLS,
     ENV_KEYS,
     PROVIDER_LABELS,
     load_config,
@@ -63,23 +67,109 @@ VALIDATION_RETRY_TTL_SECONDS = 30.0
 _VALIDATION_CACHE: dict[tuple[str, str, str, str], tuple[float, dict[str, str]]] = {}
 
 
+def model_startup_problem() -> dict[str, Any] | None:
+    """Check the selected CLI model before indexing or constructing agent LLMs.
+
+    Only local server metadata is probed, with a short timeout and no inference.
+    Cloud authentication is left to the actual request; setup needs no model.
+    This is a readiness snapshot, not a guarantee that a later run will succeed.
+    """
+    config = visible_config()
+    provider = str(config.get("active_provider", "ollama"))
+    model = str(config.get("providers", {}).get(provider, {}).get("model") or "")
+
+    def problem(answer: str, status: str = "input_required") -> dict[str, Any]:
+        return {"status": status, "provider": provider, "model": model, "answer": answer}
+
+    if not model:
+        return problem(
+            "No model is selected. Use /model to choose one. Static /help and setup commands work without an LLM."
+        )
+    # Mock/third-party providers can supply their own readiness contract.
+    if provider not in DEFAULT_BASE_URLS:
+        return None
+    cfg = provider_config(provider)
+    if provider == "llama.cpp-local":
+        if not Path(model).expanduser().is_file():
+            return problem(
+                "The selected GGUF file is missing. Use /model to choose an existing model file."
+            )
+        return None
+    if provider in API_PROVIDERS - {"openai-compatible"}:
+        if not cfg.get("api_key"):
+            return problem(
+                f"{PROVIDER_LABELS[provider]} needs an API key. Set it with /key {provider}, or choose a local model with /model."
+            )
+        return None
+
+    base_url = str(cfg.get("base_url") or DEFAULT_BASE_URLS[provider]).rstrip("/")
+    url = (
+        f"{base_url}/api/tags" if provider == "ollama" else _openai_compatible_models_url(base_url)
+    )
+    headers = {"Authorization": f"Bearer {cfg['api_key']}"} if cfg.get("api_key") else None
+    timeout = (
+        1.0
+        if urllib.parse.urlsplit(base_url).hostname in {"localhost", "127.0.0.1", "::1"}
+        else 3.0
+    )
+    response = _get_json(url, headers=headers, timeout=timeout)
+    # Some compatible servers expose chat but no model-list endpoint. Let the
+    # native provider make the actual request rather than rejecting those setups.
+    if response.get("status_code") in {404, 405, 501}:
+        return None
+    if response.get("status_code") in {401, 403}:
+        return problem(
+            "The model server rejected authentication. Check its API key with /key openai-compatible and its URL in /config, then retry."
+        )
+    if not response.get("ok"):
+        hint = (
+            "Start Ollama (ollama serve)"
+            if provider == "ollama"
+            else f"Start the {PROVIDER_LABELS[provider]} server"
+        )
+        return problem(
+            f"Cannot reach the selected {PROVIDER_LABELS[provider]} model server. {hint}, check the base URL in /config, then retry. Use /model to choose another provider. Setup and static /help remain available.",
+            "failed",
+        )
+    if not isinstance(response.get("data"), dict):
+        return problem(
+            "The configured model server returned invalid metadata. Check its URL in /config or choose another server with /model.",
+            "failed",
+        )
+    if provider == "ollama":
+        names = {
+            str(item.get("name") or item.get("model") or "")
+            for item in response.get("data", {}).get("models", [])
+        }
+        if model not in names and f"{model}:latest" not in names:
+            return problem(
+                f"Ollama is running, but {model} is not installed. Pull it with ollama pull or choose an installed model with /model."
+            )
+    return None
+
+
 def discover_models(validate_api_keys: bool = False) -> dict[str, Any]:
     """Return a serializable inventory of local and configured API models."""
     config = visible_config()
     active_provider = config.get("active_provider", "ollama")
     active_model = config.get("providers", {}).get(active_provider, {}).get("model", "")
 
-    providers = [
-        _discover_ollama(),
-        _discover_lmstudio(),
-        _discover_openai_compatible(),
-        _discover_llamacpp_server(),
-        _discover_llamacpp_local(),
+    probes: list[Callable[[], dict[str, Any]]] = [
+        _discover_ollama,
+        _discover_lmstudio,
+        _discover_openai_compatible,
+        _discover_llamacpp_server,
+        _discover_llamacpp_local,
     ]
-    providers.extend(
-        _api_provider(provider, validate_key=validate_api_keys)
+    probes.extend(
+        partial(_api_provider, provider, validate_key=validate_api_keys)
         for provider in sorted(API_PROVIDERS - {"openai-compatible"})
     )
+    # Independent metadata requests run together, in a bounded pool. Keep the
+    # inventory order stable and never instantiate LLMs just to open a picker.
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="model-discovery") as pool:
+        pending = [pool.submit(probe) for probe in probes]
+        providers = [future.result() for future in pending]
 
     return {
         "config_path": config["config_path"],
@@ -287,15 +377,14 @@ def _validate_api_key(
     if cached is not None:
         return cached
 
-    protolink_validation = _validate_with_protolink(provider)
-    if protolink_validation["status"] == "valid":
-        _store_validation(cache_key, protolink_validation)
-        return protolink_validation
-
     request = _api_key_validation_request(provider, api_key, base_url)
     if request is None:
-        _store_validation(cache_key, protolink_validation)
-        return protolink_validation
+        validation = {
+            "status": "unverified",
+            "hint": "API key present; validation happens on the next model request.",
+        }
+        _store_validation(cache_key, validation)
+        return validation
 
     url, headers = request
     response = _get_json(url, timeout=2.0, headers=headers)
@@ -311,8 +400,6 @@ def _validate_api_key(
         _store_validation(cache_key, validation)
         return validation
     error = str(response.get("error", "provider did not return a validation response"))
-    if protolink_validation["hint"]:
-        error = f"{error}; {protolink_validation['hint']}"
     validation = {
         "status": "unverified",
         "hint": f"API key present, but validation was inconclusive: {error}",
@@ -379,28 +466,6 @@ def remember_valid_provider(provider: str, model: str = "", base_url: str = "") 
             "hint": "API key/model recently succeeded in a live ProtoAgent run.",
         },
     )
-
-
-def _validate_with_protolink(provider: str) -> dict[str, str]:
-    """Validate provider connectivity through Protolink when available."""
-    try:
-        from .llm import create_llm_from_config
-
-        llm = create_llm_from_config(provider)
-        if llm.validate_connection():
-            return {
-                "status": "valid",
-                "hint": "API key and selected model validated through Protolink.",
-            }
-        return {
-            "status": "unverified",
-            "hint": "Protolink could not validate the key/model combination.",
-        }
-    except Exception as exc:
-        return {
-            "status": "unverified",
-            "hint": f"Protolink validation unavailable: {exc}",
-        }
 
 
 def _api_key_validation_request(

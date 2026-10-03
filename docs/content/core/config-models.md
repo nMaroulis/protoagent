@@ -95,8 +95,8 @@ hint, key metadata, and normalized model records.
 
 Validation strategy:
 
-1. Try ProtoLink validation through the configured LLM when possible.
-2. Fall back to provider model-list endpoint.
+1. Use the provider model-list endpoint without constructing an LLM or calling inference.
+2. Leave unsupported or inconclusive authentication checks unverified.
 3. Cache valid results longer than uncertain results.
 4. Mark a provider as recently valid after a successful live run.
 
@@ -108,6 +108,13 @@ Cache TTLs:
 | Invalid or unverified | 30 seconds |
 
 The cache key hashes the API key so raw secrets are not stored in memory keys.
+
+Model inventory probes run in a bounded pool, preserving provider order. CLI
+requests also perform a short selected-model readiness check before indexing:
+missing selection, local GGUF file, local server or Ollama model is reported
+inline. This check does not run for direct library callers without a frontend
+progress bridge. Cloud connectivity is determined by the actual native request.
+See the [TUI guide](../cli/tui.md) for offline behavior and probe timeouts.
 
 ## LLM Construction
 

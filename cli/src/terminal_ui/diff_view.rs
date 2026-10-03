@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{read, Event, KeyCode, KeyModifiers};
 use crossterm::style::Color;
-use std::io::{stdout, Write};
+use std::io::Write;
 
 use crate::diff::{
     compact_diff_stats, format_file_heading, format_guttered_line, parse_diff, DiffLineKind,
@@ -56,8 +56,9 @@ pub(super) fn show_diff_modal(
 ) -> Result<()> {
     let review = parse_diff(diff);
     let mut scroll = 0usize;
+    let mut modal_dimensions = None;
     loop {
-        terminal.render(app, None)?;
+        terminal.prepare_modal(app, &mut modal_dimensions)?;
         let max_scroll = draw_diff_modal(title, &review, scroll)?;
         scroll = scroll.min(max_scroll);
         let Event::Key(key) = read()? else {
@@ -80,6 +81,9 @@ pub(super) fn show_diff_modal(
 
 pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
@@ -88,7 +92,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let modal_height = 14u16.min(height.saturating_sub(4)).max(11);
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
 
@@ -247,12 +251,15 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }
 
 fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<usize> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(scroll);
+    }
     let modal_width = width
         .saturating_mul(9)
         .saturating_div(10)
@@ -272,7 +279,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     let max_scroll = lines.len().saturating_sub(body_rows);
     let start = scroll.min(max_scroll);
 
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
     write_at(
@@ -381,7 +388,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(max_scroll)
 }
 
@@ -444,7 +451,7 @@ fn diff_kind_label(kind: DiffLineKind) -> &'static str {
 }
 
 fn draw_button(
-    out: &mut std::io::Stdout,
+    out: &mut impl Write,
     x: u16,
     y: u16,
     width: u16,

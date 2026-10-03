@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from .agents import create_agent_deck
 from .agents.common import (
+    QUIET_LOGGER,
     RUNTIME_SCOPES,
     create_configured_transport,
     create_runtime_auth,
@@ -50,23 +51,24 @@ def run_selected_model(
     bridge = RuntimeBridge(progress_path)
     run_state = {}
     try:
-        return asyncio.run(
-            _run_agent_deck(
-                prompt,
-                provider,
-                model,
-                workspace,
-                session_id,
-                bridge,
-                profile,
-                user_prompt=user_prompt,
-                scout_enabled=optional_agent_enabled("scout", config),
-                tester_enabled=optional_agent_enabled("tester", config),
-                mcp_enabled=optional_agent_enabled("mcp", config),
-                mcp_config=config,
-                run_state=run_state,
+        with bridge.capture_console():
+            return asyncio.run(
+                _run_agent_deck(
+                    prompt,
+                    provider,
+                    model,
+                    workspace,
+                    session_id,
+                    bridge,
+                    profile,
+                    user_prompt=user_prompt,
+                    scout_enabled=optional_agent_enabled("scout", config),
+                    tester_enabled=optional_agent_enabled("tester", config),
+                    mcp_enabled=optional_agent_enabled("mcp", config),
+                    mcp_config=config,
+                    run_state=run_state,
+                )
             )
-        )
     except Exception as exc:
         handle = run_state.get("handle")
         if handle is None:
@@ -286,6 +288,7 @@ async def _run_agent_deck(
             },
             policy=CapabilityPolicy({"workflow.execute": "allow"}, default_effect="deny"),
             expose_chat=False,
+            logger=QUIET_LOGGER,
             verbosity=0,
             run_store=store,
         )
