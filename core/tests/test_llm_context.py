@@ -27,6 +27,7 @@ class OllamaContextTests(unittest.TestCase):
             "model": "gemma4:e4b",
             "base_url": "http://localhost:11434",
             "api_key": "",
+            "tool_calling": "json",
         }
         with patch("protoagent_core.llm.provider_config", return_value=config):
             kwargs = llm_kwargs("ollama")
@@ -48,6 +49,7 @@ class OllamaContextTests(unittest.TestCase):
             "model": "gemma4:e4b",
             "base_url": "http://localhost:11434",
             "api_key": "",
+            "tool_calling": "json",
         }
 
         class FakeLLM:
@@ -79,6 +81,9 @@ class OllamaContextTests(unittest.TestCase):
         self.assertTrue(report["auth_ready"])
         self.assertTrue(report["transport_ready"])
         self.assertTrue(report["web_tools_ready"])
+        self.assertTrue(report["subagents_ready"])
+        self.assertTrue(report["context_policy_ready"])
+        self.assertTrue(report["user_input_ready"])
         self.assertTrue(report["agent_ready"], report["error"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")

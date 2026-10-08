@@ -52,6 +52,32 @@ those helpers through `get_agent_settings()` and
 `configure_optional_agent()`. Scout is not constructed or registered while
 disabled.
 
+## Explicit model fallback
+
+Provider settings may include `fallback_models`, with at most two distinct
+same-provider names. This advanced setting is edited in the existing
+`~/.protoagent/config.json`; no setup command is added:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "model": "your-selected-small-model",
+      "fallback_models": ["your-installed-backup-model"]
+    }
+  }
+}
+```
+
+An absent or empty list disables routing. The selected model remains primary.
+ProtoLink's `RoutedLLM` uses the portable JSON action protocol, tries each configured
+candidate once per eligible request failure, and charges every attempt to the
+shared budget. Exposed stream content, validation/policy errors and authentication
+failures prevent fallback. Completed tools are never repeated. All candidates use
+the same provider endpoint, credentials and configured context window; no cloud
+provider or stronger model is selected implicitly. Ensure local backups are installed.
+Routing changes the request contract, so record it when comparing eval results.
+
 ## Provider Aliases
 
 `normalize_provider()` accepts common aliases:
@@ -133,6 +159,13 @@ model_params["num_ctx"] = ollama_context_window(cfg)
 
 The same value is written into `LLMModelProfile.context_window`, so request
 parameters and UI metrics do not drift apart.
+
+Ollama also receives `supports_tool_calling=True` when `/api/show` advertises
+the selected model's `tools` capability. The bounded metadata probe is cached;
+missing/unsupported metadata preserves ProtoLink's JSON fallback. Optional
+`providers.ollama.tool_calling` selects `auto` (default), `native` or `json`;
+`PROTOAGENT_OLLAMA_TOOL_CALLING` supplies the mode when the config field is absent.
+Both channels use the engine's typed action validation and dispatch.
 
 ## ProtoLink Readiness
 

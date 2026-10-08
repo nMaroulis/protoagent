@@ -109,7 +109,7 @@ Optional workers are user-controlled: `/agents tester on|off` changes test desig
 (default on), while Scout/MCP default off. Disabling Tester removes its model
 without bypassing required checks. `/mcp` configures named external tool servers
 without an LLM. The broker returns one schema and executes approved allowlisted
-calls through ProtoLink 0.7.4, keeping large catalogs out of small-model prompts.
+calls through ProtoLink 0.8.0, keeping large catalogs out of small-model prompts.
 See [MCP Broker](core/mcp.md) for setup and effect boundaries.
 | `core/protoagent_core/context/` | Context Loom index, SQLite store, pack builder, schemas. |
 | `core/protoagent_core/history.py` | ProtoLink state describe, compact, reset, and persistence helpers. |

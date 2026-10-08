@@ -171,6 +171,28 @@ The Architect is the routing authority. Workers have task-local contexts and do
 not create their own delegation trees. This bounds coordination depth and makes
 handoffs visible, although it also makes the controller a potential bottleneck.
 
+Delegation is supervised by the execution kernel. The parent owns each child's
+lifetime, receives its recorded outcome and drains unfinished children when the
+parent stops. Child work consumes a shared root budget and must satisfy ancestor
+policies as well as its own role policy. Starting a fresh conversation therefore
+does not grant a fresh budget or broader authority.
+
+The default schedule is sequential. Independent contexts can reduce irrelevant
+history without requiring simultaneous inference. On a shared local model runner,
+parallel model calls can contend for memory and compute; any benefit must be
+measured. Child creation, limits and cancellation remain software responsibilities,
+so the small model continues to choose one named worker action at a time.
+
+User clarification is another bounded source of evidence. When repository
+inspection cannot settle a requirement or preference, the controller can ask one
+concrete question and incorporate the answer before continuing. Workers report
+missing information to the controller rather than competing for the user's
+attention. The kernel represents the exchange as a tool action with correlated
+results, deadlines and cancellation. A skipped or expired question contains no
+answer, and feedback does not expand execution authority. This mechanism can
+reduce pressure on a small model to guess; its effect on correctness and user
+effort still requires measurement.
+
 Separating test design from editing can provide another perspective on a
 change. It does not establish independent correctness: both workers may use the
 same model, misunderstand the same requirement or overlook the same case.
@@ -196,8 +218,11 @@ it needs directly. Exact edits refer to observed source and a resource revision;
 ambiguous or stale replacements fail before mutation.
 
 Request admission accounts for instructions, task state, observations, tool
-schemas and agent metadata while reserving output space. Older observations can
-be evicted, keeping complete tool-call/result groups together. Obligations
+schemas and agent metadata while reserving output space. Complete old turns can
+be pruned and acknowledged observations cleared while preserving correlation.
+Large results become bounded previews with scoped references, allowing later
+retrieval of a particular slice. This changes the model's observation rather than
+the authority of the execution receipt. Obligations
 remain in runtime state, and missing source can be read again. Required content
 that cannot fit should produce an explicit failure rather than silent removal
 of the current task.
@@ -206,6 +231,14 @@ Compact prompts reduce repeated protocol examples and unnecessary output
 schemas while retaining exact input contracts. Prompt profiles can adjust
 verbosity and coordination style; they do not change permissions. Capability
 inference from a model name remains an approximation that a user can override.
+
+The action channel should remain distinct from the answer channel. Where a
+provider advertises native tool support, structured declarations reduce the
+need for a small model to invent a transport envelope. A JSON fallback still
+needs exact examples and validation. A final response containing an unfinished
+tool request is not completion: it should fail visibly rather than become a
+displayed answer or be executed by a second parser. Advertised capability alone
+does not establish reliable tool use.
 
 These mechanisms introduce their own costs. Retrieval can miss important
 context, truncation can hide an edge case, and evicted observations may need to
@@ -224,6 +257,20 @@ existing checks while planning, but cannot substitute an arbitrary successful
 command for them or remove a requirement after editing. Baseline measurements
 describe the original behavior; preparation commands support setup and diagnosis;
 final verification supplies evidence about the resulting state.
+
+A repository without tests still needs a path to useful verification. A harness
+can declare a standard test runner before inference, then ask the coding worker
+to create focused regressions that the runner executes. Registering that runner
+does not establish coverage: a successful process that ran zero tests must not
+verify a change. Explicit project configuration remains authoritative. If no
+usable runner exists, approved edits may be applied while the task remains
+unverified and incomplete.
+
+Planning mistakes should return compact corrective feedback, including valid
+check identifiers, while preserving the previous plan. A small model can then
+correct its selection within the same bounded native run. Authorization,
+interrupted effects and uncertain execution remain separate boundaries and
+must not be converted into retryable planning feedback.
 
 Execution evidence must remain tied to the source it measured. If a captured
 dependency changes after a check, that check cannot establish verification of
@@ -339,6 +386,12 @@ uses estimates, and dependency capture is incomplete. Host processes and
 external servers are not security-isolated by this architecture; access controls
 and file recovery have narrower guarantees.
 
+Persistent conversation memory and file checkpoints do not by themselves provide
+restartable execution. Safe continuation also needs the task record, frozen check
+plan, edit/check phase and committed action cursor. The current coding workflow
+does not reconstruct these after a process restart. Integrating engine durability
+requires preserving that application state and reconciling uncertain effects.
+
 The research priorities are comparative evaluation and component ablations,
 followed by stronger isolation, better criterion-to-test evidence, broader check
 discovery and capability calibration based on measured behavior. Richer tasks
@@ -364,7 +417,7 @@ provides shell and fullscreen terminal operation, workspace/model selection,
 diff review, approval presentation, cancellation and trace inspection. Native
 approval decisions bind to the exact request, action fingerprint and authorized
 run scope; a UI display alone cannot certify execution or completion. Another
-frontend would need to implement that approval and cancellation contract before
+frontend would need to implement the approval, live question and cancellation contracts before
 it could operate the same harness.
 
 ### 11.2 Implemented mechanisms and their bounds
@@ -374,6 +427,10 @@ it could operate the same harness.
 | Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
 | Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique old span and a matching revision before preparing a native recoverable write. |
 | Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
+| Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
+| Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
+| User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
+| Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
 | Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection provides conventional fallbacks without executing discovery commands. |
 | Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
 | Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |
@@ -385,8 +442,11 @@ exact provider token counts or bound data already decoded by the MCP SDK. Source
 pagination does not yet provide character-offset continuation for a very long
 individual line.
 
-The model-capable roles use the selected provider/model; there is no automatic
-escalation to a stronger model. The normal deck requires Architect, Explorer,
+The model-capable roles use the selected provider/model. A user can explicitly
+configure up to two fallback models on the same provider. Native model routing
+tries them only after eligible transient request failures before exposed stream
+output; it charges each request and never replays a completed tool. There is no
+reasoning-based escalation or automatic provider switch. The normal deck requires Architect, Explorer,
 Coder and Verifier. Tester defaults on, while Scout and MCP default off. Disabled
 optional workers are neither constructed nor registered, and the controller's
 instructions reflect their absence. Without Tester, Architect defines criteria
@@ -415,6 +475,7 @@ proto-cli mcp add docs ./docs-mcp.json
 proto-cli mcp test docs               # Explicit discovery probe; no tool invocation
 proto-cli mcp on                      # Enable the broker for subsequent runs
 proto-cli eval coding --plan          # Inspect evaluation conditions without a model
+proto-cli eval harness --json         # Check native child/read contracts offline
 ```
 
 The terminal UI provides corresponding `/agents` and `/mcp` commands. Optional
@@ -439,6 +500,12 @@ fixtures. Generated code executes on the host, so the oracle arrangement is not
 a tamper-proof evaluation sandbox. The small task set and one run per condition
 are a starting point for the broader evaluation described above.
 
+An additional offline evaluation uses the engine's native evaluator with fresh
+agent factories and repeated source-read/task-state cases. Scripted model actions
+and linked child receipts establish integration behavior without contacting a
+provider. Its scores and measured runtime do not establish model quality or a
+performance advantage over another architecture.
+
 ### 11.4 Implementation and further reading
 
 | Responsibility | Source |
@@ -446,12 +513,13 @@ are a starting point for the broader evaluation described above.
 | Task records and worker packets | [`task_record.py`](core/protoagent_core/task_record.py) |
 | Worker roles and optional composition | [`agents/`](core/protoagent_core/agents/) |
 | Prepared edits and check actions | [`editing.py`](core/protoagent_core/editing.py) |
-| Request admission | [`request_budget.py`](core/protoagent_core/request_budget.py) |
+| Context policies and hooks | [`request_budget.py`](core/protoagent_core/request_budget.py) |
 | Repository retrieval | [`context/`](core/protoagent_core/context/) |
 | Authority and execution phases | [`runtime_policy.py`](core/protoagent_core/runtime_policy.py) |
 | Acceptance and repair routing | [`verification.py`](core/protoagent_core/verification.py), [`workflow.py`](core/protoagent_core/workflow.py) |
 | External-tool brokerage | [`mcp.py`](core/protoagent_core/mcp.py) |
 | Independent coding evaluation | [`coding_eval.py`](core/protoagent_core/coding_eval.py) |
+| Offline engine evaluation | [`harness_eval.py`](core/protoagent_core/harness_eval.py) |
 | Operator interface | [`cli/src/`](cli/src/) |
 
 Operational details belong in the [task workflow guide](docs/content/core/task-workflow.md),

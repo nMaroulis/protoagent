@@ -61,6 +61,30 @@ runtime generates the credential automatically, passes the authenticator and
 credential to every enabled agent, and uses the same credential for the
 CLI-side `AgentClient`. Users do not need to configure this mesh token.
 
+The default CLI runtime constructs the deck with `local_children=True` and
+`transport=None`. Architect receives the enabled workers as its native
+`subagents` roster. Each call gets an independent conversation; repeated jobs for
+one worker do not share its previous assignment. Child actions must satisfy the
+Architect's delegation ceiling and the worker's own policy. Architect still has
+no mutation or process tools. `SubagentLimits` caps depth at one, concurrency at
+one and children at 32 per attempt. Shared Graph budgets also cover child work.
+Explicit transport mode uses authenticated Registry discovery instead.
+
+Every model-facing role receives native ContextPolicy preparation and a
+before-model hook for task state and compact small-profile metadata. Large results
+are progressively retrievable through `read_context_artifact`; it reads scoped
+observations and grants no repository or external-tool authority.
+
+## User questions
+
+Architect also has native `ask_user(question, options=None)`. It uses this for
+requirements or preferences that repository evidence cannot resolve, with one
+concise question and up to three suggested answers. Workers do not prompt the
+user directly; they report missing information to Architect. The engine places
+the answer in tool history and continues the same task. Decline and timeout
+supply no answer, and feedback never replaces an execution approval. See
+[runtime interaction](runtime.md#user-questions-and-live-continuation).
+
 ## Prompt Profiles
 
 `prompt_profiles.py` defines the model-capability overlays used by Architect,
@@ -254,7 +278,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.7.4 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.8.0 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |

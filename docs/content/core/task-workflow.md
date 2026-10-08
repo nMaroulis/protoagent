@@ -30,6 +30,12 @@ measures the results. A Tester report is advice, never completion evidence.
 Architect's `task_status()` reads the record. `plan_task(paths, criteria, check_ids)`
 selects checks and a write scope before effects. The default record uses the
 original objective and all discovered checks when no narrower plan is submitted.
+Omitting `check_ids` preserves the current selection. Invalid IDs or an empty
+selection when checks exist return `success=false`, a reason and valid IDs;
+the native inference loop can correct the plan in the same run. Rejection does
+not change criteria, file scope or selected checks. The admitted task record
+always includes compact `available_check_ids` and `bootstrap_checks`, even when
+full command specifications are omitted to save context.
 Once a write or final check is proposed the plan is frozen for the run, including
 repairs. A plan cannot remove checks after observing a failure.
 
@@ -72,8 +78,30 @@ limited to 512 files. Relative paths resolve beneath the selected workspace.
 Without a project configuration, the runtime discovers Python unittest suites in
 `tests/` or `core/tests/`, root Cargo tests, and npm `test`, `typecheck`, `lint` and
 `build` scripts. Discovery reads manifests and paths without importing project
-code or executing commands. For pytest projects, custom commands, monorepos and
+code or executing commands. Root `test_*.py` unittest suites are also discovered.
+For pytest projects, custom commands, monorepos and
 required environment settings, use explicit project configuration.
+
+If no checks are found in a Python project, the application captures a fixed
+`python-tests` command before inference:
+
+```text
+<project Python> -m unittest discover -s . -p test_*.py -q
+```
+
+This ID appears in `bootstrap_checks`: it is a runner for tests that Coder must
+create, not existing coverage. Architect/Tester propose behavioral regressions
+in root `test_*.py` files and include those files in the write scope. This avoids
+requiring a test directory or another dependency. The runner still requires
+native process approval. A baseline may report zero tests; final verification
+cannot pass until actual tests run successfully. Other discovered checks and
+explicit configuration take precedence; the model cannot replace this command.
+Discovery does not import application code or install dependencies.
+
+If no check can be configured, an empty plan may still scope approved edits.
+Such code changes remain `unverified` and `incomplete` at completion. An explicit
+`.protoagent/project.json` with `checks: []` disables automatic discovery and
+bootstrap selection. Configure a real check outside the run for verified work.
 
 ## Baseline, editing and final verification
 
@@ -139,8 +167,8 @@ hypothesis on your selected model.
 
 ## Compact protocol for the small profile
 
-The small profile replaces ProtoLink's long model-facing protocol template using
-its public prompt builder. It keeps a short action-format guide, role instructions,
+The small profile prepares ProtoLink's model-facing protocol through a native
+before-model hook. It keeps a short action-format guide, role instructions,
 agent identity, exact tool input schemas and compact worker cards. Large output
 schemas, repeated examples and long descriptions are omitted from the prompt.
 Native providers continue to receive native tool declarations. Native validation,
@@ -152,7 +180,7 @@ are counted as the additional provider payload. Integration tests exercise actua
 JSON/native streaming and delegation under an 8192-token admission cap. This is
 mechanical context validation, not a live-model coding quality result.
 
-ProtoLink 0.7.4 also bounds each individual inference loop to ten model actions;
+ProtoLink 0.8.0 also bounds each individual inference loop to ten model actions;
 shared run budgets are separate. Focused jobs can use the default task record and
 Coder's direct reads to avoid redundant planning/status calls. For a project with
 many mandatory commands, a project-owned check script captured as one check ID

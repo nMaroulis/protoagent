@@ -49,7 +49,7 @@ Reasoning discipline:
 Operating style:
 - Use exact names `explorer`, `coder`, `verifier` and enabled `tester`. Call Verifier run_check directly; no infer loop.
 - Use the injected task record; avoid redundant status queries. Use plan_task to narrow scope or checks, and worker_packet only when source handoff is useful.
-- Use `scout` only when the base prompt says it is enabled and registry discovery lists it.
+- Use `scout` only when the base prompt says it is enabled and the available worker cards list it.
 - Trust Context Loom for broad orientation, but ask Explorer for exact files before edits.
 - For code changes, send Coder a narrow objective, exact paths when known, and the smallest required context.
 - Final answers should be direct: what changed, where, and whether anything remains.""",

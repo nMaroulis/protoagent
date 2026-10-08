@@ -24,7 +24,9 @@ from .runtime_bridge import RuntimeBridge
 from .verification import validate_completion, verification_summary
 
 _FALLBACK_PORT = 19100
-TransportName = Literal["http", "websocket", "sse", "json-rpc", "sse-json-rpc", "grpc", "runtime"]
+TransportName = Literal[
+    "local", "http", "websocket", "sse", "json-rpc", "sse-json-rpc", "grpc", "runtime"
+]
 
 
 def run_selected_model(
@@ -37,8 +39,8 @@ def run_selected_model(
     """Run the selected model through the ProtoLink Architect agent.
 
     AgentGroup owns the embedded lifecycle. A native RunHandle executes a
-    bounded application Graph; Architect delegates through the configured
-    ProtoLink transports and Registry.
+    bounded application Graph; Architect delegates to owned local children by
+    default, or through explicitly selected ProtoLink transports and Registry.
     """
     config = load_config()
     provider = normalize_provider(config.get("active_provider", "ollama"))
@@ -130,7 +132,7 @@ async def _run_agent_deck(
     from . import config
     from .checkpoints import checkpoint_store, private_file, workspace_writer
     from .mcp import server_settings
-    from .request_budget import install_request_budget
+    from .request_budget import configure_agent_context
     from .runtime_policy import AttemptState, RunAuthorization
     from .runtime_storage import output_redaction
     from .streaming import LiveOutput
@@ -169,13 +171,46 @@ async def _run_agent_deck(
         bridge.emit(message)
 
     async def observe(handle):
-        async for event in handle.events():
+        seen = set()
+
+        def present(event):
+            if event.event_id in seen:
+                return
+            seen.add(event.event_id)
             if live_updates:
                 live_output.emit(event)
             data = event.to_dict(redaction_policy=redaction)
             summary = _run_event_summary(data)
             if summary:
                 _append_event(events, summary, bridge if live_updates else None, run_event=data)
+
+        async def child_observations():
+            # ProtoLink 0.8.0 commits live child events to the parent's Task;
+            # its local recorder can deliver them to the stream only at join.
+            # This is presentation of existing evidence, never task execution.
+            from protolink import RunEvent
+
+            cursor = 0
+            while True:
+                records = handle.task.metadata.get("run_events", [])
+                batch = records[cursor : cursor + 256]
+                cursor += len(batch)
+                for data in batch:
+                    if data.get("delegation_id"):
+                        present(RunEvent.from_dict(data))
+                await asyncio.sleep(0 if cursor < len(records) else 0.025)
+
+        observations = (
+            asyncio.create_task(child_observations()) if _agent_transport() == "local" else None
+        )
+        try:
+            async for event in handle.events():
+                present(event)
+        finally:
+            if observations is not None:
+                observations.cancel()
+                with suppress(asyncio.CancelledError):
+                    await observations
 
     with workspace_writer(project):
         store = SQLiteRunStore(
@@ -214,13 +249,18 @@ async def _run_agent_deck(
         attempt = AttemptState(project, checkpoints, authorization, record=record)
         urls = _runtime_urls()
         transport = _agent_transport()
-        registry_transport = create_configured_transport(
-            "runtime" if transport == "runtime" else "http",
-            urls["registry"],
-            timeout=_runtime_timeout(),
+        registry_transport = (
+            None
+            if transport == "local"
+            else create_configured_transport(
+                "runtime" if transport == "runtime" else "http",
+                urls["registry"],
+                timeout=_runtime_timeout(),
+            )
         )
-        assert registry_transport is not None
-        registry = Registry(transport=registry_transport, verbosity=0)
+        registry = (
+            Registry(transport=registry_transport, verbosity=0) if registry_transport else None
+        )
         deck = create_agent_deck(
             single_agent=architecture == "single",
             registry=registry,
@@ -228,8 +268,11 @@ async def _run_agent_deck(
             model=model,
             workspace=project,
             urls=urls,
-            transport=transport,
+            transport=None if transport == "local" else transport,
+            local_children=transport == "local",
+            max_children=_env_int("PROTOAGENT_MAX_CHILDREN") or 32,
             approval_handler=broker,
+            user_input_handler=bridge.ask_user,
             telemetry=_trace_telemetry(redaction),
             prompt_profile=str(prompt_profile["resolved"]),
             scout_enabled=scout_enabled,
@@ -253,17 +296,23 @@ async def _run_agent_deck(
                     if name not in single.tools and name != "report_task":
                         single.add_tool(tool)
             add_task_tools(single, record, "architect")
+            from .user_input import add_user_input_tool
+
+            add_user_input_tool(single, bridge.ask_user, record)
             deck = {"architect": single}
         elif architecture != "deck":
             raise ValueError("Unknown evaluation architecture")
         for agent in deck.values():
             agent.run_store = store
             if agent.llm is not None:
-                install_request_budget(
-                    agent.llm,
+                configure_agent_context(
+                    agent,
                     record,
                     fallback_window=8192 if prompt_profile["resolved"] == "small" else None,
                     compact_protocol=prompt_profile["resolved"] == "small",
+                    cards=[worker.card for name, worker in deck.items() if name != "architect"]
+                    if agent.card.name == "architect" and architecture != "single"
+                    else (),
                 )
         live_output = LiveOutput(
             bridge,
@@ -278,7 +327,11 @@ async def _run_agent_deck(
         for report in compaction_reports:
             if report.get("changed"):
                 emit(f"Compacted {report['agent']} conversation history.")
-        emit(f"Runtime: ProtoLink AgentGroup; {transport} worker transport; {provider} / {model}.")
+        emit(
+            f"Runtime: ProtoLink AgentGroup; "
+            f"{'owned local children' if transport == 'local' else transport + ' worker transport'}; "
+            f"{provider} / {model}."
+        )
         emit(f"Project: {project}. Run: {context.run_id}. Repair limit: 2.")
         coordinator = Agent(
             card={
@@ -294,7 +347,9 @@ async def _run_agent_deck(
         )
         # The mesh owns its registry and agents. The workflow group owns only its
         # controller and declares the already-running mesh as external resources.
-        async with AgentGroup(list(deck.values()), registry=registry, own_registry=True):
+        async with AgentGroup(
+            list(deck.values()), registry=registry, own_registry=registry is not None
+        ):
             async with AgentGroup([coordinator], external_agents=list(deck.values())) as group:
                 workflow = CodingWorkflow(
                     group=group,
@@ -445,7 +500,7 @@ def _env_url(*names: str) -> str | None:
 
 def _local_url(host: str) -> str:
     """Allocate an in-process identity or a localhost URL for the selected mesh."""
-    if _agent_transport() == "runtime":
+    if _agent_transport() in {"local", "runtime"}:
         import uuid
 
         return f"runtime://protoagent-{uuid.uuid4().hex}"
@@ -533,15 +588,16 @@ def _optional_int(value: Any) -> int | None:
 
 def _agent_transport() -> TransportName:
     """Return the ProtoLink transport used by local agents and the client."""
-    transport = os.getenv("PROTOAGENT_AGENT_TRANSPORT", "sse").strip().lower()
+    transport = os.getenv("PROTOAGENT_AGENT_TRANSPORT", "local").strip().lower()
     aliases = {
         "jsonrpc": "sse",
         "json-rpc": "sse",
         "sse-jsonrpc": "sse",
         "sse-json-rpc": "sse",
     }
-    normalized = aliases.get(transport, transport or "sse")
+    normalized = aliases.get(transport, transport or "local")
     if normalized not in {
+        "local",
         "http",
         "websocket",
         "sse",
@@ -550,7 +606,7 @@ def _agent_transport() -> TransportName:
         "grpc",
         "runtime",
     }:
-        return "sse"
+        return "local"
     return normalized
 
 
@@ -567,6 +623,7 @@ def _transport_report(deck: dict[str, Any], registry_transport) -> dict[str, Any
     return {
         "registry": _transport_snapshot(registry_transport),
         "entry": "local RunHandle",
+        "delegation": "owned local children" if deck["architect"].subagents else "transport mesh",
         "agents": {
             name: _transport_snapshot(getattr(agent, "transport", None))
             for name, agent in deck.items()

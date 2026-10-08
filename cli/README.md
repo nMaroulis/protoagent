@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.7.4"
+python -m pip install "protolink[http,llms,mcp]>=0.8.0"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -68,6 +68,13 @@ preserving the original Markdown in saved responses. Activity stays in the botto
 are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
 metadata below completed answers and a `/trace` hint; `/debug off` hides it.
 This display setting defaults off for each TUI session.
+
+Architect can ask a question during the same task through ProtoLink's native
+`ask_user` tool. Type an answer or press Tab to use a suggestion, then Enter to
+send. Esc skips; Ctrl-C cancels. PageUp/PageDown scroll long TUI questions.
+Questions close on native timeout or budget expiry; feedback never authorizes
+an action. Interactive shell runs support the same answer controls; redirected
+input/output declines questions. This is live continuation, not restart/resume.
 
 Two muted horizontal borders frame the input. It expands upward for multiline
 text while the lower border and status stay anchored. Cached message layouts
@@ -265,6 +272,14 @@ server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
 `mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
 not invoke server tools. The broker exposes three fixed tools for names, one
 schema and an approved allowlisted invocation. Architect uses `tool_call`,
-never another inference loop. ProtoLink 0.7.4 owns transports, schema validation,
+never another inference loop. ProtoLink 0.8.0 owns transports, schema validation,
 session cleanup and result/error normalization. See the
 [MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
+
+## Engine integration
+
+The harness uses ProtoLink 0.8 owned local children and native context policies.
+Run `proto-cli eval harness --json` for offline engine-contract checks. Optional
+provider `fallback_models` are configured explicitly; restart/resume and Docker
+execution are outside the current coding workflow integration. See the
+[engine integration guide](../docs/content/core/protolink-migration.md) and [model configuration guide](../docs/content/core/config-models.md).

@@ -30,7 +30,8 @@ description: Runtime, model, tracing, context, and config environment variables.
 | `VERIFIER_AGENT_URL` | generated | Legacy Verifier URL override. |
 | `PROTOAGENT_SCOUT_URL` | generated | Optional Scout URL override. |
 | `SCOUT_AGENT_URL` | generated | Legacy Scout URL override. |
-| `PROTOAGENT_AGENT_TRANSPORT` | `sse` | Agent transport. Use `http` for request/response; `grpc` requires the optional ProtoLink gRPC extra. |
+| `PROTOAGENT_AGENT_TRANSPORT` | `local` | Owned local children without servers/Registry. Explicit `runtime`, `sse`, `http`, `websocket` or `grpc` selects the transport mesh; gRPC requires its extra. |
+| `PROTOAGENT_MAX_CHILDREN` | `32` | Total owned child tasks per Architect attempt. Concurrency remains one, depth one, background tools disabled. |
 | `PROTOAGENT_STREAM` | `1` | Set to `0` to suppress live text and incremental UI summaries; RunHandle still consumes execution once. |
 | `PROTOAGENT_AGENT_TIMEOUT` | `600` | Native run/approval timeout default in seconds. |
 
@@ -48,6 +49,7 @@ description: Runtime, model, tracing, context, and config environment variables.
 | --- | --- | --- |
 | `PROTOAGENT_CONTEXT_CHARS` | `6000` local, `48000` remote | Prompt context budget before the current request. |
 | `PROTOAGENT_OLLAMA_NUM_CTX` | unset | Ollama context window override below app config. |
+| `PROTOAGENT_OLLAMA_TOOL_CALLING` | `auto` | `auto`, `native` or `json`; native tools use advertised Ollama capabilities. Provider `tool_calling` config takes precedence. |
 | `OLLAMA_CONTEXT_LENGTH` | unset | Ollama runtime context window fallback. |
 | `PROTOAGENT_HISTORY_BUDGET_RATIO` | `0.7` | Fraction of context window used for run-boundary history compaction. |
 

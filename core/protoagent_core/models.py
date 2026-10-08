@@ -351,13 +351,20 @@ def _api_provider(provider: str, *, validate_key: bool = False) -> dict[str, Any
 
 
 def _get_json(
-    url: str, timeout: float = 1.2, headers: dict[str, str] | None = None
+    url: str,
+    timeout: float = 1.2,
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fetch JSON with a short timeout and return a status envelope."""
     request_headers = {"Accept": "application/json"}
     if headers:
         request_headers.update(headers)
-    request = urllib.request.Request(url, headers=request_headers)
+    data = None
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, headers=request_headers, data=data)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             text = response.read().decode("utf-8")

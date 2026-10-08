@@ -1,9 +1,9 @@
 ---
 title: MCP Broker
-description: Model-free, lazy MCP tool discovery and approved invocation through ProtoLink 0.7.4.
+description: Model-free, lazy MCP tool discovery and approved invocation through ProtoLink 0.8.0.
 ---
 
-ProtoAgent v0.3.0 uses ProtoLink 0.7.4's `MCPToolAdapter` for MCP tool access.
+ProtoAgent v0.3.0 uses ProtoLink 0.8.0's `MCPToolAdapter` for MCP tool access.
 The optional `mcp` agent has **no LLM**. Architect calls its tools directly,
 then gives a focused result to workers that need external evidence. Workers
 keep their existing narrow tools and cannot start another delegation tree.
@@ -15,7 +15,7 @@ MCP dependencies are included in the core install:
 ```bash
 pip install -e core
 # Or install the runtime dependency explicitly:
-pip install "protolink[http,llms,mcp]>=0.7.4"
+pip install "protolink[http,llms,mcp]>=0.8.0"
 ```
 
 Create a server JSON file. For a local server, use an explicit executable and

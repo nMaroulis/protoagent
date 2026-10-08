@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import sys
 
 from protolink import (
@@ -237,6 +238,63 @@ class NativeRuntimeTests(NativeRuntimeCase):
 
     async def test_embedded_mesh_uses_broker_and_persists_delegated_receipts(self):
         await self.exercise_embedded_mesh("runtime")
+
+    async def test_owned_local_children_preserve_approvals_live_output_and_receipts(self):
+        await self.exercise_embedded_mesh("local")
+
+    async def test_owned_local_children_preserve_bounded_repairs(self):
+        await self.exercise_embedded_mesh("local", repairs=True)
+
+    async def test_parent_cancellation_drains_owned_verifier_process(self):
+        from unittest.mock import patch
+
+        from protoagent_core.agents.architect import create_architect_agent
+
+        started = self.root / "process-started"
+        model = create_llm(
+            "mock",
+            sequential_responses=[
+                {
+                    "type": "agent_call",
+                    "agent": "verifier",
+                    "action": "tool_call",
+                    "tool": "execute_command",
+                    "args": {
+                        "argv": [
+                            sys.executable,
+                            "-c",
+                            "import os,pathlib,time; pathlib.Path('process-started').write_text(str(os.getpid())); time.sleep(60)",
+                        ],
+                        "cwd": str(self.root),
+                        "env": {},
+                        "timeout_seconds": 60,
+                        "max_output_bytes": 1024,
+                    },
+                }
+            ],
+        )
+        with patch("protoagent_core.agents.architect.create_selected_llm", return_value=model):
+            parent = create_architect_agent(
+                workspace=str(self.root), transport=None, subagents=[self.verifier]
+            )
+        task = Task.create_infer("Run the approved command")
+        self.context.attach_to_task(task)
+        handle = RunHandle.start(parent, task)
+        self.handles.append(handle)
+        (record,) = await self.pending()
+        self.broker.resolve(
+            ApprovalDecision(True, record.request.request_id),
+            scope=self.authorization.scope,
+            fingerprint=record.fingerprint,
+        )
+        async with asyncio.timeout(3):
+            while not started.exists():
+                await asyncio.sleep(0.01)
+        await handle.cancel("User canceled parent")
+        result = await asyncio.wait_for(handle.result(), 3)
+        self.assertEqual(result.status, "canceled")
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(started.read_text()), 0)
 
     async def test_sse_mesh_preserves_delegated_native_receipts(self):
         await self.exercise_embedded_mesh("sse")

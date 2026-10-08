@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from protolink import Agent, CapabilityPolicy
+from protolink import Agent, CapabilityPolicy, SubagentLimits
 from protolink.transport import Transport
 from protolink.types import TransportType
 
 from ..task_record import add_task_tools
+from ..user_input import add_user_input_tool
 from .common import (
     QUIET_LOGGER,
     conversation_storage,
@@ -19,8 +20,17 @@ from .common import (
 
 ARCHITECT_SYSTEM_PROMPT = """You are ProtoAgent Architect, the stateful coding coordinator.
 Use ProtoLink agent_call to delegate to explorer, coder, tool-only verifier and enabled optional workers.
-Workers have fresh contexts. Give each one a narrow objective, source paths and
+Workers have fresh contexts; local children run sequentially with a shared budget.
+Give each one a narrow objective, source paths and
 acceptance criteria. Runtime task_status preserves the objective and outcomes.
+Use ask_user(question, options=None) for missing requirements or user preferences
+that repository evidence cannot resolve. Ask one concise question, with at most
+three suggestions; free-text answers are always allowed. The tool returns the
+user's answer and you continue this task. Declined or timed_out means no answer:
+do not invent consent or silently resolve a blocking ambiguity. Questions never
+authorize writes, commands or external calls. Workers send clarification needs
+to you; you alone interact with the user. Do not ask for secrets or routine
+implementation choices you can resolve from evidence.
 
 Workflow:
 1. Answer direct questions. For repository work, use Context Loom and Explorer.
@@ -29,7 +39,14 @@ Workflow:
    use the runtime's default objective and check IDs. Use plan_task before writing
    when narrowing criteria, file scope or checks. Use worker_packet when a handoff
    needs source excerpts; Coder can also read the exact source directly.
+   Omit plan_task.check_ids to preserve defaults; never invent check IDs or supply
+   command strings. A rejected plan returns success=false: correct it using
+   available_check_ids. For bootstrap_checks, ask Coder to add real stdlib unittest
+   regressions in root test_*.py files and include them in the planned write scope.
+   Zero tests never verifies a change. If no check exists, approved edits may
+   proceed but must be reported unverified/incomplete; do not claim success.
 3. Verifier run_check(check_id, phase="baseline") measures the original behavior.
+   A bootstrap runner may initially find zero tests; add regressions before final verification.
    Baseline and execute_command preparation allow later edits. Commands require
    approval, explicit argv/cwd/env and limits; no environment is inherited.
 4. Delegate focused edits and regression tests to Coder. Coder can read assigned
@@ -93,6 +110,9 @@ def create_architect_agent(
     authenticator=None,
     credentials: str | None = None,
     record=None,
+    subagents=(),
+    subagent_limits: SubagentLimits | None = None,
+    user_input_handler=None,
 ):
     """Create the stateful user-facing controller agent."""
     agent_url = resolve_agent_url("architect", url)
@@ -101,7 +121,7 @@ def create_architect_agent(
             "name": "architect",
             "description": (
                 "Stateful ProtoAgent controller. Receives CLI tasks, discovers "
-                "stateless specialist workers through the registry, delegates "
+                "stateless specialists through owned local children or the registry, delegates "
                 "repository exploration to Explorer, and delegates diff synthesis "
                 "to Coder."
             ),
@@ -121,6 +141,8 @@ def create_architect_agent(
             credentials=credentials,
         ),
         registry=registry,
+        subagents=subagents,
+        subagent_limits=subagent_limits,
         llm=create_selected_llm(provider, model),
         system_prompt=with_workspace_contract(
             with_prompt_profile(
@@ -146,6 +168,17 @@ def create_architect_agent(
             {
                 "agent.delegate": "allow",
                 "task.manage": "allow",
+                "user.interact": "allow",
+                # Local children satisfy every ancestor's policy. These are
+                # delegation ceilings; Architect has no file/process/MCP tools.
+                "workspace.read": "allow",
+                "filesystem.read": "allow",
+                "network.read": "allow",
+                "filesystem.write": "require_approval",
+                "filesystem.restore": "require_approval",
+                "process.execute": "require_approval",
+                "mcp.connect": "require_approval",
+                "mcp.invoke": "require_approval",
                 "llm.history.compact": "allow",
                 "state.compact": "allow",
                 "state.describe": "allow",
@@ -158,4 +191,5 @@ def create_architect_agent(
     )
 
     add_task_tools(agent, record, "architect")
+    add_user_input_tool(agent, user_input_handler, record)
     return agent

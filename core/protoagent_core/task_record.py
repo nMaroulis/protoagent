@@ -12,6 +12,16 @@ from typing import Any
 
 from .tools import read_file, safe_path
 
+PYTHON_BOOTSTRAP_SOURCE = "Python unittest bootstrap"
+
+
+class PlanValidationError(ValueError):
+    """Expected planning feedback; no plan fields change on rejection."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class CheckSpec:
@@ -117,6 +127,15 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
                 (str(root / directory),),
             )
             break
+    root_tests = tuple(str(path) for path in root.glob("test_*.py") if path.is_file())
+    if "python-tests" not in checks and root_tests:
+        checks["python-tests"] = CheckSpec(
+            "python-tests",
+            (executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-q"),
+            str(root),
+            dict(path_env),
+            root_tests,
+        )
     if (root / "Cargo.toml").exists() and (cargo := shutil.which("cargo")):
         checks["rust-tests"] = CheckSpec(
             "rust-tests",
@@ -147,6 +166,22 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
                     dict(path_env),
                     (str(package),),
                 )
+    if not checks and (
+        any(root.glob("*.py"))
+        or any(
+            (root / name).is_file() for name in ("pyproject.toml", "requirements.txt", "setup.cfg")
+        )
+    ):
+        # Capture a fixed runner before inference when a Python project has no
+        # checks. No project code is imported by discovery. An empty suite cannot
+        # satisfy completion; only an approved execution provides evidence.
+        checks["python-tests"] = CheckSpec(
+            "python-tests",
+            (executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-q"),
+            str(root),
+            dict(path_env),
+            source=PYTHON_BOOTSTRAP_SOURCE,
+        )
     return checks
 
 
@@ -169,6 +204,7 @@ class TaskRecord:
     source_paths: set[str] = field(default_factory=set)
     frozen: bool = False
     forbids_write: bool = False
+    clarifications: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @classmethod
     def create(cls, workspace: str, objective: str) -> TaskRecord:
@@ -184,22 +220,39 @@ class TaskRecord:
             forbids_write=infer_run_contract(objective).forbids_write,
         )
 
-    def plan(self, paths: list[str], criteria: list[str], check_ids: list[str]) -> dict[str, Any]:
+    def plan(
+        self, paths: list[str], criteria: list[str], check_ids: list[str] | None = None
+    ) -> dict[str, Any]:
         if self.frozen:
-            raise ValueError("The plan is frozen after the first write or final check")
+            raise PlanValidationError(
+                "plan_frozen",
+                "The plan is frozen after the first write or final check; use the existing plan",
+            )
         if (
             not criteria
             or len(criteria) > 8
             or any(not x.strip() or len(x) > 1000 for x in criteria)
         ):
-            raise ValueError("Provide one to eight concrete acceptance criteria")
-        docs_only = bool(paths) and all(p.lower().endswith((".md", ".rst", ".txt")) for p in paths)
-        if (not check_ids and not docs_only) or any(x not in self.checks for x in check_ids):
-            raise ValueError(
-                "Select at least one discovered check ID; arbitrary commands are not checks"
+            raise PlanValidationError(
+                "invalid_criteria", "Provide one to eight concrete acceptance criteria"
             )
         if len(paths) > 16:
-            raise ValueError("A worker task may target at most 16 paths")
+            raise PlanValidationError("invalid_paths", "A worker task may target at most 16 paths")
+        if check_ids is None:
+            check_ids = list(self.selected)
+        if len(check_ids) > 16:
+            raise PlanValidationError("invalid_check_ids", "Select at most 16 repository check IDs")
+        docs_only = bool(paths) and all(p.lower().endswith((".md", ".rst", ".txt")) for p in paths)
+        if any(x not in self.checks for x in check_ids):
+            raise PlanValidationError(
+                "unknown_check_ids",
+                "Unknown check ID; choose from available_check_ids, not command text",
+            )
+        if not check_ids and self.checks and not docs_only:
+            raise PlanValidationError(
+                "check_required",
+                "Select at least one available check ID, or omit check_ids to keep the default selection",
+            )
         self.allowed_paths = tuple(str(safe_path(p, self.workspace)) for p in paths)
         self.criteria = tuple(criteria)
         self.selected = tuple(dict.fromkeys(check_ids))
@@ -255,6 +308,7 @@ class TaskRecord:
             "sources": sources,
             "acceptance_criteria": list(self.criteria),
             "check_ids": list(self.selected),
+            "user_clarifications": {key: dict(value) for key, value in self.clarifications.items()},
             "return_status": ["done", "needs_context", "blocked"],
         }
 
@@ -281,16 +335,24 @@ class TaskRecord:
             "acceptance_criteria": list(self.criteria),
             "allowed_paths": list(self.allowed_paths),
             "required_checks": list(self.selected),
+            "available_check_ids": list(self.checks),
+            "bootstrap_checks": [
+                key for key, check in self.checks.items() if check.source == PYTHON_BOOTSTRAP_SOURCE
+            ],
             "available_checks": [asdict(check) for check in self.checks.values()],
             "worker_reports": dict(self.reports),
             "frozen": self.frozen,
             "forbids_write": self.forbids_write,
+            "user_clarifications": {key: dict(value) for key, value in self.clarifications.items()},
         }
 
 
 def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
     if record is None:
         return
+    suffix = ":protoagent-task-plan-2"
+    if not agent.execution_version.endswith(suffix):
+        agent.execution_version += suffix
 
     @agent.tool(capabilities=["task.manage"])
     def task_status() -> dict[str, Any]:
@@ -301,10 +363,20 @@ def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
 
         @agent.tool(capabilities=["task.manage"])
         def plan_task(
-            paths: list[str], criteria: list[str], check_ids: list[str]
+            paths: list[str], criteria: list[str], check_ids: list[str] | None = None
         ) -> dict[str, Any]:
-            """Set concrete acceptance criteria and file scope before editing; select repository check IDs."""
-            return record.plan(paths, criteria, check_ids)
+            """Set criteria and write paths before editing. Omit check_ids to keep defaults; use only available_check_ids. Rejected plans return feedback without changing the plan."""
+            try:
+                return {"success": True, **record.plan(paths, criteria, check_ids)}
+            except PlanValidationError as exc:
+                return {
+                    "success": False,
+                    "code": exc.code,
+                    "message": str(exc),
+                    "available_check_ids": list(record.checks),
+                    "required_checks": list(record.selected),
+                    "frozen": record.frozen,
+                }
 
         @agent.tool(capabilities=["task.manage"])
         def worker_packet(role: str, objective: str, paths: list[str]) -> dict[str, Any]:

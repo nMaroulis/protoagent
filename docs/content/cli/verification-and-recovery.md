@@ -68,6 +68,13 @@ the check. This does not track every repository input, dependency or file a
 command can modify. A passing exit status is evidence for that command, not a
 proof that all behavior is correct. A write can be applied but remain unverified.
 
+For Python projects with no checks, a predefined `python-tests` runner can execute
+new root `test_*.py` unittest regressions. Architect includes test creation in
+Coder's scope; Verifier runs the captured command with approval. Zero tests
+reports missing verification, even if Python exits successfully. Invalid planning
+IDs return feedback for correction instead of aborting the task. Explicit project
+check configuration takes precedence. See [Task Workflow](../core/task-workflow.md).
+
 Baseline and preparation commands permit subsequent edits. Final verification
 closes the edit phase, and further file mutations are denied for that attempt.
 The plan freezes at the first write or final check. A known empty unittest suite

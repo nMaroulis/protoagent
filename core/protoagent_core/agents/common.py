@@ -27,6 +27,7 @@ DEFAULT_AGENT_URLS = {
 RUNTIME_SCOPES = (
     "agent.delegate",
     "task.manage",
+    "user.interact",
     "workspace.read",
     "filesystem.read",
     "filesystem.write",

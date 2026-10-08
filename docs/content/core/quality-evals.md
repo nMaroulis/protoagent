@@ -8,6 +8,20 @@ ProtoAgent includes a small prompt-profile evaluation harness in
 `small`, `medium`, `large`, and `api` prompt profiles against fixed repository
 tasks.
 
+## Offline engine evaluation
+
+```bash
+proto-cli eval harness --json
+```
+
+This uses ProtoLink's public `evaluate()` API with fresh agent factories, two
+read-only cases and two repetitions. Scripted actions call the actual Explorer
+source-read and TaskRecord tools; checks require exact outputs and native child
+receipts linked to parent actions. No live provider, workspace write or user
+configuration change is involved. JSON includes native scores, latency and usage.
+Failures exit unsuccessfully. These four samples measure integration contracts;
+they do not establish real-model accuracy or latency improvements.
+
 ## Modes
 
 | Mode | Command | Purpose |

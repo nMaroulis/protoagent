@@ -64,7 +64,7 @@ PYTHONPATH=core .venv/bin/python -m unittest core.tests.test_versioning
 
 ## 0.3.0 Release Order
 
-ProtoAgent 0.3.0 requires `protolink>=0.7.4` for native delegated receipts, persistence redaction, checkpoint inventory and live streaming.
-Publish ProtoLink 0.7.4 to the target package index first, verify that a clean
+ProtoAgent 0.3.0 requires `protolink>=0.8.0` for owned local subagents, context policies/hooks and native evaluation, alongside delegated receipts, persistence redaction, checkpoint inventory and live streaming.
+Publish ProtoLink 0.8.0 to the target package index first, verify that a clean
 environment can resolve it, and only then publish ProtoAgent core/CLI 0.3.0
 artifacts. Do not lower the dependency floor to work around release ordering.

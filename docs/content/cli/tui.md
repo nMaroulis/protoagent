@@ -169,6 +169,26 @@ Independent model metadata probes use a bounded pool. Opening a picker validates
 API keys through metadata endpoints without constructing LLM clients or making
 inference calls. Inventory is refreshed explicitly rather than after every answer.
 
+## Questions during a task
+
+Architect may ask a concise question when requirements or preferences are
+missing. A question overlay preserves the surrounding TUI. Type any answer;
+Tab cycles optional suggestions, and Enter sends the current text. Suggestions
+are not selected or submitted automatically. Esc skips the question; Ctrl-C
+cancels the whole run. PageUp/PageDown scroll long questions. Answers have a
+4096-character limit; pasted line breaks become spaces and control bytes are
+removed. Oversized input is rejected rather than silently truncated.
+
+The question and submitted answer appear before the continuing response in the
+transcript. ProtoLink receives the answer as a native tool result and continues
+the existing task. Its 300-second question timeout and remaining run budget also
+close the overlay without requiring a keypress. The UI polls the native request's
+lifetime and redraws the overlay only on input or resize.
+
+A skipped or timed-out question supplies no answer. Feedback never approves
+file changes, commands or MCP calls. This is a live wait; closing and reopening
+the application does not resume an interrupted task or question.
+
 ## Using the TUI without a model
 
 Starting the TUI, static `/help`, configuration, agent toggles, MCP setup,
@@ -237,6 +257,7 @@ Focused modal modules keep the TUI maintainable:
 | `project.rs` | Project folder prompt and file picker. |
 | `model_picker.rs` | Provider/model picker and masked API key prompt. |
 | `approval.rs` | Runtime approval prompt for ProtoLink actions. |
+| `question.rs` | Native user question, free-text answer and explicit suggestions. |
 | `diff_view.rs` | Diff review modal for proposed file changes. |
 
 ## Context Meter
@@ -264,7 +285,7 @@ When a user submits a task:
 3. A temp progress JSONL file is created.
 4. Python is called through `call_process_prompt_with_progress`.
 5. The TUI tails progress events and handles navigation every 32 ms.
-6. Approval requests are displayed as modals.
+6. Native approval and user-question requests are displayed as modals.
 7. Esc or Ctrl-C writes a cancellation request.
 8. The final JSON response is parsed into `CoreResponse`.
 9. The response finalizes the existing message and is recorded in `sessions.json`.

@@ -5,11 +5,9 @@ import sys
 import unittest
 
 from protolink import RunReport
-from protolink.llms.history import ConversationHistory
 from runtime_support import NativeRuntimeCase
 
 from protoagent_core.coding_eval import EXERCISES, oracle_result, run_coding_eval
-from protoagent_core.request_budget import fit_request
 from protoagent_core.run_contracts import infer_run_contract
 from protoagent_core.task_record import CheckSpec, TaskRecord
 from protoagent_core.tools import read_file
@@ -328,94 +326,6 @@ class TaskWorkflowTests(NativeRuntimeCase):
             self.assertFalse(oracle_result(self.root, exercise["oracle"])["passed"])
 
 
-class ContextAdmissionTests(unittest.TestCase):
-    def test_long_observations_are_evicted_while_task_and_record_survive(self):
-        history = ConversationHistory("Follow policy.")
-        history.add_user("Fix the empty-input bug.")
-        history.add_system("old evidence " * 10000)
-        history.add_system("Most recent result: source path sample.py")
-        report = fit_request(history, window=2048, tools={}, agent_cards=[])
-        text = str(history.to_list())
-        self.assertIn("Fix the empty-input bug", text)
-        self.assertIn("Follow policy", text)
-        self.assertGreater(report["evicted_messages"], 0)
-        self.assertLessEqual(
-            report["estimated_input_tokens"] + report["reserved_output_tokens"], 2048
-        )
-
-    def test_oversized_mandatory_task_fails_instead_of_truncating_intent(self):
-        history = ConversationHistory("Follow policy.")
-        history.add_user("task " * 10000)
-        with self.assertRaisesRegex(ValueError, "Mandatory"):
-            fit_request(history, window=1024, tools={}, agent_cards=[])
-
-    def test_coding_plan_does_not_contact_model_and_includes_same_model_baseline(self):
-        report = run_coding_eval(mode="plan", profiles="small", task_ids="empty-average")
-        self.assertEqual(report["summary"]["run_count"], 2)
-        self.assertEqual(
-            {x["architecture"] for x in report["profiles"][0]["tasks"]}, {"deck", "single"}
-        )
-        self.assertIsNone(report["summary"]["score"])
-
-
-class RequestWrapperTests(unittest.IsolatedAsyncioTestCase):
-    async def test_sync_and_streaming_requests_both_admit_context(self):
-        from types import SimpleNamespace
-
-        from protoagent_core.request_budget import install_request_budget
-
-        class Model:
-            metrics_profile = SimpleNamespace(context_window=2048)
-
-            def call_action(self, history, **kwargs):
-                return history.to_list()
-
-            async def call_action_stream(self, history, **kwargs):
-                return history.to_list()
-
-        model = Model()
-        install_request_budget(model)
-        history = ConversationHistory("Follow workspace policy.")
-        history.add_user("Fix empty input.")
-        history.add_system("old observation " * 10000)
-        messages = model.call_action(history, tools={})
-        self.assertIn("Fix empty input.", str(messages))
-        self.assertGreater(model.protoagent_context_admission["evicted_messages"], 0)
-        history.add_system("another observation " * 10000)
-        await model.call_action_stream(history, tools={})
-        self.assertEqual(model.protoagent_context_admission["request_count"], 2)
-        self.assertGreaterEqual(model.protoagent_context_admission["total_evicted_messages"], 2)
-
-    def test_evicts_native_tool_call_and_result_together(self):
-        history = ConversationHistory("Follow policy.")
-        history.add_user("Earlier question")
-        history.add_raw(
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": {"id": "call-1", "name": "read_file"},
-            }
-        )
-        history.add_raw(
-            {"role": "tool", "content": "large source " * 10000, "tool_call_id": "call-1"}
-        )
-        history.add_user("Current request")
-        fit_request(history, window=2048, tools={}, agent_cards=[])
-        self.assertFalse(
-            any(
-                message.get("tool_calls") or message["role"] == "tool"
-                for message in history.to_list()
-            )
-        )
-        self.assertIn("Current request", str(history.to_list()))
-
-    def test_oversized_initial_evidence_is_reduced_once_then_fails_if_task_cannot_fit(self):
-        history = ConversationHistory("Follow policy.")
-        history.add_user("source " * 10000 + "\n\nCurrent user request:\n" + "request " * 10000)
-        with self.assertRaisesRegex(ValueError, "Mandatory"):
-            fit_request(history, window=2048, tools={}, agent_cards=[])
-
-
 class CodingEvaluationTests(unittest.TestCase):
     def evaluate(self, code):
         from pathlib import Path
@@ -510,3 +420,4 @@ class CompactProtocolTests(unittest.TestCase):
         self.assertIn("provider's supplied tools", prompt)
         self.assertNotIn("Return one JSON", prompt)
         self.assertIn("Never delegate to yourself", prompt)
+        self.assertNotIn("protolink_call_agent_tool", prompt)

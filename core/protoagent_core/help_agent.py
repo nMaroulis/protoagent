@@ -57,6 +57,16 @@ Manual:
   Final task status determines completion. Guide also streams via /help QUESTION.
   `PROTOAGENT_STREAM=0` hides live previews without changing execution.
   Ctrl-C in shell mode requests native cancellation and waits for cleanup.
+- Architect can call ProtoLink's native ask_user tool for missing requirements
+  or preferences and continue the same task with your answer. In the question
+  overlay, type any answer or press Tab to use a suggestion, then Enter to send.
+  No suggestion is selected by default. Esc skips the question; Ctrl-C cancels
+  the run. PageUp/PageDown scroll long questions in the TUI. A question waits at
+  most 300 seconds and is also bounded by the run's remaining runtime budget.
+  Answers are limited to 4096 characters. A headless/noninteractive frontend
+  declines rather than inventing an answer. Questions and answers appear in the
+  native trace; do not supply secrets. Feedback never grants execution approval.
+  This is live continuation, not restartable execution after closing the app.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts
@@ -182,6 +192,30 @@ Manual:
   `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`,
   `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS`,
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
+- The coding harness defaults to owned local ProtoLink children: no Registry
+  server or loopback sockets. One child runs at a time, nesting depth is one,
+  and PROTOAGENT_MAX_CHILDREN caps children per attempt (default 32).
+  Children share the workflow budget and satisfy ancestor policies. Explicit
+  PROTOAGENT_AGENT_TRANSPORT=sse|runtime|http retains the transport mesh.
+- Native ContextPolicy and before-model hooks reserve output space, retain
+  the runtime task record and make large results retrievable in small pages.
+  Context estimates do not establish the provider's exact token limit.
+- Ollama tool calling defaults to auto: advertised tools capability enables
+  ProtoLink's native provider tool channel; unavailable metadata keeps the JSON
+  action fallback. providers.ollama.tool_calling accepts auto, native or json;
+  PROTOAGENT_OLLAMA_TOOL_CALLING supplies the mode when config does not set it.
+  An unfinished tool/worker request printed as a final answer fails visibly;
+  /trace shows the run. Protocol examples need accompanying prose or a code block.
+- Optional provider fallback_models in config.json lists at most two same-provider
+  models. Empty/absent means off. ProtoLink RoutedLLM falls back on eligible
+  transient requests before exposed output; it never replays tools or switches
+  providers automatically. There is no dedicated fallback setup command.
+- `proto-cli eval harness [--json]` runs four offline native integration samples
+  using scripted actions and disposable read-only fixtures, with no live model.
+  It measures engine contracts. `eval coding --live` measures coding outcomes.
+- ProtoLink durable execution, RunManager, Docker execution and additional
+  presets are engine capabilities; the current coding Graph has no restart/resume
+  or container integration. Saved reports and file restoration are separate.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
   and builds context as a stateless worker; Tester designs regressions read-only;
   Coder reads bounded source and prepares revision-checked, approval-gated file
@@ -190,6 +224,14 @@ Manual:
   tools without another model loop. Guide is separate and only answers help
   questions.
 - Code changes require all selected repository checks captured before execution.
+- Task planning exposes available_check_ids and bootstrap_checks. plan_task can
+  omit check_ids to keep defaults; invalid selections return corrective feedback
+  and leave the plan unchanged. Python projects with no discovered/configured
+  checks receive a predefined python-tests unittest runner. Coder adds focused
+  root test_*.py regressions; a zero-test run cannot verify changes. Explicit
+  project check configuration takes precedence, including an empty checks list.
+  A project with no usable runner can receive approved edits, but remains
+  unverified/incomplete. There is no automatic dependency installation.
   Configure unusual checks in .protoagent/project.json. run_check baseline permits
   later editing; final verify closes the edit phase. Documentation-only changes
   can complete unverified. eval coding --plan shows disposable same-model deck and

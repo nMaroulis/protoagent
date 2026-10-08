@@ -25,10 +25,17 @@ See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
   Scout researches the public web.
 - **ProtoLink as the engine:** ProtoLink owns agent discovery, delegation,
   tools, state, events, approvals, cancellation, transports, and run reports.
+- **Ask and continue:** Architect uses native user questions to clarify missing
+  requirements, then continues the same task through the CLI/TUI answer callback.
 - **Runtime completion checks:** ProtoAgent derives an application-level
   `RunContract` and does not treat unsupported prose as a completed write task.
 - **Operator-visible behavior:** the Rust CLI exposes provider, model, context,
   agent, readiness, timeline, trace, diff, and session state.
+
+Ollama models advertising tool support use ProtoLink's native tool channel.
+Other models retain the JSON action protocol; a printed unfinished tool request
+cannot count as a completed answer. See [model configuration](docs/content/cli/models-and-config.md#ollama-tool-calling)
+for auto/native/json overrides.
 
 
 ## Architecture
@@ -87,7 +94,7 @@ proto-cli mcp test docs               # Discover only; no server tool invocation
 proto-cli mcp on                      # TUI: /mcp on
 ```
 
-The optional MCP broker uses ProtoLink 0.7.4's native adapter. Architect calls it
+The optional MCP broker uses ProtoLink 0.8.0's native adapter. Architect calls it
 with `tool_call`, never `infer`. Three fixed broker tools keep large server
 catalogs out of small-model prompts; connections and invocations use native
 approvals. See the [MCP setup guide](docs/content/core/mcp.md) for local/remote
@@ -109,7 +116,16 @@ Requirements:
 - Rust toolchain with Cargo 1.85 or newer
 - a supported local or API model provider
 
-ProtoAgent 0.3.0 requires ProtoLink 0.7.4 or newer with the HTTP, LLM and MCP extras.
+ProtoAgent 0.3.0 requires ProtoLink 0.8.0 or newer with the HTTP, LLM and MCP extras.
+The default harness uses owned local subagents with fresh conversations,
+inherited policies and shared budgets. It runs one child at a time, with no
+Registry server or loopback transport startup. Explicit transport meshes remain
+available. Native context policies and lifecycle hooks keep task state current
+and make large results retrievable in small pages.
+
+`proto-cli eval harness --json` checks these engine contracts offline, without
+a running model. See the [engine integration guide](docs/content/core/protolink-migration.md)
+for adopted capabilities, optional model fallback and recovery boundaries.
 
 ```bash
 git clone https://github.com/nMaroulis/protoagent.git
@@ -117,7 +133,7 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.7.4"
+python -m pip install "protolink[http,llms,mcp]>=0.8.0"
 python -m pip install -e core
 
 cargo build --release --locked --manifest-path cli/Cargo.toml
@@ -168,6 +184,9 @@ are covered in the [documentation](https://nmaroulis.github.io/protoagent/docs/i
 
 Code changes need required final checks. Configure uncommon projects through
 `.protoagent/project.json`; see the [task workflow guide](docs/content/core/task-workflow.md).
+Python projects without checks receive a predefined unittest runner for new
+regressions; zero tests cannot pass verification. Invalid planning selections
+return feedback so the model can correct them within the same run.
 Documentation-only changes may finish with verification explicitly unverified.
 
 ## Safety And Privacy

@@ -84,10 +84,16 @@ class OptionalAgentTests(unittest.TestCase):
             patch("protoagent_core.agents.deck.create_tester_agent") as tester,
             patch("protoagent_core.agents.deck.create_mcp_agent") as mcp,
         ):
-            deck = create_agent_deck(transport=None, tester_enabled=False, mcp_enabled=False)
+            deck = create_agent_deck(
+                transport=None, tester_enabled=False, mcp_enabled=False, local_children=True
+            )
             self.assertEqual(set(deck), {"architect", "explorer", "coder", "verifier"})
             tester.assert_not_called()
             mcp.assert_not_called()
+            self.assertEqual(set(deck["architect"].subagents), {"explorer", "coder", "verifier"})
+            self.assertEqual(deck["architect"].subagent_limits.max_concurrency, 1)
+            self.assertEqual(deck["architect"].subagent_limits.max_depth, 1)
+            self.assertFalse(deck["architect"].subagent_limits.background)
             prompt = architect_system_prompt(tester_enabled=False, mcp_enabled=False)
             self.assertIn("Never delegate to tester", prompt)
             self.assertIn("Never delegate to mcp", prompt)

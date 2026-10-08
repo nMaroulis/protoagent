@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from protolink import SubagentLimits
 from protolink.transport import Transport
 from protolink.types import TransportType
 
@@ -25,8 +26,9 @@ def create_agent_deck(
     model: str | None = None,
     workspace: str | None = None,
     urls: dict[str, str] | None = None,
-    transport: TransportType | Transport = "sse",
+    transport: TransportType | Transport | None = "sse",
     approval_handler=None,
+    user_input_handler=None,
     telemetry=None,
     prompt_profile: str = "auto",
     scout_enabled: bool = False,
@@ -38,11 +40,13 @@ def create_agent_deck(
     authorization=None,
     attempt=None,
     single_agent: bool = False,
+    local_children: bool = False,
+    max_children: int = 32,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
     Every LLM-capable agent receives its own LLM instance configured with the
-    same provider/model. Architect is the durable controller; Explorer and
+    same provider/model. Architect retains conversation memory; Explorer and
     Coder are task-local workers. Verifier is a tool-only command worker.
     Tester, Scout and the tool-only MCP broker are constructed only when
     their optional-agent settings are enabled. MCP connects only on approved calls.
@@ -96,22 +100,6 @@ def create_agent_deck(
         if scout_enabled
         else None
     )
-    architect = create_architect_agent(
-        registry=registry,
-        provider=provider,
-        model=model,
-        workspace=workspace,
-        url=urls.get("architect"),
-        record=record,
-        transport=transport,
-        telemetry=telemetry,
-        prompt_profile=prompt_profile,
-        scout_enabled=scout_enabled,
-        tester_enabled=tester_enabled,
-        mcp_enabled=mcp_enabled,
-        authenticator=auth.authenticator,
-        credentials=auth.credentials,
-    )
     deck = {
         "explorer": explorer,
         "coder": coder,
@@ -162,7 +150,27 @@ def create_agent_deck(
             authorization=authorization,
             attempt=attempt,
         )
-    deck["architect"] = architect
+    deck["architect"] = create_architect_agent(
+        registry=registry,
+        provider=provider,
+        model=model,
+        workspace=workspace,
+        url=urls.get("architect"),
+        record=record,
+        transport=transport,
+        telemetry=telemetry,
+        prompt_profile=prompt_profile,
+        scout_enabled=scout_enabled,
+        tester_enabled=tester_enabled,
+        mcp_enabled=mcp_enabled,
+        authenticator=auth.authenticator,
+        credentials=auth.credentials,
+        subagents=list(deck.values()) if local_children and not single_agent else (),
+        subagent_limits=SubagentLimits(
+            max_children=max_children, max_concurrency=1, max_depth=1, background=False
+        ),
+        user_input_handler=user_input_handler,
+    )
     return deck
 
 
@@ -208,7 +216,10 @@ def agent_manifest(
                 "TaskRecord criteria and repository check plan",
                 "ProtoLink API-key auth",
                 "Architect controller",
+                "Native ask_user questions and same-run continuation",
+                "Owned local children by default; explicit transport mesh available",
                 "Stateless specialist workers",
+                "Shared root budgets; sequential children; depth one",
                 *(["Optional Scout web research"] if scout_enabled else []),
                 *(["Optional MCP tool broker"] if mcp_enabled else []),
                 "ProtoLink policy gate",
@@ -223,7 +234,7 @@ def agent_manifest(
                 "persistence": "durable conversation memory",
                 "state": "stateful",
                 "contract": "routes by RunContract; manages bounded source packets and task state, never writes",
-                "tools": ["task_status", "plan_task", "worker_packet"],
+                "tools": ["task_status", "plan_task", "worker_packet", "ask_user"],
                 "enabled": True,
                 "optional": False,
                 **profile_fields,

@@ -14,12 +14,14 @@ use std::{env, fs};
 mod diff;
 mod inline_style;
 mod progress;
+mod question;
 mod sessions;
 mod terminal_ui;
 mod timeline;
 
 use inline_style::{inline_code_segments, InlineKind};
 use progress::{latest_progress_message, ProgressFile, RuntimeApproval};
+use question::{shell_question, QuestionReply};
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
@@ -208,6 +210,12 @@ struct ProtolinkStatus {
     web_tools_ready: bool,
     #[serde(default)]
     mcp_ready: bool,
+    #[serde(default)]
+    subagents_ready: bool,
+    #[serde(default)]
+    context_policy_ready: bool,
+    #[serde(default)]
+    user_input_ready: bool,
     #[serde(default)]
     error: String,
 }
@@ -459,8 +467,11 @@ fn print_cli_help() {
     println!("  proto-cli agents tester      Show or set optional test design: on|off");
     println!("  proto-cli agents mcp         Show or set optional MCP broker: on|off");
     println!("  proto-cli mcp                Setup: add NAME FILE.json, test NAME, tools NAME [TOOL], on|off, remove NAME");
-    println!("  proto-cli eval profiles      Routing diagnostics; --live contacts the model
-  proto-cli eval coding        Disposable coding exercises; --live includes a single-agent baseline");
+    println!(
+        "  proto-cli eval profiles      Routing diagnostics; --live contacts the model
+  proto-cli eval coding        Disposable coding exercises; --live includes a single-agent baseline
+  proto-cli eval harness       Offline ProtoLink engine-contract checks; no live model"
+    );
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
     println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
@@ -599,25 +610,41 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
             }
             _ = tokio::time::sleep(Duration::from_millis(140)) => {
                 ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
-                if let Some(approval) = progress_file.take_approval_request() {
-                    let approved = pb.suspend(|| -> Result<bool> {
-                        render_runtime_approval(&approval);
-                        if !approval.diff.trim().is_empty() {
-                            render_diff(&approval.diff);
+                if !cancellation_requested {
+                    if let Some(question) = progress_file.take_question() {
+                        let reply = pb.suspend(|| shell_question(&progress_file, &question))?;
+                        match reply {
+                            QuestionReply::Answered(answer) => progress_file.answer_question(&question, Some(&answer))?,
+                            QuestionReply::Declined => progress_file.answer_question(&question, None)?,
+                            QuestionReply::Expired => {},
+                            QuestionReply::Canceled => {
+                                progress_file.request_cancel("Canceled while answering in the ProtoAgent CLI")?;
+                                cancellation_requested = true;
+                            }
                         }
-                        if !approval.preview.trim().is_empty() {
-                            println!("{}", approval.preview);
-                        }
-                        Ok(Confirm::new("Authorize this Protolink action?")
-                            .with_default(false)
-                            .prompt()?)
-                    })?;
-                    progress_file.decide(&approval, approved)?;
-                    progress_events.push(format!(
-                        "Approval {}: {}.",
-                        if approved { "approved" } else { "denied" },
-                        approval.description
-                    ));
+                    }
+                }
+                if !cancellation_requested {
+                    if let Some(approval) = progress_file.take_approval_request() {
+                        let approved = pb.suspend(|| -> Result<bool> {
+                            render_runtime_approval(&approval);
+                            if !approval.diff.trim().is_empty() {
+                                render_diff(&approval.diff);
+                            }
+                            if !approval.preview.trim().is_empty() {
+                                println!("{}", approval.preview);
+                            }
+                            Ok(Confirm::new("Authorize this Protolink action?")
+                                .with_default(false)
+                                .prompt()?)
+                        })?;
+                        progress_file.decide(&approval, approved)?;
+                        progress_events.push(format!(
+                            "Approval {}: {}.",
+                            if approved { "approved" } else { "denied" },
+                            approval.description
+                        ));
+                    }
                 }
                 pb.set_message(latest_progress_message(&progress_events));
             }
@@ -1539,7 +1566,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}, MCP {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}, MCP {}, children {}, context policy {}, user input {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1553,6 +1580,9 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.transport_ready),
                         readiness(report.protolink.web_tools_ready),
                         readiness(report.protolink.mcp_ready),
+                        readiness(report.protolink.subagents_ready),
+                        readiness(report.protolink.context_policy_ready),
+                        readiness(report.protolink.user_input_ready),
                     )
                 } else if report.protolink.installed {
                     format!(
@@ -2057,6 +2087,33 @@ struct EvalCommandOptions {
 }
 
 fn handle_eval_command(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("harness") {
+        if args[1..].iter().any(|arg| arg != "--json") {
+            return Err(anyhow!(
+                "Usage: proto-cli eval harness [--json] (offline; no model)"
+            ));
+        }
+        let raw = call_no_args("run_harness_eval")
+            .map_err(|err| anyhow!("Python harness eval error: {err}"))?;
+        let report: Value = serde_json::from_str(&raw)?;
+        if args.iter().any(|arg| arg == "--json") {
+            println!("{raw}");
+        } else {
+            print_panel(
+                "OFFLINE HARNESS EVAL",
+                &[
+                    format!("Passed: {} | samples: {}", report["passed"], report["samples"].as_array().map_or(0, Vec::len)),
+                    format!("Scores: {}", report["scores"]),
+                    "Scripted actions measure integration; eval coding --live measures model behavior.".to_string(),
+                ],
+                PanelTone::Cyan,
+            );
+        }
+        if report["passed"] != true {
+            return Err(anyhow!("Offline harness evaluation failed"));
+        }
+        return Ok(());
+    }
     let (subcommand, rest) = match args.first().map(String::as_str) {
         None => ("profiles", args),
         Some("profiles") | Some("profile") => ("profiles", &args[1..]),

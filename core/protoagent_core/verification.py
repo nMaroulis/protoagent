@@ -258,7 +258,13 @@ def verification_summary(report: dict[str, Any]) -> str:
     if not report["results"]:
         return lines[0] + " No test/build command was executed."
     for item in report.get("latest") or report["results"]:
-        outcome = "timeout" if item.get("timed_out") else f"exit {item['exit_code']}"
+        outcome = (
+            "zero tests ran; verification is missing"
+            if item.get("empty_test_suite")
+            else "timeout"
+            if item.get("timed_out")
+            else f"exit {item['exit_code']}"
+        )
         phase = item.get("phase", "prepare")
         stale = " (resource changed since this check)" if item.get("stale") else ""
         lines.append(f"- [{phase}] {item['command']}: {outcome}{stale}")

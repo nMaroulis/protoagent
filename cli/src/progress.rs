@@ -8,6 +8,7 @@ pub(crate) struct ProgressFile {
     path: PathBuf,
     offset: u64,
     seen_approvals: HashSet<String>,
+    seen_questions: HashSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -130,6 +131,47 @@ pub(crate) struct RuntimeApproval {
     request: Value,
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct RuntimeQuestion {
+    pub(crate) request_id: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: Option<String>,
+    pub(crate) action_id: String,
+    pub(crate) question: String,
+    pub(crate) options: Vec<String>,
+    pub(crate) max_answer_chars: usize,
+    pub(crate) presentation_id: u64,
+}
+
+impl RuntimeQuestion {
+    fn from_value(value: Value) -> Option<Self> {
+        let question: Self = serde_json::from_value(value).ok()?;
+        if question.request_id.is_empty()
+            || question.run_id.is_empty()
+            || question.action_id.is_empty()
+            || question.question.trim().is_empty()
+            || question.question.chars().count() > 8000
+            || question.options.len() > 10
+            || question
+                .options
+                .iter()
+                .any(|option| option.trim().is_empty() || option.chars().count() > 500)
+            || question.max_answer_chars == 0
+            || question.max_answer_chars > 16384
+        {
+            return None;
+        }
+        Some(question)
+    }
+
+    fn same_request(&self, other: &Self) -> bool {
+        self.request_id == other.request_id
+            && self.run_id == other.run_id
+            && self.task_id == other.task_id
+            && self.action_id == other.action_id
+    }
+}
+
 impl ProgressFile {
     pub(crate) fn new(token: impl std::fmt::Display) -> Self {
         let nonce = std::time::SystemTime::now()
@@ -153,11 +195,15 @@ impl ProgressFile {
         let approval_request_path = control_path(&path, "approval-request");
         let approval_decision_path = control_path(&path, "approval-decision");
         let cancel_path = control_path(&path, "cancel");
+        let input_request_path = control_path(&path, "input-request");
+        let input_response_path = control_path(&path, "input-response");
         for candidate in [
             &path,
             &approval_request_path,
             &approval_decision_path,
             &cancel_path,
+            &input_request_path,
+            &input_response_path,
         ] {
             let _ = fs::remove_file(candidate);
         }
@@ -165,6 +211,7 @@ impl ProgressFile {
             path,
             offset: 0,
             seen_approvals: HashSet::new(),
+            seen_questions: HashSet::new(),
         }
     }
 
@@ -276,12 +323,58 @@ impl ProgressFile {
         )
     }
 
+    fn read_question(&self) -> Option<RuntimeQuestion> {
+        let text = fs::read_to_string(self.input_request_path()).ok()?;
+        RuntimeQuestion::from_value(serde_json::from_str(&text).ok()?)
+    }
+
+    pub(crate) fn take_question(&mut self) -> Option<RuntimeQuestion> {
+        let question = self.read_question()?;
+        let presentation = format!("{}:{}", question.request_id, question.presentation_id);
+        self.seen_questions.insert(presentation).then_some(question)
+    }
+
+    pub(crate) fn question_pending(&self, question: &RuntimeQuestion) -> bool {
+        self.read_question()
+            .is_some_and(|current| current.same_request(question))
+    }
+
+    pub(crate) fn answer_question(
+        &self,
+        question: &RuntimeQuestion,
+        answer: Option<&str>,
+    ) -> std::io::Result<()> {
+        if !self.question_pending(question) {
+            return Ok(()); // The native wait expired or was canceled while the UI was open.
+        }
+        if answer.is_some_and(|text| {
+            text.trim().is_empty() || text.chars().count() > question.max_answer_chars
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Answer must be nonblank and within the question limit",
+            ));
+        }
+        write_json_atomic(
+            &self.input_response_path(),
+            &serde_json::json!({
+                "request_id": question.request_id,
+                "run_id": question.run_id,
+                "task_id": question.task_id,
+                "action_id": question.action_id,
+                "answer": answer,
+            }),
+        )
+    }
+
     pub(crate) fn cleanup(&self) {
         for candidate in [
             self.path.clone(),
             self.approval_request_path(),
             self.approval_decision_path(),
             self.cancel_path(),
+            self.input_request_path(),
+            self.input_response_path(),
         ] {
             let _ = fs::remove_file(candidate);
         }
@@ -300,6 +393,14 @@ impl ProgressFile {
 
     fn cancel_path(&self) -> PathBuf {
         control_path(&self.path, "cancel")
+    }
+
+    fn input_request_path(&self) -> PathBuf {
+        control_path(&self.path, "input-request")
+    }
+
+    fn input_response_path(&self) -> PathBuf {
+        control_path(&self.path, "input-response")
     }
 }
 
@@ -569,6 +670,13 @@ fn run_event_summary(value: &Value) -> Option<String> {
                 if approved { "approved" } else { "denied" }
             ));
         }
+        ("user_input.requested", _) => return Some(format!("{agent}: Waiting for your answer.")),
+        ("user_input.answered", _) => return Some(format!("{agent}: User answer received.")),
+        ("user_input.declined", _) => return Some(format!("{agent}: User skipped the question.")),
+        ("user_input.timed_out", _) => {
+            return Some(format!("{agent}: Question timed out without an answer."))
+        }
+        ("user_input.canceled", _) => return Some(format!("{agent}: Question canceled.")),
         ("action.policy", _) => {
             let effect = value_string(payload, &["decision", "effect"]);
             if !effect.is_empty() {
@@ -1396,6 +1504,69 @@ mod tests {
         assert_eq!(decision["fingerprint"], "exact-file-fingerprint");
         assert_eq!(decision["approved"], true);
         assert_eq!(cancellation["reason"], "test cancellation");
+        progress.cleanup();
+    }
+
+    #[test]
+    fn questions_correlate_answers_and_close_when_native_wait_ends() {
+        let mut progress = ProgressFile::new("question-test");
+        let mut request = json!({
+            "request_id": "input_123", "run_id": "run_123", "task_id": "task_123",
+            "action_id": "action_123", "question": "Which format?", "options": ["JSON", "CSV"],
+            "max_answer_chars": 4096, "presentation_id": 0,
+        });
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        let question = progress.take_question().unwrap();
+        assert!(progress.question_pending(&question));
+        assert!(progress.take_question().is_none());
+        progress
+            .answer_question(&question, Some("custom format"))
+            .unwrap();
+        let answer: Value =
+            serde_json::from_slice(&fs::read(progress.input_response_path()).unwrap()).unwrap();
+        for field in ["request_id", "run_id", "task_id", "action_id"] {
+            assert_eq!(answer[field], request[field]);
+        }
+        assert_eq!(answer["answer"], "custom format");
+        assert!(answer.get("approved").is_none());
+        assert!(progress.answer_question(&question, Some(" ")).is_err());
+        assert!(progress
+            .answer_question(&question, Some(&"x".repeat(4097)))
+            .is_err());
+        progress.answer_question(&question, None).unwrap();
+        let declined: Value =
+            serde_json::from_slice(&fs::read(progress.input_response_path()).unwrap()).unwrap();
+        assert!(declined["answer"].is_null());
+        request["presentation_id"] = json!(1);
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(progress.take_question().is_some());
+        fs::remove_file(progress.input_request_path()).unwrap();
+        fs::remove_file(progress.input_response_path()).unwrap();
+        assert!(!progress.question_pending(&question));
+        progress
+            .answer_question(&question, Some("late answer"))
+            .unwrap();
+        assert!(!progress.input_response_path().exists());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn question_lifetime_does_not_match_a_foreign_run_or_action() {
+        let mut progress = ProgressFile::new("stale-question-test");
+        let mut request = json!({
+            "request_id": "input", "run_id": "run", "task_id": "task",
+            "action_id": "action", "question": "Format?", "options": [],
+            "max_answer_chars": 4096, "presentation_id": 0,
+        });
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        let question = progress.take_question().unwrap();
+        request["action_id"] = json!("other action");
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(!progress.question_pending(&question));
+        request["action_id"] = json!("action");
+        request["run_id"] = json!("other run");
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(!progress.question_pending(&question));
         progress.cleanup();
     }
 }

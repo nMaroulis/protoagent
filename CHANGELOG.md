@@ -21,13 +21,39 @@ This file records user-visible changes to the active ProtoAgent components.
   source revision guard, native diff approval and native recovery.
 - Compact small-profile protocol prompts and worker cards with exact input
   schemas, omitting repetitive examples and large output schemas.
-- Per-request context admission through public ProtoLink action methods,
+- Per-request context admission through native ProtoLink policies and hooks,
   reserving output tokens and retaining the current task and runtime record.
   Small profiles with unknown capacity receive an 8192-token application cap.
 - Disposable coding evals with independent acceptance scripts and a same-model
   single-agent baseline: `proto-cli eval coding --plan|--live`.
+- Owned local subagents through ProtoLink 0.8: independent conversations,
+  inherited policies, shared Graph budgets, sequential dispatch, depth one and
+  configurable per-attempt child limits. Default execution needs no Registry
+  server or loopback sockets; explicit transport meshes remain available.
+- Native ContextPolicy and AgentHooks for current task state, complete-turn
+  pruning and scoped progressive retrieval of large tool/child observations.
+- Optional explicit same-provider `fallback_models` through native RoutedLLM,
+  with bounded transient request fallback, shared accounting and no tool replay.
+- `eval harness [--json]`: native evaluate() runs repeated offline application
+  read/task-state cases with fresh factories and linked child receipt checks.
+- Architect-only native `ask_user` for clarification and same-task continuation.
+  TUI/shell question input supports explicit suggestions, free text, skip and
+  cancellation, correlated replies, native deadlines and no implicit approval.
 
 ### Changed
+
+- Python projects without repository checks receive a predefined unittest
+  runner for new root regression tests. Compact task records expose valid and
+  bootstrap check IDs; empty suites still cannot verify changes. Planning
+  mistakes return corrective feedback without changing the plan, and omitted
+  check IDs preserve defaults. Explicit project configuration stays authoritative.
+
+- Ollama models advertising `tools` use ProtoLink's native tool channel, with
+  bounded cached metadata discovery and explicit auto/native/json overrides.
+  Small JSON prompts include an Explorer README delegation example. A native
+  completion hook rejects unfinished action-shaped answers before completion.
+  Earlier malformed answers become invalid-answer notes in model context while
+  valid historical actions and original reports remain intact.
 
 - Code changes require selected repository checks executed at current revisions.
   Preparation and unrelated successful commands do not satisfy verification.
@@ -39,7 +65,11 @@ This file records user-visible changes to the active ProtoAgent components.
 - Explicit small-model hints take priority over provider hosting location.
 - Intent classification handles polite requests and explicit no-write instructions.
 - CLI/core/docs coordinated versions advance to 0.3.0; ProtoLink floor advances
-  to 0.7.4 with the HTTP, LLM and MCP extras.
+  to 0.8.0 with the HTTP, LLM and MCP extras.
+- Replace model acquisition wrappers with native context policies and lifecycle
+  hooks. The small profile retains compact declarations and exact input schemas.
+- Present local child output from native task records before join, deduplicated
+  against the parent stream, preserving live model/process previews.
 
 ### Migration and limits
 
@@ -55,8 +85,11 @@ This file records user-visible changes to the active ProtoAgent components.
   Approvals/allowlists do not sandbox server
   effects; remote receipts cannot satisfy repository verification. Resources,
   prompts, OAuth and server installation are not part of this integration.
-- Request admission uses token estimates. Durable task state survives observation
-  eviction. Live model performance remains to be measured with coding evals.
+- Request admission uses token estimates. Runtime-held task state survives observation
+  eviction within a live run. Live model performance remains to be measured with coding evals.
+- Native execution restart/resume, Docker check execution and background model
+  supervision are not integrated into the custom coding Graph. Saved conversations,
+  reports and file recovery are distinct from execution continuation.
 
 ## [0.2.3] - 2026-09-15
 

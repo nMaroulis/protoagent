@@ -31,6 +31,9 @@ small complete replacements. Follow task_status criteria and file scope. Paths
 must be absolute and beneath the project root; parent directories must already
 exist. The native tools reject symlinks. Ask Architect for an explicitly approved
 command if a missing directory must be created before a later edit attempt.
+For bootstrap_checks, create focused stdlib unittest regressions in root
+test_*.py files within the assigned scope. Exercise the requested behavior,
+not just imports or syntax. Verifier runs them; you never claim they passed.
 
 Each write presents an exact unified diff for approval, checks the preimage and
 saves recovery bytes before changing the file. A preview or approval is not an
@@ -100,6 +103,7 @@ def create_coder_agent(
                     "repository check with run_check. Baselines permit later editing; "
                     "final verification closes editing until a bounded repair. "
                     "Use plan_task and task_status for criteria and scope. "
+                    "Use ask_user to clarify missing requirements; feedback never grants approval. "
                     "Never claim completion without native writes and final checks. "
                     "Use exact edit_file replacements with a read_file revision; "
                     "native recovery and approvals apply to every write."
@@ -128,6 +132,7 @@ def create_coder_agent(
                 "filesystem.write": "require_approval",
                 "filesystem.restore": "require_approval",
                 **({"process.execute": "require_approval"} if single_agent else {}),
+                **({"user.interact": "allow"} if single_agent else {}),
             },
             workspace=workspace_root(workspace),
             authorization=authorization,

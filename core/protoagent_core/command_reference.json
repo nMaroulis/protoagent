@@ -409,6 +409,10 @@
     [
       "mcp [status|add NAME FILE.json|remove NAME|on|off|test NAME|tools NAME [TOOL]]",
       "Configure MCP servers, explicit tool allowlists and HTTP auth environment references. Probes connect without invoking tools. No model is used."
+    ],
+    [
+      "eval harness [--json]",
+      "Run four offline native engine-contract samples with fresh factories and linked child receipts; no live model or workspace writes."
     ]
   ]
 }

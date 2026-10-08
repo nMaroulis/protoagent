@@ -1,4 +1,4 @@
-"""Application-owned approval and cancellation bridge for the Rust CLI."""
+"""Application UI for native approvals, questions and cancellation."""
 
 from __future__ import annotations
 
@@ -16,9 +16,11 @@ from tempfile import TemporaryFile
 from typing import Any
 
 from protolink import ApprovalBroker, ApprovalDecision
+from protolink.tools.builtins.user_input import UserInputRequest
 
 from .runtime_policy import RunAuthorization
 from .runtime_storage import output_redaction
+from .user_input import MAX_ANSWER_CHARS
 
 
 class RuntimeBridge:
@@ -30,6 +32,7 @@ class RuntimeBridge:
         self.authorization: RunAuthorization | None = None
         self.redaction = output_redaction()
         self._write_lock = threading.Lock()
+        self._input_lock = asyncio.Lock()
         # Rust owns stale-control cleanup before the worker starts. Preserve a
         # cancellation that may arrive while Python is still assembling context.
         self._clear_controls(include_cancel=False)
@@ -142,6 +145,64 @@ class RuntimeBridge:
             if record.decision is not None
         ]
 
+    async def ask_user(self, request: UserInputRequest) -> str | None:
+        """Display one native question; ProtoLink owns its wait and continuation.
+
+        Responses must match the exact run/task/action/question currently shown.
+        Private per-run controls cannot grant execution approval. Native timeout,
+        cancellation and runtime-budget expiry cancel this callback and clear UI
+        state in finally; a missing frontend explicitly declines the question.
+        """
+        if self.progress_path is None:
+            return None
+        async with self._input_lock:
+            self._unlink(self.input_response_path)
+            correlation = {
+                key: value
+                for key, value in request.to_dict().items()
+                if key in {"request_id", "run_id", "task_id", "action_id"}
+            }
+            generation = 0
+
+            def present():
+                self._write_json(
+                    self.input_request_path,
+                    {
+                        **self.redaction.redact(request.to_dict()),
+                        "max_answer_chars": MAX_ANSWER_CHARS,
+                        "presentation_id": generation,
+                    },
+                )
+
+            try:
+                present()
+                while True:
+                    data = self._read_json(self.input_response_path)
+                    if data is not None:
+                        self._unlink(self.input_response_path)
+                        answer = data.get("answer")
+                        valid = (
+                            all(data.get(key) == value for key, value in correlation.items())
+                            and "answer" in data
+                            and (
+                                answer is None
+                                or (
+                                    isinstance(answer, str)
+                                    and bool(answer.strip())
+                                    and len(answer) <= MAX_ANSWER_CHARS
+                                )
+                            )
+                        )
+                        if valid:
+                            return answer
+                        self.emit("User answer rejected: stale question or invalid answer.")
+                        generation += 1
+                        present()
+                    await asyncio.sleep(0.04)
+            finally:
+                self._unlink(self.input_request_path)
+                self._unlink(self.input_response_path)
+
     async def serve(self, handle) -> None:
         """Present pending requests one at a time; native broker owns their waits.
 
@@ -231,6 +292,14 @@ class RuntimeBridge:
     def cancel_path(self) -> Path | None:
         return self._control_path("cancel")
 
+    @property
+    def input_request_path(self) -> Path | None:
+        return self._control_path("input-request")
+
+    @property
+    def input_response_path(self) -> Path | None:
+        return self._control_path("input-response")
+
     def cleanup(self) -> None:
         """Remove control files after a run while leaving progress to Rust."""
         self._clear_controls()
@@ -241,7 +310,12 @@ class RuntimeBridge:
         return Path(f"{self.progress_path}.{suffix}.json")
 
     def _clear_controls(self, *, include_cancel: bool = True) -> None:
-        paths = [self.request_path, self.decision_path]
+        paths = [
+            self.request_path,
+            self.decision_path,
+            self.input_request_path,
+            self.input_response_path,
+        ]
         if include_cancel:
             paths.append(self.cancel_path)
         for path in paths:

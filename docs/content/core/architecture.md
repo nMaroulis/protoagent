@@ -148,4 +148,4 @@ That makes the CLI robust enough to show actionable diagnostics even before a
 model/provider is fully configured.
 
 
-`configure_mcp(args_json)` and `configure_mcp_text(text)` provide model-free MCP setup and discovery probes to shell/TUI frontends. `mcp.py` uses ProtoLink 0.7.4 native adapters behind the optional tool-only broker; see [MCP Broker](mcp.md).
+`configure_mcp(args_json)` and `configure_mcp_text(text)` provide model-free MCP setup and discovery probes to shell/TUI frontends. `mcp.py` uses ProtoLink 0.8.0 native adapters behind the optional tool-only broker; see [MCP Broker](mcp.md).

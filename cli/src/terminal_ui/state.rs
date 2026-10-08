@@ -150,6 +150,32 @@ impl TerminalApp {
         }));
     }
 
+    pub(super) fn record_clarification(&mut self, question: &str, answer: &str) {
+        let index = self.active_response.unwrap_or(self.messages.len());
+        for (offset, (role, label, body)) in [
+            (Role::Assistant, "Architect question", question),
+            (Role::User, "Your answer", answer),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.messages.insert(
+                index + offset,
+                Arc::new(TerminalMessage {
+                    role,
+                    label: label.into(),
+                    body: body.into(),
+                    meta: Vec::new(),
+                    details: Vec::new(),
+                }),
+            );
+        }
+        if let Some(active) = &mut self.active_response {
+            *active += 2;
+        }
+        self.jump_to_bottom();
+    }
+
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
         if self.active_response.is_none() {
             self.jump_to_bottom();
@@ -405,6 +431,28 @@ pub(super) struct TerminalMessage {
 #[cfg(test)]
 mod streaming_tests {
     use super::*;
+
+    #[test]
+    fn clarification_is_before_the_continuing_answer_without_changing_its_identity() {
+        let mut app = TerminalApp::empty();
+        app.push(Role::User, "You", "Explain the project");
+        app.begin_response("architect");
+        let old = app.active_response.unwrap();
+        app.record_clarification("Detailed or concise?", "concise");
+        assert_eq!(app.active_response, Some(old + 2));
+        assert_eq!(app.messages[old].body, "Detailed or concise?");
+        assert_eq!(app.messages[old + 1].body, "concise");
+        app.live_output.observe(crate::progress::OutputUpdate {
+            id: "continued".into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: "The answer".into(),
+            replace: false,
+        });
+        app.update_streaming_response(2);
+        assert_eq!(app.messages[old + 2].body, "The answer");
+        assert_eq!(app.messages[old + 1].body, "concise");
+    }
     use crate::progress::OutputUpdate;
 
     #[test]

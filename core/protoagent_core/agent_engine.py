@@ -216,6 +216,13 @@ def list_quality_eval_tasks() -> str:
     return _json(list_eval_tasks())
 
 
+def run_harness_eval() -> str:
+    """Run offline integration cases through ProtoLink's native evaluator."""
+    from .harness_eval import run_harness_eval as run_eval
+
+    return _json(run_eval())
+
+
 def compact_protolink_history(
     session_id: str,
     strategy: str = "tokens",

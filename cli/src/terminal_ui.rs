@@ -17,21 +17,24 @@ use crate::{
 mod approval;
 mod commands;
 mod diff_view;
-mod input;
+pub(crate) mod input;
 mod markdown;
 mod modal;
 mod model_picker;
 mod project;
+mod question;
 mod render;
 mod state;
 mod surface;
 mod theme;
 
+use crate::question::QuestionReply;
 use approval::approval_prompt;
 use diff_view::{diff_review_summary, show_diff_modal};
 use modal::pick_choice_modal;
 use model_picker::{handle_key_command, handle_model_command, load_inventory_with_feedback};
 use project::handle_project_command;
+use question::question_prompt;
 use render::truncate_detail;
 use state::{PanelView, Role, TerminalApp};
 use surface::TerminalSurface;
@@ -497,21 +500,46 @@ async fn run_agent(
             }
             _ = sleep(Duration::from_millis(INPUT_POLL_MS)) => {
                 ingest_progress(app, &mut progress_events, progress_file.read_ui_batch());
-                if let Some(approval) = progress_file.take_approval_request() {
-                    if !approval.diff.trim().is_empty() {
-                        app.last_diff_preview = approval.diff.clone();
+                if !cancellation_requested {
+                    if let Some(question) = progress_file.take_question() {
+                        app.activity = "waiting for your answer".into();
+                        terminal.render(app, None)?;
+                        let reply = question_prompt(terminal, app, &progress_file, &question)?;
+                        // Restore the transcript frame after painting the overlay.
+                        terminal.render(app, None)?;
+                        match reply {
+                            QuestionReply::Answered(answer) => {
+                                progress_file.answer_question(&question, Some(&answer))?;
+                                // Answers are already in native history/events. Keep
+                                // the UI transcript usable without resubmitting a task.
+                                app.record_clarification(&question.question, &answer);
+                            }
+                            QuestionReply::Declined => progress_file.answer_question(&question, None)?,
+                            QuestionReply::Expired => {},
+                            QuestionReply::Canceled => {
+                                progress_file.request_cancel("Canceled while answering in the ProtoAgent TUI")?;
+                                cancellation_requested = true;
+                            }
+                        }
                     }
-                    terminal.render(app, None)?;
-                    let approved = approval_prompt(terminal, app, &approval)?;
-                    // Modal painting bypasses the transcript cache. Restore the
-                    // complete frame before returning to incremental updates.
-                    terminal.render(app, None)?;
-                    progress_file.decide(&approval, approved)?;
-                    let decision = if approved { "approved" } else { "denied" };
-                    progress_events.push(format!(
-                        "Approval {decision}: {}.",
-                        if approval.description.is_empty() { approval.action_name } else { approval.description }
-                    ));
+                }
+                if !cancellation_requested {
+                    if let Some(approval) = progress_file.take_approval_request() {
+                        if !approval.diff.trim().is_empty() {
+                            app.last_diff_preview = approval.diff.clone();
+                        }
+                        terminal.render(app, None)?;
+                        let approved = approval_prompt(terminal, app, &approval)?;
+                        // Modal painting bypasses the transcript cache. Restore the
+                        // complete frame before returning to incremental updates.
+                        terminal.render(app, None)?;
+                        progress_file.decide(&approval, approved)?;
+                        let decision = if approved { "approved" } else { "denied" };
+                        progress_events.push(format!(
+                            "Approval {decision}: {}.",
+                            if approval.description.is_empty() { approval.action_name } else { approval.description }
+                        ));
+                    }
                 }
                 if poll_runtime_input(app, terminal, cancellation_requested)? {
                     progress_file.request_cancel("Canceled from the ProtoAgent TUI")?;

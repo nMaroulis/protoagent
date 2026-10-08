@@ -177,9 +177,13 @@ Context Loom supplies initial orientation. Workers now use bounded line-range
 reads with full-file revisions for actual edits. Coder can reread missing source
 and apply exact replacements instead of reproducing a whole file.
 
-`request_budget.py` estimates messages, schemas and agent cards before every
-configured model request, reserves output space, and evicts older observations
-while retaining the current task and runtime record. Large initial repository
+`request_budget.py` configures native `ContextPolicy` and `AgentHooks`, reserves
+output space and accounts for native schemas before every model request. ProtoLink
+prunes complete old turns and clears acknowledged observations. The application
+refreshes the runtime task record and prepares delegated results through the same
+policy. Large tool/child results become previews with scoped references, readable
+through `read_context_artifact` in small pages; receipt authority is preserved.
+Large initial repository
 evidence can be reduced to fit; mandatory overflow fails explicitly. These are
 estimates, not exact provider token counts. See [Task Workflow](task-workflow.md).
 

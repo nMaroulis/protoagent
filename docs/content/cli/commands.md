@@ -53,6 +53,7 @@ Installed examples use `proto-cli <command>`.
 | `agents scout [on\|off]` | Show, enable, or disable optional Scout. Changes apply to the next run. |
 | `eval profiles [--plan\|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
 | `eval tasks` | List built-in quality eval tasks. |
+| `eval harness [--json]` | Run offline native engine-contract cases with scripted actions; no live model. |
 | `context` | Show Context Loom status for the active project. |
 | `context QUERY` | Build a source-cited Context Pack without running a model. |
 | `context window [16k\|auto]` | Show, set, or clear the Ollama context window override. |
