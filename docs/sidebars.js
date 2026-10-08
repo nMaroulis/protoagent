@@ -35,6 +35,8 @@ const sidebars = {
         'core/overview',
         'core/architecture',
         'core/agents',
+        'core/task-workflow',
+        'core/mcp',
         'core/runtime',
         'core/protolink-migration',
         'core/quality-evals',

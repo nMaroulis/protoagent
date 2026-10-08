@@ -3,7 +3,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// A multiline prompt buffer whose cursor always sits on a grapheme boundary.
-pub(super) struct InputEditor {
+pub(crate) struct InputEditor {
     history: VecDeque<String>,
     buffer: String,
     cursor: usize,
@@ -12,11 +12,11 @@ pub(super) struct InputEditor {
 }
 
 impl InputEditor {
-    pub(super) fn new(history: &VecDeque<String>) -> Self {
+    pub(crate) fn new(history: &VecDeque<String>) -> Self {
         Self::with_initial(history, "")
     }
 
-    pub(super) fn with_initial(history: &VecDeque<String>, initial: &str) -> Self {
+    pub(crate) fn with_initial(history: &VecDeque<String>, initial: &str) -> Self {
         let mut editor = Self {
             history: history.clone(),
             buffer: String::new(),
@@ -28,21 +28,21 @@ impl InputEditor {
         editor
     }
 
-    pub(super) fn line(&self) -> String {
+    pub(crate) fn line(&self) -> String {
         self.buffer.clone()
     }
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
     /// Return a scrolling single-row view for existing modal input fields.
-    pub(super) fn visible(&self, width: usize) -> (String, usize) {
+    pub(crate) fn visible(&self, width: usize) -> (String, usize) {
         let (lines, column, _) = self.layout(width, 1);
         (lines.into_iter().next().unwrap_or_default(), column)
     }
 
     /// Wrap by terminal cells and keep the cursor within the visible row window.
-    pub(super) fn layout(&self, width: usize, rows: usize) -> (Vec<String>, usize, usize) {
+    pub(crate) fn layout(&self, width: usize, rows: usize) -> (Vec<String>, usize, usize) {
         let (lines, positions) = self.positions(width.max(1));
         let (_, column, row) = positions
             .iter()
@@ -89,12 +89,12 @@ impl InputEditor {
         (lines, positions)
     }
 
-    pub(super) fn insert(&mut self, ch: char) {
+    pub(crate) fn insert(&mut self, ch: char) {
         self.insert_str(&ch.to_string());
     }
 
     /// Insert pasted text literally; newlines do not submit and tags do not open pickers.
-    pub(super) fn insert_str(&mut self, text: &str) {
+    pub(crate) fn insert_str(&mut self, text: &str) {
         let text = text
             .replace("\r\n", "\n")
             .replace('\r', "\n")
@@ -119,13 +119,13 @@ impl InputEditor {
         self.history_index = None;
     }
 
-    pub(super) fn replace(&mut self, text: &str) {
+    pub(crate) fn replace(&mut self, text: &str) {
         self.buffer.clear();
         self.cursor = 0;
         self.insert_str(text);
     }
 
-    pub(super) fn backspace(&mut self) {
+    pub(crate) fn backspace(&mut self) {
         if self.cursor > 0 {
             let previous = self.buffer[..self.cursor]
                 .grapheme_indices(true)
@@ -139,7 +139,7 @@ impl InputEditor {
         }
     }
 
-    pub(super) fn delete(&mut self) {
+    pub(crate) fn delete(&mut self) {
         if let Some(grapheme) = self.buffer[self.cursor..].graphemes(true).next() {
             let end = self.cursor + grapheme.len();
             self.buffer.replace_range(self.cursor..end, "");
@@ -148,32 +148,32 @@ impl InputEditor {
         }
     }
 
-    pub(super) fn move_left(&mut self) {
+    pub(crate) fn move_left(&mut self) {
         self.cursor = self.buffer[..self.cursor]
             .grapheme_indices(true)
             .next_back()
             .map(|(i, _)| i)
             .unwrap_or(0);
     }
-    pub(super) fn move_right(&mut self) {
+    pub(crate) fn move_right(&mut self) {
         if let Some(grapheme) = self.buffer[self.cursor..].graphemes(true).next() {
             self.cursor += grapheme.len();
         }
     }
-    pub(super) fn move_home(&mut self) {
+    pub(crate) fn move_home(&mut self) {
         self.cursor = self.buffer[..self.cursor]
             .rfind('\n')
             .map(|i| i + 1)
             .unwrap_or(0);
     }
-    pub(super) fn move_end(&mut self) {
+    pub(crate) fn move_end(&mut self) {
         self.cursor += self.buffer[self.cursor..]
             .find('\n')
             .unwrap_or(self.buffer.len() - self.cursor);
     }
 
     /// Move between visual lines; return false for a single-line history gesture.
-    pub(super) fn move_vertical(&mut self, down: bool, width: usize) -> bool {
+    pub(crate) fn move_vertical(&mut self, down: bool, width: usize) -> bool {
         let (lines, positions) = self.positions(width.max(1));
         if lines.len() == 1 {
             return false;
@@ -197,7 +197,7 @@ impl InputEditor {
         true
     }
 
-    pub(super) fn history_prev(&mut self) {
+    pub(crate) fn history_prev(&mut self) {
         if self.history.is_empty() {
             return;
         }
@@ -210,7 +210,7 @@ impl InputEditor {
         };
         self.load_history(index);
     }
-    pub(super) fn history_next(&mut self) {
+    pub(crate) fn history_next(&mut self) {
         let Some(index) = self.history_index else {
             return;
         };

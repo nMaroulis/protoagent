@@ -2,8 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::{
-    empty_as_unknown, format_prompt_profile, load_agent_settings, load_inventory_with_validation,
-    load_visible_config,
+    empty_as_unknown, format_prompt_profile, load_agent_settings, load_visible_config,
     progress::{ContextUsage, LiveOutput},
     AgentSettings, CoreResponse, DoctorReport, ModelInventory, INPUT_HISTORY_CAPACITY,
 };
@@ -26,6 +25,7 @@ pub(super) struct TerminalApp {
     pub(super) active_response: Option<usize>,
     answer_revision: Option<u64>,
     pub(super) models_loading: bool,
+    inventory_summary: Option<(String, String)>,
     pub(super) debug_mode: bool,
 }
 
@@ -54,6 +54,7 @@ impl TerminalApp {
             active_response: None,
             answer_revision: None,
             models_loading: false,
+            inventory_summary: None,
             debug_mode: false,
         }
     }
@@ -90,12 +91,18 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh(&mut self, doctor: Option<&DoctorReport>) {
-        self.status = StatusSnapshot::load(doctor, false);
-    }
-
-    pub(super) fn refresh_models(&mut self) {
-        self.status = StatusSnapshot::load(None, true);
-        self.models_loading = false;
+        let mut next = StatusSnapshot::load(doctor);
+        if let Some((models, providers)) = &self.inventory_summary {
+            next.model_summary = models.clone();
+            next.provider_summary = providers.clone();
+        }
+        if doctor.is_none()
+            && next.provider == self.status.provider
+            && next.model == self.status.model
+        {
+            next.runtime = self.status.runtime.clone();
+        }
+        self.status = next;
     }
 
     pub(super) fn refresh_agent_settings(&mut self) -> anyhow::Result<()> {
@@ -114,6 +121,10 @@ impl TerminalApp {
 
     pub(super) fn apply_model_inventory(&mut self, inventory: &ModelInventory) {
         self.status.apply_inventory(inventory);
+        self.inventory_summary = Some((
+            self.status.model_summary.clone(),
+            self.status.provider_summary.clone(),
+        ));
         self.models_loading = false;
     }
 
@@ -137,6 +148,32 @@ impl TerminalApp {
             meta: Vec::new(),
             details: Vec::new(),
         }));
+    }
+
+    pub(super) fn record_clarification(&mut self, question: &str, answer: &str) {
+        let index = self.active_response.unwrap_or(self.messages.len());
+        for (offset, (role, label, body)) in [
+            (Role::Assistant, "Architect question", question),
+            (Role::User, "Your answer", answer),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.messages.insert(
+                index + offset,
+                Arc::new(TerminalMessage {
+                    role,
+                    label: label.into(),
+                    body: body.into(),
+                    meta: Vec::new(),
+                    details: Vec::new(),
+                }),
+            );
+        }
+        if let Some(active) = &mut self.active_response {
+            *active += 2;
+        }
+        self.jump_to_bottom();
     }
 
     pub(super) fn push_response(&mut self, response: &CoreResponse) {
@@ -394,6 +431,28 @@ pub(super) struct TerminalMessage {
 #[cfg(test)]
 mod streaming_tests {
     use super::*;
+
+    #[test]
+    fn clarification_is_before_the_continuing_answer_without_changing_its_identity() {
+        let mut app = TerminalApp::empty();
+        app.push(Role::User, "You", "Explain the project");
+        app.begin_response("architect");
+        let old = app.active_response.unwrap();
+        app.record_clarification("Detailed or concise?", "concise");
+        assert_eq!(app.active_response, Some(old + 2));
+        assert_eq!(app.messages[old].body, "Detailed or concise?");
+        assert_eq!(app.messages[old + 1].body, "concise");
+        app.live_output.observe(crate::progress::OutputUpdate {
+            id: "continued".into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: "The answer".into(),
+            replace: false,
+        });
+        app.update_streaming_response(2);
+        assert_eq!(app.messages[old + 2].body, "The answer");
+        assert_eq!(app.messages[old + 1].body, "concise");
+    }
     use crate::progress::OutputUpdate;
 
     #[test]
@@ -538,7 +597,7 @@ pub(super) struct StatusSnapshot {
 }
 
 impl StatusSnapshot {
-    fn load(doctor: Option<&DoctorReport>, validate_api_keys: bool) -> Self {
+    fn load(doctor: Option<&DoctorReport>) -> Self {
         let mut snapshot = Self {
             provider: "unknown".to_string(),
             model: "not selected".to_string(),
@@ -583,12 +642,6 @@ impl StatusSnapshot {
                 .count();
             snapshot.provider_summary =
                 format!("{configured} configured provider(s); /models scans live status");
-        }
-        if validate_api_keys {
-            if let Ok(inventory) = load_inventory_with_validation(true) {
-                snapshot.model_summary = model_summary(&inventory);
-                snapshot.provider_summary = provider_summary(&inventory);
-            }
         }
         if let Some(report) = doctor {
             snapshot.runtime = doctor_summary(report);

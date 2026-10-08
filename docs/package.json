@@ -1,6 +1,6 @@
 {
   "name": "protoagent-docs",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "scripts": {
     "start": "docusaurus start --host 127.0.0.1",

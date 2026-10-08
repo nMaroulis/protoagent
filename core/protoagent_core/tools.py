@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -50,35 +51,54 @@ def to_relative(path: Path, workspace: str | None = None) -> str:
 
 
 def read_file(
-    path: str, workspace: str | None = None, with_line_numbers: bool = True
+    path: str,
+    workspace: str | None = None,
+    with_line_numbers: bool = True,
+    start_line: int = 1,
+    end_line: int | None = None,
+    max_chars: int = 8192,
 ) -> dict[str, Any]:
-    """Read a UTF-8 text file with optional line-number formatting."""
+    """Read one bounded source span and return its full-file SHA-256 revision."""
     target = safe_path(path, workspace)
-    if not target.exists():
-        return {"success": False, "error": f"File not found: {path}"}
     if not target.is_file():
         return {"success": False, "error": f"Not a file: {path}"}
-    if target.stat().st_size > MAX_READ_BYTES:
-        return {
-            "success": False,
-            "error": f"File too large for a single read: {path}",
-            "size_bytes": target.stat().st_size,
-        }
-
+    if start_line < 1 or (end_line is not None and end_line < start_line):
+        return {"success": False, "error": "Invalid line range"}
+    if target.stat().st_size > 8 * 1024 * 1024:
+        return {"success": False, "error": "File exceeds the 8 MiB read ceiling"}
     try:
-        content = target.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        return {"success": False, "error": f"File is not UTF-8 text: {path}"}
-
-    numbered = "".join(
-        f"{idx + 1:4d} | {line}" for idx, line in enumerate(content.splitlines(True))
-    )
+        data = target.read_bytes()
+        lines = data.decode("utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"success": False, "error": str(exc)}
+    limit = max(256, min(max_chars, MAX_READ_BYTES))
+    stop = min(len(lines), end_line if end_line is not None else start_line + 119)
+    rows = []
+    used = 0
+    last = start_line - 1
+    partial = False
+    for index in range(start_line - 1, stop):
+        row = f"{index + 1:4d} | {lines[index]}" if with_line_numbers else lines[index]
+        if used + len(row) > limit:
+            if not rows:
+                rows.append(row[:limit])
+                partial = True
+                last = index + 1
+            break
+        rows.append(row)
+        used += len(row)
+        last = index + 1
     return {
         "success": True,
         "path": to_relative(target, workspace),
-        "content": numbered if with_line_numbers else content,
-        "raw_content": content,
-        "line_count": len(content.splitlines()),
+        "content": "".join(rows),
+        "revision": hashlib.sha256(data).hexdigest(),
+        "line_count": len(lines),
+        "start_line": start_line,
+        "end_line": last,
+        "truncated": partial or last < len(lines),
+        "partial_line": partial,
+        "next_line": last if partial else last + 1,
     }
 
 
@@ -153,7 +173,7 @@ def search_regex(
                             {
                                 "file": rel,
                                 "line": line_number,
-                                "content": line.rstrip("\n"),
+                                "content": line.rstrip("\n")[:500],
                             }
                         )
                     if len(matches) >= MAX_SEARCH_RESULTS:

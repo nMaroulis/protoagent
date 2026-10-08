@@ -47,6 +47,13 @@ def output_redaction(*secrets: str) -> OutputRedaction:
                 if DEFAULT_REDACTION_POLICY.is_sensitive_key(key) and value
             )
     values.update(secret for secret in secrets if secret)
+    servers = config.load_config().get("mcp_servers", {})
+    for server in servers.values() if isinstance(servers, dict) else ():
+        if isinstance(server, dict):
+            references = server.get("headers_env", {})
+            for variable in references.values() if isinstance(references, dict) else ():
+                if isinstance(variable, str) and (value := os.getenv(variable)):
+                    values.add(value)
     return OutputRedaction(
         sensitive_values=frozenset(value for value in values if value),
     )

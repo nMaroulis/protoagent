@@ -1,472 +1,529 @@
-# ProtoAgent Architecture: Local-First A2A Orchestration for Autonomous Coding
+# ProtoAgent: A Coding Agent Harness for Small Language Models
 
-**Abstract** Many coding agents assume a frontier model, a large context window,
-and one model-facing surface with broad tool access. ProtoAgent explores a
-different architecture: a local-first Agent-to-Agent ($A2A$) coding system
-powered by ProtoLink. It separates a stateful controller from narrow stateless
-workers, feeds each task through deterministic local context, and adapts prompts
-to the active model's capability class. Optional public-web research is isolated
-behind a tool-only Scout agent and an explicit network boundary. The result is a
-runtime that can make smaller local models more reliable without changing the
-approval and capability rules used for stronger API models.
+**Abstract.** ProtoAgent explores whether a coding agent can make more effective
+use of a smaller language model by assigning bookkeeping, evidence management,
+execution control and completion checks to software. Its central proposal is an
+asymmetric architecture: a model coordinates narrow reasoning tasks, while a
+deterministic harness maintains task state, constrains actions and evaluates
+recorded execution evidence. Specialized workers are used selectively, and
+operations that do not require reasoning run without a model. This includes a
+broker for external tools that exposes capabilities progressively instead of
+loading a complete tool catalog into every prompt.
 
----
+The project separates the reusable coding harness from its terminal interface
+and builds on ProtoLink's execution primitives. This paper develops the design
+rationale, describes its trust and verification boundaries, and proposes an
+evaluation method. Practical implementation details follow at the end. The
+architecture is implemented, but improvements in coding success, latency or cost
+remain hypotheses to be tested through comparative evaluation.
 
-## One: The Context Collapse Problem
+## 1. Motivation and scope
 
-Modern coding agents typically utilize a "God Prompt" architecture. A single large language model is given access to all tools (file reading, bash execution, code writing) and a massive system prompt detailing how to act as a software engineer.
+A coding task combines several kinds of work: locating relevant files,
+understanding behavior, retaining the user's objective, producing an edit,
+choosing checks, interpreting failures and reporting what actually happened.
+These responsibilities compete for a model's context and attention. A large
+history or tool catalog can occupy space that would otherwise hold the source
+and requirements needed for a decision.
 
-While effective for frontier hosted models, this approach catastrophically fails when applied to local 7B-8B parameter models. Small models suffer from context collapse when overwhelmed by complex XML tags, multi-step instructions, and dozens of available tools. They hallucinate syntax, forget the original user request, or enter infinite tool-calling loops.
+ProtoAgent focuses on models that operate under constrained reasoning, context
+or deployment budgets. Parameter count, quantization and hosting location are
+useful deployment descriptors, but none alone establishes a model's capability.
+The design should therefore work with both local and hosted models while making
+the costs of coordination and context explicit.
 
-ProtoAgent solves this by abandoning the monolithic agent. Instead, it utilizes structured Agent-to-Agent ($A2A$) flows where multiple specialized agents are given highly restricted, single-purpose roles. The central thesis is simple: model intelligence should change the depth of reasoning, not the safety boundary. A small local model and a frontier API model should see different prompt overlays, but both should move through the same evidence, delegation, policy, and approval architecture.
+The research question is whether a carefully designed harness can improve the
+number of independently accepted coding changes achieved within a limited
+model budget. The goal is not to assume that enough agents can compensate for
+any reasoning deficit. A model may still misunderstand a requirement, choose
+the wrong files or produce an incorrect implementation. The harness should make
+those failures easier to detect and less likely to become unsupported success
+claims.
 
----
+## 2. Design thesis: externalize state, bound decisions, measure effects
 
-## Two: The ProtoLink Engine: A2A Core
+The model should spend its reasoning capacity on decisions that need judgment:
+what evidence is missing, which behavior should change, how to express the edit,
+and what the observed checks mean. The harness should retain the objective,
+retrieve actual source, enforce permissions, track effects and determine whether
+the required execution evidence exists.
 
-At the heart of the ecosystem is ProtoLink, the Python agent runtime used as
-ProtoAgent's execution engine. The integration follows four principles:
+This allocation has three consequences.
 
-* **Structured Delegation:** Agents delegate through ProtoLink task and `agent_call` semantics instead of unbounded conversational handoffs. The Architect remains the routing authority for normal coding workflows.
-* **Tool Isolation:** An agent is only injected with the exact JSON Schema tools it needs for its specific role.
-* **Structured Handoffs:** Agents communicate through typed tasks, actions, artifacts, and events, removing conversational "fluff" from the internal execution path.
-* **Runtime Contracts:** ProtoAgent derives a task contract before the model runs, attaches it to `RunContext`, and validates the resulting trace before declaring the task complete.
+First, task continuity must not depend entirely on conversation memory. A model
+can lose observations as context is reduced, while an explicit task record
+continues to preserve the objective and obligations.
 
----
+Second, specialization must earn its overhead. A focused worker can isolate
+irrelevant history and expose fewer tools, but delegation also costs tokens,
+latency and another opportunity to misunderstand the task. Extra roles are
+useful when they contribute evidence or a distinct decision, not simply because
+they make the system look more sophisticated.
 
-## Three: Runtime Kernel And Worker Topology
+Third, completion must be grounded in effects. A proposed patch, an approval, a
+worker's confidence and a successful check are different kinds of evidence.
+The harness must preserve those distinctions when reporting the result.
 
-To optimize execution speed and enforce cognitive guardrails on smaller models,
-ProtoAgent separates stateful control from stateless specialist execution. The
-developer still sees one assistant, but the runtime is split into a small set of
-durable control surfaces and disposable worker roles.
+A useful conceptual context budget is:
 
-### I. The ProtoLink Runtime Kernel
-
-The runtime kernel is not another LLM persona. It is the non-LLM control plane
-that owns `RunContext`, `RunBudget`, `RunRecorder`, policy checks, approval
-requests, cancellation, redaction, trace events, and durable run reports. This
-is where safety and observability live.
-
-* **Role:** Execute the run protocol, enforce policy, preserve traceability, and
-  keep durable runtime state out of worker prompts.
-* **Runtime Surface:** `RunContext`, `RunBudget`, `RunAction`, `RunEvent`,
-  `RunReport`, `CapabilityPolicy`, and the application approval bridge.
-* **Logic:** A task is not complete merely because the model produced prose. The
-  kernel checks the task contract against worker usage and artifacts.
-
-### II. The Architect (Stateful Controller)
-
-The Architect is the only LLM agent that keeps durable conversation memory. It
-receives the user-facing task from the CLI, reads the current Context Loom pack,
-and delegates to workers through ProtoLink discovery and `agent_call`.
-
-* **Role:** Intent classification, task breakdown, and delegation.
-* **Runtime Surface:** `protolink` registry discovery, `agent_call` delegation, `RunContext`, `RunEvent`, and policy-aware action authorization.
-* **Logic:** It maintains the route and final answer but performs no file system
-  operations itself. Because workers are stateless, its handoffs must include
-  the objective, paths, evidence, and acceptance criteria needed for the
-  current run.
-
-### III. The Explorer (Stateless Context Worker)
-
-Explorer is a task-local read-only worker. It has no durable conversation
-memory. Each call starts from the current task, Context Loom evidence, and its
-read-only tools.
-
-* **Role:** Read-only repository exploration and context framing.
-* **Tools:** `build_context_pack`, `read_file`, `list_directory`, `search_regex`, `get_git_status`.
-* **Logic:** When the Architect needs repository ground truth, it dispatches
-  Explorer with a focused question. Explorer returns compact, source-cited
-  evidence for the current run and then disappears.
-
-### IV. Scout (Optional Tool-Only Network Worker)
-
-Scout is not another reasoning persona. It is a registered ProtoLink agent with
-`llm=None`, no durable storage, no enabled conversation state, and no chat
-surface. It is disabled by default, and therefore absent from discovery during
-normal offline-oriented runs.
-
-* **Role:** Expose bounded public-web evidence without giving Explorer or Coder
-  ambient network access.
-* **Tools:** ProtoLink 0.7.1 `web_search` and `fetch_url`, both declaring
-  `network.read`.
-* **Logic:** When enabled, Architect discovers Scout and invokes one of its
-  tools directly. Brave search uses `BRAVE_SEARCH_API_KEY`; DuckDuckGo is
-  keyless best-effort search, and English Wikipedia is keyless factual search.
-  URL fetches reject private
-  and loopback targets, unsafe redirects, binary bodies, and oversized
-  responses. All returned content is marked untrusted.
-
-This isolation matters for smaller models: web schemas and noisy external text
-do not occupy the default deck, and public content never enters the workspace
-write boundary merely because it was retrieved.
-
-### V. The Coder (Stateless Write Worker)
-
-Coder is a task-local write worker. It does not keep durable memory and does not
-receive Explorer's broad read/search tools. It receives a localized objective
-and enough evidence to prepare a patch.
-
-* **Role:** Synthesize code and generate file modifications.
-* **Tools:** native `create_file`, `replace_file`, `preview_change`, `restore_change`.
-* **Logic:** The Architect hands the Coder the user objective and bounded
-  Context Pack evidence. The Coder prepares `RunAction` write operations with
-  unified-diff preview artifacts, so policy and approval happen before files are
-  modified.
-
-This split is the core design move: **stateful controller, narrow stateless or
-tool-only workers, typed artifacts, and runtime completion checks**. The
-architecture can grow by
-adding more workers, such as Test Locator, Patch Planner, Review Worker, or
-Verification Planner, without giving every role durable memory or every tool.
-
----
-
-## Four: Run Contracts And Completion Guards
-
-Before the model runs, ProtoAgent derives a small **Run Contract** from the
-original user request. The contract is attached to `RunContext.metadata` and
-becomes part of the observable trace.
-
-Read-only questions do not require a write. Workspace-change contracts require
-an executed native file change at its current resource revision. Native
-`CompletionValidator` evaluates application predicates over execution receipts,
-artifacts and resource revisions. An approval, preview, delegation or blocker
-in model prose cannot satisfy that requirement. Structured denials, failure and
-uncertainty remain unsuccessful outcomes.
-
-Example contract:
-
-```json
-{
-  "task_kind": "workspace-change",
-  "requires_explorer": true,
-  "requires_coder": true,
-  "requires_write": true,
-  "expected_workers": ["explorer", "coder"],
-  "expected_artifacts": ["executed_file_change", "resource_revision"],
-  "completion_rule": "Workspace changes require an executed native file change at its current revision."
-}
+```text
+instructions + current task + evidence + tool schemas + history
+    + reserved output <= effective context budget
 ```
 
----
+This is a design constraint, not a proof that a request will be tokenized
+identically by every provider. Likewise, selective delegation is a design
+principle rather than an implemented optimal routing algorithm. Both need
+measurement under real model and repository conditions.
 
-## Five: Context Loom (The Local Context Fabric)
+## 3. Architectural separation
 
-The missing layer in most local coding agents is not another chat prompt. It is
-a deterministic context substrate that can decide what a small model should see
-before the model is asked to reason. ProtoAgent calls this substrate **Context
-Loom**.
+ProtoAgent separates three responsibilities:
 
-Context Loom is a local, inspectable workspace intelligence layer. It indexes
-the active project into a compact code graph made of files, symbols, imports,
-documentation headings, fingerprints, and git state. At task time, it does not
-dump the repository into the context window. It weaves a bounded
-**Context Pack**: a source-cited packet of evidence that the Architect, Explorer,
-and Coder can consume through normal `protolink` task flow.
+| Layer | Responsibility |
+| --- | --- |
+| Operator interface | Collect intent, select the workspace and model, present approvals, support cancellation and expose results. |
+| Coding harness | Manage task state, retrieve repository evidence, route workers, prepare edits and define coding acceptance. |
+| Execution kernel | Execute typed actions with policy, budgets, authentication, events, receipts and recovery primitives. |
 
-This differs from two common industry patterns:
+The terminal interface is one way to operate the harness. It should not own the
+meaning of verified completion, the repair policy or the authority to perform a
+write. Those decisions belong below the interface so that another frontend can
+reuse them when it implements the required control contract.
 
-* **Monolithic context loading:** large cloud agents often rely on enormous
-  context windows and implicit repository awareness. This can work with frontier
-  models, but it is expensive, opaque, and brittle for local models.
-* **Pure tool wandering:** shell-first agents repeatedly call file and search
-  tools to discover context from scratch. This is transparent, but it burns
-  steps and can leave smaller models stuck in exploration loops.
-
-Context Loom combines the strengths of both approaches. It gives the system a
-local memory of the workspace, but every included file and snippet carries an
-explicit reason. A Context Pack is intentionally small enough for 7B-8B models,
-yet rich enough to preserve the engineering facts that matter.
-
-Refresh is incremental. The indexer compares each candidate file's stored size
-and modification time before opening it. Unchanged files are not reread,
-reparsed, hashed, or upserted; changed/new files are processed and stale paths
-are removed. This keeps automatic per-prompt refresh affordable without making
-the model reason about cache invalidation.
-
-Technically, Context Loom is built around four primitives:
-
-1. **Project Index:** a local SQLite index for text files, language hints,
-   symbols, imports, headings, content fingerprints, and update timestamps.
-2. **Context Graph:** a deterministic relationship map linking files to the
-   symbols they define, dependencies they import, docs they expose, tests they
-   imply, and recent git changes.
-3. **Context Pack:** a bounded, task-specific evidence packet containing
-   relevant files, short line-numbered snippets, symbols, dependency hints,
-   git status, and inclusion reasons.
-4. **Evidence Ledger:** a human-readable explanation of why each item was
-   selected, visible from the CLI and replayable in the agent trace.
-
-The Context Pack format is deliberately structured:
-
-```json
-{
-  "name": "Context Loom",
-  "query": "Refactor the runtime task stream handling",
-  "items": [
-    {
-      "path": "core/protoagent_core/runtime.py",
-      "role": "runtime mesh",
-      "reason": "path and symbol match for streaming task dispatch",
-      "symbols": ["run_selected_model", "_run_agent_deck"],
-      "line_range": "109-132",
-      "snippet": "109 | task = Task.create_infer(prompt=prompt) ..."
-    }
-  ]
-}
-```
-
-Because this is deterministic and local-first, it is compatible with small
-models and privacy-preserving workflows. Because it is structured and
-source-cited, it is also compatible with stronger models that can use the pack
-as a high-signal scratchpad instead of re-discovering the repository every turn.
-
-The strategic contribution is not "RAG for code." The contribution is
-**visible context reasoning**: ProtoAgent can show the developer exactly what it
-believes is relevant before it writes a diff. This makes local autonomous coding
-auditable in a way that hidden embedding retrieval and giant context windows are
-not.
-
-## Six: Capability-Scaled Prompting
-
-The core triad creates stable reasoning roles, while optional Scout adds a
-tool-only network surface. Model capability still matters. A prompt
-that helps a frontier API model reason carefully can overload a small local
-model. A prompt short enough for a 7B model can underuse a strong long-context
-model. ProtoAgent therefore treats prompting as a **capability lattice** rather
-than a single universal instruction block.
-
-The invariant layer is the role contract:
-
-* Architect routes and coordinates as the stateful controller.
-* Explorer gathers read-only evidence as a stateless worker.
-* Coder prepares policy-gated modifications as a stateless worker.
-* Scout, when explicitly enabled, exposes only `network.read` and has no LLM,
-  workspace access, or memory.
-* ProtoLink owns delegation, tools, memory, events, approvals, and runtime
-  reports.
-* Run Contracts define required workers and artifacts before the model answers.
-
-On top of that invariant layer, ProtoAgent applies one of four prompt profiles:
-
-| Profile | Intended model class | Prompting strategy |
-| --- | --- | --- |
-| `small` | 7B/8B and heavily quantized local models | Short instructions, one delegation at a time, narrow context, minimal public planning. |
-| `medium` | Capable local or mid-tier models | Compact planning, evidence-backed assumptions, focused docs/tests guidance. |
-| `large` | Strong local/cloud models | Multi-step decomposition, explicit acceptance criteria, deeper verification discipline. |
-| `api` | Frontier hosted/API models | Senior-maintainer autonomy, adversarial self-checks, stronger expectations for tests, docs, and risk review. |
-
-The important design choice is that prompt profiles are overlays, not separate
-agent implementations. They tune reasoning budget, delegation cadence, evidence
-requirements, and answer style while preserving the same tool permissions and
-approval gates. This makes the system portable: a developer can move from a
-small local model to an API-grade model without changing the topology or
-trusting the model with broader ambient authority.
-
-Prompt engineering best practices are encoded as architectural constraints:
-
-1. **Role-specific instructions:** each agent receives only the responsibilities
-   and tools it can execute.
-2. **Capability-aware reasoning budget:** smaller models get short procedural
-   steps; stronger models get acceptance criteria and verification loops.
-3. **Evidence before mutation:** edits should flow from Context Loom and
-   Explorer evidence into Coder, not from guesswork.
-4. **No hidden authority expansion:** a stronger model may reason more deeply,
-   but it does not bypass policy, approval, or workspace boundaries.
-5. **Observable outcomes:** final responses summarize decisions, validation,
-   changed paths, and residual risk without exposing hidden chain-of-thought.
-
-In practice, `auto` can infer the profile from the active provider and model,
-while explicit selection lets the user force a profile when they know more than
-the heuristic. The CLI and TUI surface this through the agent configuration
-interface, because prompt quality is part of the agent deck rather than a
-separate model setting.
-
----
-
-## Seven: System Graph
-
-The complete theoretical control loop is:
+ProtoLink supplies the execution kernel. ProtoAgent supplies the coding-specific
+architecture and acceptance rules. This keeps domain decisions close to the
+application while relying on a shared execution path for approvals, processes,
+file effects and reporting.
 
 ```mermaid
-flowchart LR
-    U["User / CLI / TUI"] --> L["Context Loom\nsource-cited Context Pack"]
-    U --> K["ProtoLink Runtime Kernel\ncontext / budget / recorder"]
-    L --> RC["Run Contract\nrequired workers + artifacts"]
-    K --> RC
-    RC --> A["Architect\nstateful controller"]
-    PP["Prompt Profile\nsmall / medium / large / api"] -. overlays .-> A
-    PP -. overlays .-> E
-    PP -. overlays .-> C
-    A -->|read-only evidence task| E["Explorer\nstateless context worker"]
-    E -->|Context Pack evidence| A
-    A -. "when enabled" .-> S["Scout\ntool-only network worker"]
-    S -->|bounded untrusted sources| A
-    S --> NB["Public network\nnetwork.read boundary"]
-    A -->|localized write task| C["Coder\nstateless write worker"]
-    C -->|RunAction + diff artifact| P["ProtoLink Policy\napproval gate"]
-    P -->|approved| W["Workspace mutation"]
-    P -->|denied| N["No mutation"]
-    P --> G["Completion Guard\nsatisfied / blocked / incomplete"]
-    G --> R["RunEvent / RunReport\nobservable trace"]
-    A --> O["Final answer"]
-    R --> O
+flowchart TD
+  U[Operator] --> I[Interface]
+  I --> H[Coding harness: task state, evidence and acceptance]
+  H --> A[Architect: model-based coordination]
+  A --> W[Focused reasoning workers]
+  A --> T[Model-free verification and external tools]
+  W --> K[ProtoLink execution kernel]
+  T --> K
+  K --> E[Recorded outcomes and resource revisions]
+  E --> H
+  H --> I
 ```
 
-This graph is deliberately asymmetric. The user sees one coherent assistant,
-but the runtime preserves distinct responsibilities. Context is selected before
-reasoning, a contract defines the required route, routing happens before
-synthesis, synthesis produces an explicit action, and policy evaluates the
-action before the workspace changes. Prompt profiles influence the quality of
-reasoning inside the LLM-backed nodes, not the shape of the trust boundary
-around them. Scout is not prompt-scaled reasoning; it is an optional capability
-surface.
+The diagram shows responsibility and evidence flow. It does not require every
+request to traverse every worker. A direct answer, a repository explanation and
+a code change have different evidence requirements.
 
----
+## 4. Task state, memory and evidence
 
-## Eight: Quality Evaluation Loop
+The architecture distinguishes conversation memory, task state and source
+evidence. Conversation memory supports continuity between interactions. Task
+state preserves the current objective, criteria, scope, selected checks and
+worker outcomes. Source evidence describes the repository or external material
+actually observed, with provenance and freshness information where available.
 
-Prompt engineering cannot be treated as prose alone. A professional agent needs
-a regression surface for behavior, not just unit tests for code. ProtoAgent
-therefore evaluates prompt profiles against fixed repository tasks that measure
-whether the expected topology appears in the run.
+A summary in memory is not a substitute for the current source. Similarly, a
+worker's statement that a task is finished is not a record of execution.
+Separating these structures allows the harness to reduce model-facing history
+without silently changing what the task requires.
 
-The evaluation loop asks questions such as:
+Delegation should pass a narrow objective, relevant source, criteria and a clear
+outcome contract. A worker can report completion of its assignment, missing
+context or a blocker. Missing information should be made explicit rather than
+filled with invented source. A reported blocker must remain visible until it is
+resolved; it should not disappear merely because the next message sounds
+confident.
 
-* Did a read-only task stay read-only?
-* Did a change task route through Coder instead of letting Architect mutate?
-* Did the run cite or touch the expected source, docs, or test paths?
-* Did a write request reach ProtoLink's approval boundary?
-* Did the runtime mark missing write artifacts as incomplete?
-* Did the proposed edit stay within a reasonable file-count budget?
-* Did external research remain disabled unless Scout was explicitly enabled?
+The implementation retains these obligations in a runtime-owned task record.
+It initializes a conservative plan before inference and freezes the selected
+criteria, write scope and checks once editing or final verification begins.
+Repairs inherit that plan. This prevents a failing result from becoming
+successful merely by weakening the requirements after the change.
 
-This creates a feedback system for prompt work. If a `small` profile wanders
-too much, the overlay can be shortened. If an `api` profile underuses tests or
-docs, the overlay can be strengthened. If a model skips Explorer before Coder,
-the scoring reveals a topology regression. The result is prompt engineering
-that is measurable, repeatable, and tied to the same runtime events developers
-already inspect.
+There are limits to this enforcement. The model still chooses the quality of
+the criteria and can produce free-form prose. Structured reports and evidence
+packets are available mechanisms, not compulsory steps on every request. A
+frozen weak plan is still weak, and automatic intent classification is heuristic.
 
-The evaluation modes serve different levels of confidence:
+## 5. Asymmetric agents and selective specialization
 
-| Mode | Purpose |
+An agent in this architecture is an execution boundary with a defined role and
+authority. It does not necessarily contain a language model. The distinction
+between reasoning workers and model-free workers is central to keeping
+coordination economical.
+
+| Role | Reasoning requirement | Responsibility |
+| --- | --- | --- |
+| Architect | Model | Coordinate the task, choose scope, combine evidence and explain outcomes. |
+| Explorer | Model | Find relevant ownership and inspect source and tests. |
+| Coder | Model | Interpret the requested change and prepare focused edits and regression tests. |
+| Tester | Optional model worker | Propose regression cases and analyze observed failures without writing or executing. |
+| Verifier | No model | Execute approved check specifications and return measured results. |
+| Scout | Optional, no model | Retrieve public-web evidence. |
+| External-tool broker | Optional, no model | Discover capabilities, return one schema and invoke an approved tool. |
+
+The Verifier is a ProtoLink agent with registered tools. In the coding harness,
+it exposes `run_check(check_id, phase)` for selected repository checks and
+`execute_command` for approved preparation. The Architect invokes those tools
+directly; the Verifier executes them without an LLM inference loop.
+
+The Architect is the routing authority. Workers have task-local contexts and do
+not create their own delegation trees. This bounds coordination depth and makes
+handoffs visible, although it also makes the controller a potential bottleneck.
+
+Delegation is supervised by the execution kernel. The parent owns each child's
+lifetime, receives its recorded outcome and drains unfinished children when the
+parent stops. Child work consumes a shared root budget and must satisfy ancestor
+policies as well as its own role policy. Starting a fresh conversation therefore
+does not grant a fresh budget or broader authority.
+
+The default schedule is sequential. Independent contexts can reduce irrelevant
+history without requiring simultaneous inference. On a shared local model runner,
+parallel model calls can contend for memory and compute; any benefit must be
+measured. Child creation, limits and cancellation remain software responsibilities,
+so the small model continues to choose one named worker action at a time.
+
+User clarification is another bounded source of evidence. When repository
+inspection cannot settle a requirement or preference, the controller can ask one
+concrete question and incorporate the answer before continuing. Workers report
+missing information to the controller rather than competing for the user's
+attention. The kernel represents the exchange as a tool action with correlated
+results, deadlines and cancellation. A skipped or expired question contains no
+answer, and feedback does not expand execution authority. This mechanism can
+reduce pressure on a small model to guess; its effect on correctness and user
+effort still requires measurement.
+
+Separating test design from editing can provide another perspective on a
+change. It does not establish independent correctness: both workers may use the
+same model, misunderstand the same requirement or overlook the same case.
+Execution evidence comes from the Verifier, and semantic acceptance ultimately
+depends on the quality of the checks.
+
+Optional roles let users trade additional perspectives or external access
+against cost and latency. Disabling a test-design worker should remove its
+model and discovery overhead while preserving the requirement to verify code
+changes. Required enforcement must therefore remain in the harness rather than
+depend on an optional agent being present.
+
+## 6. Context as a managed resource
+
+Repository context should be supplied progressively. A deterministic index can
+orient the controller toward likely files; bounded source reads then provide
+the exact material needed for an edit. This avoids treating either a large
+repository dump or an inferred summary as sufficient evidence.
+
+ProtoAgent's Context Loom performs indexing and source-cited retrieval without
+a model. Workers can request focused source spans, and Coder can read the source
+it needs directly. Exact edits refer to observed source and a resource revision;
+ambiguous or stale replacements fail before mutation.
+
+Request admission accounts for instructions, task state, observations, tool
+schemas and agent metadata while reserving output space. Complete old turns can
+be pruned and acknowledged observations cleared while preserving correlation.
+Large results become bounded previews with scoped references, allowing later
+retrieval of a particular slice. This changes the model's observation rather than
+the authority of the execution receipt. Obligations
+remain in runtime state, and missing source can be read again. Required content
+that cannot fit should produce an explicit failure rather than silent removal
+of the current task.
+
+Compact prompts reduce repeated protocol examples and unnecessary output
+schemas while retaining exact input contracts. Prompt profiles can adjust
+verbosity and coordination style; they do not change permissions. Capability
+inference from a model name remains an approximation that a user can override.
+
+The action channel should remain distinct from the answer channel. Where a
+provider advertises native tool support, structured declarations reduce the
+need for a small model to invent a transport envelope. A JSON fallback still
+needs exact examples and validation. A final response containing an unfinished
+tool request is not completion: it should fail visibly rather than become a
+displayed answer or be executed by a second parser. Advertised capability alone
+does not establish reliable tool use.
+
+These mechanisms introduce their own costs. Retrieval can miss important
+context, truncation can hide an edge case, and evicted observations may need to
+be fetched again. Deterministic retrieval means the procedure does not use an
+LLM; it does not mean the retrieved evidence is complete or relevant. Context
+management must therefore be evaluated alongside coding accuracy.
+
+## 7. Verification, bounded repair and recovery
+
+The harness distinguishes three outcomes: a change was applied, selected checks
+passed against the relevant state, and those checks support the task's criteria.
+None of these alone proves arbitrary natural-language correctness.
+
+Repository checks are captured before model execution. The model can select
+existing checks while planning, but cannot substitute an arbitrary successful
+command for them or remove a requirement after editing. Baseline measurements
+describe the original behavior; preparation commands support setup and diagnosis;
+final verification supplies evidence about the resulting state.
+
+A repository without tests still needs a path to useful verification. A harness
+can declare a standard test runner before inference, then ask the coding worker
+to create focused regressions that the runner executes. Registering that runner
+does not establish coverage: a successful process that ran zero tests must not
+verify a change. Explicit project configuration remains authoritative. If no
+usable runner exists, approved edits may be applied while the task remains
+unverified and incomplete.
+
+Planning mistakes should return compact corrective feedback, including valid
+check identifiers, while preserving the previous plan. A small model can then
+correct its selection within the same bounded native run. Authorization,
+interrupted effects and uncertain execution remain separate boundaries and
+must not be converted into retryable planning feedback.
+
+Execution evidence must remain tied to the source it measured. If a captured
+dependency changes after a check, that check cannot establish verification of
+the new state. Revision tracking improves this boundary without claiming to
+model every environmental input, external service or repository dependency.
+
+```mermaid
+flowchart TD
+  P[Objective, evidence and check plan] --> C[Approved edits]
+  C --> V[Selected final checks]
+  V --> G[Acceptance over receipts and revisions]
+  G -->|Required evidence satisfied| R[Report applied and verified separately]
+  G -->|Completed qualifying check failure| F[Bounded repair]
+  F --> C
+  G -->|Missing, denied, stale or uncertain evidence| S[Stop and report the unresolved state]
+```
+
+The encouraged route does not make every worker call mandatory. Enforcement
+covers policy, execution evidence, plan stability, revision freshness and repair
+limits. A completed failing check can justify a focused repair. A timeout,
+denial or uncertain effect requires inspection, not an automatic replay.
+
+Approval authorizes a prepared operation; it does not establish that the
+operation executed or achieved the requested behavior. File recovery can undo a
+recorded write subject to revision checks, but cannot undo arbitrary process or
+remote effects. These boundaries should remain visible in the interface and
+the final report.
+
+## 8. External tools without a larger reasoning loop
+
+External integrations enlarge the set of available actions, but a complete
+catalog can also enlarge every model request. ProtoAgent applies progressive
+discovery through a model-free broker: find relevant tool names, inspect one
+exact schema, then invoke the selected capability with validated arguments.
+The controller passes focused results to workers that need them.
+
+The Model Context Protocol defines tool discovery and invocation contracts;
+the broker controls how those capabilities enter the coding harness. See the
+[MCP tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+Server identity remains separate from tool identity, allowing identical tool
+names on different servers without ambiguity. No additional model is needed to
+interpret a tool call that is already specified.
+
+This design exchanges eager schema loading for discovery steps and connection
+latency. Small catalogs may be cheaper to expose directly; large or rarely used
+catalogs may benefit from the broker. That tradeoff is measurable rather than an
+automatic advantage.
+
+External descriptions, schemas and results are untrusted evidence. A server's
+read-only annotation cannot establish safe effects or replace authorization.
+Discovery can itself start a local process or contact a remote service, so the
+execution boundary covers connections as well as invocations. A failed started
+invocation may have produced effects and must stop further effectful work until
+inspection and a new instruction.
+
+External receipts do not satisfy local repository verification. An MCP server
+may operate outside the harness's workspace file tools, and its effects are not
+covered by those tools' checkpoints. Approval and explicit tool allowances are
+controls over access, not a filesystem sandbox.
+
+## 9. Evaluation and relationship to existing systems
+
+Separate worker contexts, restricted tools and specialized prompts are
+established coding-agent patterns. For example, Claude Code documents subagents
+with their own context, prompts, tool access and permissions. Those features
+are reference points, not a novelty claim for ProtoAgent. See Anthropic's
+[subagent documentation](https://code.claude.com/docs/en/sub-agents).
+
+ProtoAgent's proposed contribution is their combination with runtime-owned task
+state, deterministic repository retrieval, bounded editing, progressive external
+access and revision-bound acceptance, designed around constrained model budgets.
+The relevant result is more independently accepted work per unit of resources,
+not the number of roles or the sophistication of the interface. This paper does
+not establish product parity or superiority over Claude Code.
+
+A useful evaluation compares the harness with a single model-facing agent using
+the same model, task, editing capabilities and check policy. Acceptance should
+be measured independently of both the agents' claims and the tests they can
+change. Repeated tasks across model sizes, quantizations, context windows and
+repository types are needed to distinguish reliable gains from favorable cases.
+
+| Measurement | Question answered |
 | --- | --- |
-| `plan` | Show the profile/task matrix without model calls. |
-| `scaffold` | Exercise prompt/context plumbing with no model call. |
-| `live` | Run real models while keeping workspace writes behind auto-denied approvals. |
+| Independent acceptance rate | Did the resulting change meet the evaluation criteria? |
+| False completion rate | Did the application report completion for an incorrect result? |
+| Latency, model calls and token use | What overhead did coordination and retrieval introduce? |
+| Repair counts and unresolved outcomes | How often did the system recover, stop or lack evidence? |
+| Context pressure and repeated reads | Did context management preserve useful information economically? |
 
-The strategic point is that ProtoAgent treats prompts as versioned runtime
-assets. They have design intent, observable behavior, and regression tests. That
-is what allows the system to become better over time without slipping back into
-an opaque God Prompt.
+Ablations should remove one mechanism at a time: optional test design, explicit
+task state, context admission or progressive tool discovery. Improvements in
+one metric should be considered alongside regressions in others. These
+experimental conditions should keep permission policy and independent acceptance
+criteria fixed. Evaluation records should retain model settings, task and
+repository identity, runtime configuration and source revision so that conditions
+can be reproduced.
 
----
+The implemented evaluation harness is an initial instrument, not evidence of a
+general advantage. Plumbing tests demonstrate that controls and receipts work;
+they do not establish coding capability. Comparative live model results remain
+to be collected and published.
 
-## Nine: The Standard Execution Flow
+## 10. Limitations and research directions
 
-When a user runs a command in the terminal (for example,
-`proto-cli run "Extract the hardcoded strings in main.rs into a config file"`),
-the following $A2A$ flow executes:
+The controller can choose a poor scope or misinterpret evidence. Multiple
+workers can share correlated errors, and extra handoffs may worsen a task under
+a tight budget. Frozen plans, narrow tools and explicit reports cannot create
+the missing reasoning ability.
 
+Repository checks provide only the coverage they implement. Intent
+classification and model-capability selection are heuristic. Context accounting
+uses estimates, and dependency capture is incomplete. Host processes and
+external servers are not security-isolated by this architecture; access controls
+and file recovery have narrower guarantees.
+
+Persistent conversation memory and file checkpoints do not by themselves provide
+restartable execution. Safe continuation also needs the task record, frozen check
+plan, edit/check phase and committed action cursor. The current coding workflow
+does not reconstruct these after a process restart. Integrating engine durability
+requires preserving that application state and reconciling uncertain effects.
+
+The research priorities are comparative evaluation and component ablations,
+followed by stronger isolation, better criterion-to-test evidence, broader check
+discovery and capability calibration based on measured behavior. Richer tasks
+and larger repositories are needed before drawing conclusions about practical
+generality. These directions are proposals rather than implemented guarantees.
+
+## 11. Practical realization in the monorepo
+
+The repository contains two active product components: a Python coding harness
+in `core/` and a Rust operator interface in `cli/`. ProtoLink is their execution
+dependency. The harness and interface are developed together, but their
+responsibilities remain distinct.
+
+### 11.1 Harness and interface boundaries
+
+The Python core owns Context Loom, the task record, role prompts, worker
+assembly, prepared-edit adapters, check selection and completion predicates.
+It configures native ProtoLink agents, policies, budgets, events, process tools
+and recovery storage rather than introducing a second execution engine.
+
+The Rust CLI embeds the core through PyO3 and exchanges structured JSON. It
+provides shell and fullscreen terminal operation, workspace/model selection,
+diff review, approval presentation, cancellation and trace inspection. Native
+approval decisions bind to the exact request, action fingerprint and authorized
+run scope; a UI display alone cannot certify execution or completion. Another
+frontend would need to implement the approval, live question and cancellation contracts before
+it could operate the same harness.
+
+### 11.2 Implemented mechanisms and their bounds
+
+| Mechanism | Practical behavior |
+| --- | --- |
+| Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
+| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique old span and a matching revision before preparing a native recoverable write. |
+| Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
+| Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
+| Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
+| User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
+| Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
+| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection provides conventional fallbacks without executing discovery commands. |
+| Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
+| Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |
+| MCP access | Three fixed broker tools provide name discovery, one exact schema and an allowlisted invocation. Pages contain at most 12 descriptors; schemas over 12,000 characters are rejected and results over 6,000 characters are marked truncated. |
+
+These numerical bounds are implementation choices, not universal optima.
+Context and MCP result limits constrain model handoffs; they do not guarantee
+exact provider token counts or bound data already decoded by the MCP SDK. Source
+pagination does not yet provide character-offset continuation for a very long
+individual line.
+
+The model-capable roles use the selected provider/model. A user can explicitly
+configure up to two fallback models on the same provider. Native model routing
+tries them only after eligible transient request failures before exposed stream
+output; it charges each request and never replays a completed tool. There is no
+reasoning-based escalation or automatic provider switch. The normal deck requires Architect, Explorer,
+Coder and Verifier. Tester defaults on, while Scout and MCP default off. Disabled
+optional workers are neither constructed nor registered, and the controller's
+instructions reflect their absence. Without Tester, Architect defines criteria
+and Coder adds regressions while required checks remain enforced.
+
+The MCP implementation uses ProtoLink's native adapter for stdio, SSE and
+Streamable HTTP, pagination, original schemas and result/error normalization.
+Each operation owns a managed session in one async task; discovery and invocation
+within that operation share it. Runtime connections and invocations require
+approval. HTTP authentication references environment variables. Failed started
+invocations mark external effects uncertain and block later invocations, writes,
+restores and commands in the run. Evidence reads remain available. The
+integration covers tools; resources, prompts, OAuth login and server installation
+are outside its implemented scope.
+
+### 11.3 Operating the harness
+
+The CLI exposes the architecture's controls without requiring a model to change
+configuration:
+
+```bash
+proto-cli agents                     # Inspect roles, authority and availability
+proto-cli agents tester off          # Skip the test-design model worker
+proto-cli mcp                        # Inspect external-tool setup and status
+proto-cli mcp add docs ./docs-mcp.json
+proto-cli mcp test docs               # Explicit discovery probe; no tool invocation
+proto-cli mcp on                      # Enable the broker for subsequent runs
+proto-cli eval coding --plan          # Inspect evaluation conditions without a model
+proto-cli eval harness --json         # Check native child/read contracts offline
 ```
-[User Input] -> [Context Loom] -> [Prompt Profile] -> [Architect]
-       |              |
-       v              v
- [Run Contract] -> [ProtoLink Runtime Kernel]
-                                                        |
-                    [Explorer verifies/expands] <-------|
-                    [Scout web evidence, optional] <----|
-                                                        |
-[User Approval] <- [Approval Request] <- [Coder RunAction] <- Context Pack
-                                                        |
-                                                        v
-                                              [Completion Guard]
 
-```
+The terminal UI provides corresponding `/agents` and `/mcp` commands. Optional
+settings persist in user configuration and apply to the next run. A run retains
+its own configuration snapshot.
 
-1. **Intake:** The CLI receives the user prompt and asks Context Loom for an initial Context Pack.
-2. **Weaving:** Context Loom incrementally refreshes the local index, scores
-   files and symbols against the prompt, and records an Evidence Ledger for
-   every included item.
-3. **Contracting:** ProtoAgent derives a Run Contract from the original user prompt and attaches it to `RunContext.metadata`.
-4. **Prompt Scaling:** ProtoAgent resolves the active prompt profile and attaches the role-specific overlay to Architect, Explorer, and Coder.
-5. **Planning:** The stateful **Architect** receives the prompt plus the Context Pack and initializes the execution route.
-6. **Contextualization:** The Architect delegates to the stateless **Explorer** only when more evidence is needed. Explorer can inspect the Context Pack, run read-only tools, and expand it through targeted file reads.
-7. **Optional Research:** If Scout was explicitly enabled and current public
-   evidence is needed, Architect invokes its bounded search/fetch tools and
-   treats results as untrusted sources.
-8. **Synthesis:** The Architect passes the localized task and compact evidence to the stateless **Coder**.
-9. **Diff Generation:** The Coder prepares a strict unified-diff preview through a `RunAction` artifact.
-10. **Policy & Approval:** ProtoLink evaluates the action capability, publishes a typed approval request with the preview artifact, and halts execution until ProtoAgent's frontend returns the human decision.
-11. **Completion Guard:** Runtime validation checks the Run Contract against worker usage, approval requests, and diff artifacts before marking the task answered, blocked, incomplete, or canceled.
+The operator interface remains usable without a model for setup and inspection.
+Model requests check local readiness before retrieval and agent construction;
+unavailability is an explicit failure or setup requirement. Rendering and input
+handling remain separate from model execution: the frontend caches unchanged
+regions, keeps navigation responsive during a run, and captures provider console
+diagnostics rather than allowing them to disrupt terminal output. These interface
+properties support operator control; they do not establish lower inference
+latency or better task accuracy.
 
----
+The coding evaluation creates disposable exercises for empty-input arithmetic,
+whitespace normalization and cross-file boolean conversion. It compares the
+deck with an internal single-agent condition, using an independent acceptance
+script outside the normal worker workspace. Completion that fails the oracle is
+recorded as false completion. External Scout/MCP access is disabled in these
+fixtures. Generated code executes on the host, so the oracle arrangement is not
+a tamper-proof evaluation sandbox. The small task set and one run per condition
+are a starting point for the broader evaluation described above.
 
-## Ten: Tool Abstraction And Network Trust
+An additional offline evaluation uses the engine's native evaluator with fresh
+agent factories and repeated source-read/task-state cases. Scripted model actions
+and linked child receipts establish integration behavior without contacting a
+provider. Its scores and measured runtime do not establish model quality or a
+performance advantage over another architecture.
 
-Because of strict tool isolation, ProtoAgent assigns capabilities to the
-narrowest role that needs them. Repository reads stay with Explorer, public
-network reads stay with optional Scout, and workspace writes stay with Coder
-behind `RunAction` approval. Scout reuses ProtoLink's first-party web tools
-instead of maintaining a parallel search/fetch implementation. Future external
-tool protocols should preserve these same capability and approval boundaries
-rather than granting broad ambient access to every agent.
+### 11.4 Implementation and further reading
 
----
+| Responsibility | Source |
+| --- | --- |
+| Task records and worker packets | [`task_record.py`](core/protoagent_core/task_record.py) |
+| Worker roles and optional composition | [`agents/`](core/protoagent_core/agents/) |
+| Prepared edits and check actions | [`editing.py`](core/protoagent_core/editing.py) |
+| Context policies and hooks | [`request_budget.py`](core/protoagent_core/request_budget.py) |
+| Repository retrieval | [`context/`](core/protoagent_core/context/) |
+| Authority and execution phases | [`runtime_policy.py`](core/protoagent_core/runtime_policy.py) |
+| Acceptance and repair routing | [`verification.py`](core/protoagent_core/verification.py), [`workflow.py`](core/protoagent_core/workflow.py) |
+| External-tool brokerage | [`mcp.py`](core/protoagent_core/mcp.py) |
+| Independent coding evaluation | [`coding_eval.py`](core/protoagent_core/coding_eval.py) |
+| Offline engine evaluation | [`harness_eval.py`](core/protoagent_core/harness_eval.py) |
+| Operator interface | [`cli/src/`](cli/src/) |
 
-## Eleven: Conclusion
-
-By separating the stateful Architect from narrow specialist workers
-(**Explorer**, **Coder**, and optional tool-only **Scout**), feeding coding work
-through **Context Loom**, and validating every run against a **Run Contract**,
-ProtoAgent creates an agentic coding system that is local-first, inspectable,
-and model-portable. Smaller models receive less irrelevant context and fewer
-tools; stronger models keep the same trust boundary. Context is cited, network
-access is opt-in, actions are previewed, approvals are explicit, missing write
-artifacts are marked incomplete, and prompt behavior can be evaluated over
-time.
-
-## v0.2.3: Native Execution And Recovery
-
-ProtoLink 0.7.1 owns subprocess execution, recoverable file mutation, approval
-lifecycles, agent readiness/cleanup and normalized task results. ProtoAgent
-registers `process_tool()` on Verifier and `filesystem_tools()` on Coder, with
-explicit project roots, dedicated `StorageCheckpointStore` storage and separate
-approval policies for commands, writes and restoration.
-
-`AgentGroup` owns the embedded resources. `RunHandle` consumes typed native
-events and normalized `RunResult`/`RunReport`; the application no longer parses
-transport final events or retries uncertain task submissions. An actual
-`ApprovalBroker` handles requests and exact fingerprints; Rust remains the
-presentation adapter and application authorization constructs `ApprovalScope`.
-
-The application Graph permits an initial attempt and at most two repairs after
-completed nonzero checks. All edits precede checking within an attempt. Native
-completion checks bind evidence to resource revisions; external changes to
-referenced files invalidate it. Approvals and previews cannot prove execution.
-The recorded inputs are this run's changed files, not every repository resource.
-
-Native run snapshots and reports remain in `SQLiteRunStore`, with a configured
-redaction policy applied at every write. ProtoLink 0.7.1 propagates delegated
-worker events and receipts into the parent task and report. Completion consumes
-that evidence directly; no stored-worker join remains. Checkpoint inventory uses
-native filters and pagination. Replay remains read-only.
-
-Live model text and delegated command output reach the CLI through native events.
-The TUI keeps bounded generation previews, while shell mode flushes deltas as
-they arrive. Final model text replaces its preview; the native terminal task
-result determines completion. JSON-action fragments remain provisional.
-
-Local process execution is host execution with explicit argv, cwd, environment
-and limits, without sandbox isolation. Filesystem recovery requires POSIX,
-existing parent directories, symlink-free paths and one live namespace writer.
-Native new files use mode 0600. Changed revisions, including identity changes
-after a restoration, can block chained undo. Legacy v0.2.1 checkpoint databases
-are preserved for inspection rather than imported as proven native effects.
-Uncertain mutations are never automatically replayed.
-
-See the [migration notes](docs/content/core/protolink-migration.md) for the
-old-to-new API mapping and concrete remaining library integration gaps.
+Operational details belong in the [task workflow guide](docs/content/core/task-workflow.md),
+[MCP guide](docs/content/core/mcp.md) and [evaluation guide](docs/content/core/quality-evals.md).
+The [core architecture documentation](docs/content/core/architecture.md) describes
+the frontend API, and the [ProtoLink project](https://github.com/nMaroulis/protolink)
+documents the underlying execution framework.

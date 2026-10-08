@@ -144,7 +144,9 @@ class ScoutTests(unittest.IsolatedAsyncioTestCase):
                 scout_enabled=True,
             )
 
-        self.assertEqual(list(enabled), ["explorer", "coder", "verifier", "scout", "architect"])
+        self.assertEqual(
+            list(enabled), ["explorer", "coder", "tester", "verifier", "scout", "architect"]
+        )
         factory.assert_called_once()
         self.assertIsNone(enabled["scout"].llm)
 

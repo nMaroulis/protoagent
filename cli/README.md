@@ -4,7 +4,7 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.2.3`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.3.0`, sourced from `cli/Cargo.toml`.
 
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
@@ -17,12 +17,22 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.7.1"
+python -m pip install "protolink[http,llms,mcp]>=0.8.0"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
 
 The built binary is `cli/target/release/proto-cli`.
+
+Development and test builds omit debug symbols and incremental compilation
+caches to reduce disk usage. Dependencies remain cached, but recompiling changed
+code may take longer. For source debugging, set `CARGO_PROFILE_DEV_DEBUG=2` when
+building. Generated files in `cli/target/` are disposable; this command removes
+debug build output while keeping the release executable:
+
+```bash
+cargo clean --manifest-path cli/Cargo.toml --profile dev
+```
 
 ## Use
 
@@ -59,10 +69,42 @@ are a dim placeholder; the empty cursor blinks slowly. `/debug on` reveals
 metadata below completed answers and a `/trace` hint; `/debug off` hides it.
 This display setting defaults off for each TUI session.
 
+Architect can ask a question during the same task through ProtoLink's native
+`ask_user` tool. Type an answer or press Tab to use a suggestion, then Enter to
+send. Esc skips; Ctrl-C cancels. PageUp/PageDown scroll long TUI questions.
+Questions close on native timeout or budget expiry; feedback never authorizes
+an action. Interactive shell runs support the same answer controls; redirected
+input/output declines questions. This is live continuation, not restart/resume.
+
 Two muted horizontal borders frame the input. It expands upward for multiline
 text while the lower border and status stay anchored. Cached message layouts
 and changed-row painting keep streaming work independent of old answer sizes
 on animation-only ticks.
+
+The header, composer and footer are cached independently. Unchanged frames write
+nothing; input and progress are checked every 32 ms, with 120 ms animation steps.
+Mouse-wheel/PageUp scrolling, resize and Ctrl-L redraw work during replies.
+Pickers use buffered modal frames and keep their background between keystrokes.
+Small windows show a resize hint and preserve the conversation and draft.
+
+No LLM is needed to open the TUI, use static `/help`, change settings or toggle
+agents. Coding requests and `/help QUESTION` need the selected model. An offline
+local server produces an inline setup message before indexing; provider and JSON
+errors leave the interface open. For Ollama, start `ollama serve` and select an
+installed model. `/config` shows its URL, `/model` changes the selection and
+`/trace` shows bounded, redacted diagnostics. Pre-bound SDK console loggers are
+captured so their tracebacks cannot scroll away the terminal UI.
+
+Model discovery and `/check` run in background workers; Esc/Ctrl-C dismisses
+their read-only results. Discovery uses parallel metadata probes and never
+constructs an LLM merely to open the model picker.
+
+Real terminal regression tests use isolated configuration and local mock models:
+
+```bash
+cargo build --release --locked --manifest-path cli/Cargo.toml
+.venv/bin/python cli/tests/tui_smoke.py
+```
 
 `/help QUESTION` and `proto-cli help "QUESTION"` stream Guide help using the
 active model and bundled command reference, without requiring a project.
@@ -84,16 +126,17 @@ changes use ProtoLink's revision-aware restoration.
 
 ## Agent Controls
 
-The default runtime has a stateful Architect and task-local Explorer/Coder
-workers plus a tool-only Verifier for approved test/build/lint commands.
-Scout is an optional task-local web research worker and is off by
-default.
+Architect, Explorer, Coder and the tool-only Verifier are required. Tester is an
+optional test-design worker and defaults on. Scout web research and the tool-only
+MCP broker default off. `/agents` shows all three optional workers and their
+toggle commands.
 
 ```bash
 proto-cli agents
 proto-cli agents profile small
+proto-cli agents tester off
 proto-cli agents scout on
-proto-cli agents scout off
+proto-cli agents mcp on
 ```
 
 The same controls are available in the TUI:
@@ -101,11 +144,18 @@ The same controls are available in the TUI:
 ```text
 /agents
 /agents profile small
+/agents tester off
 /agents scout on
-/agents scout off
+/agents mcp on
 ```
 
-Agent-setting changes apply to the next run. When Scout is enabled, the Python
+Use `on` or `off` for any optional worker. Settings persist user-wide and apply
+to the next run; they do not change a running task. Turning Tester off removes
+its inference while required verification remains enforced. `/mcp` sets up the
+broker's servers. Guide knows these controls: `/help how do I disable Tester?`
+returns instructions and current settings without changing them.
+
+When Scout is enabled, the Python
 core registers ProtoLink's `web_search` and `fetch_url` tools with
 `network.read`; Scout has no workspace-write capability.
 
@@ -120,9 +170,11 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 | `/config` | Show redacted configuration. |
 | `/check` | Refresh Python, ProtoLink, web-tool, transport, auth, and provider readiness. |
 | `/version` | Show CLI, core, and planned ACP versions. |
-| `/agents` | Show the agent manifest, prompt profile, and optional Scout state. |
+| `/agents` | Show required roles, prompt profile, and optional Tester/Scout/MCP states. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile. |
 | `/agents scout [on\|off]` | Enable or disable Scout for subsequent runs. |
+| `/agents tester [on\|off]` | Enable or disable test-design inference; required checks remain enforced. |
+| `/agents mcp [on\|off]` | Enable or disable the external-tool broker; use `/mcp` to set up servers. |
 | `/context [QUERY]` | Show Context Loom status or build a source-cited Context Pack. |
 | `/context on`, `/context off` | Enable or disable persistent project conversation memory. |
 | `/context history` | Inspect ProtoLink-owned Architect memory. |
@@ -186,3 +238,48 @@ fetches; returned content is untrusted and does not grant write authority.
 The Python orchestration logic is documented in the
 [core README](../core/README.md). The full command and TUI manual is in the
 [documentation site](https://nmaroulis.github.io/protoagent/docs/cli/overview).
+
+## v0.3.0 task workflow and coding evals
+
+The deck adds a read-only Tester, runtime task state, bounded Coder reads and exact
+edits. `run_check` selects a frozen project check by ID; baselines and preparation
+allow subsequent editing, while final verification closes the edit phase. Code
+changes without qualifying final checks remain incomplete. Configure unusual
+checks in `.protoagent/project.json`; see the
+[task workflow guide](../docs/content/core/task-workflow.md).
+
+```bash
+proto-cli eval coding --plan --json
+proto-cli eval coding --live --profile small --task empty-average --json
+```
+
+The coding harness compares the deck and a single agent using the same selected
+model on disposable fixtures. Live mode uses narrow fixture approvals and
+independent acceptance tests. Generated code executes on the host without sandbox
+isolation. Routing diagnostics remain available through `eval profiles`.
+
+
+## Optional workers and MCP in v0.3.0
+
+Tester defaults on, while Scout/MCP default off. `proto-cli agents tester|scout|mcp
+on|off` and the matching `/agents` commands persist optional-worker settings for
+the next run. Disabled workers are not constructed or registered. Architect,
+Explorer, Coder and Verifier remain required; without Tester, Architect defines
+criteria and Coder writes regressions while all selected checks still run.
+
+`proto-cli mcp` (TUI `/mcp`) shows model-free setup/status. Import an explicit
+server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
+`mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
+not invoke server tools. The broker exposes three fixed tools for names, one
+schema and an approved allowlisted invocation. Architect uses `tool_call`,
+never another inference loop. ProtoLink 0.8.0 owns transports, schema validation,
+session cleanup and result/error normalization. See the
+[MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
+
+## Engine integration
+
+The harness uses ProtoLink 0.8 owned local children and native context policies.
+Run `proto-cli eval harness --json` for offline engine-contract checks. Optional
+provider `fallback_models` are configured explicitly; restart/resume and Docker
+execution are outside the current coding workflow integration. See the
+[engine integration guide](../docs/content/core/protolink-migration.md) and [model configuration guide](../docs/content/core/config-models.md).

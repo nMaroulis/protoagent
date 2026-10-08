@@ -1,17 +1,19 @@
 ---
 title: Agent Deck
-description: Runtime kernel, Architect, narrow workers, optional Scout, Guide, policies, tools, and memory boundaries.
+description: Required coding roles, optional Tester/Scout/MCP, Guide, policies, tools, and memory boundaries.
 ---
 
-The active coding mesh exposes three LLM-capable roles:
+The default coding mesh exposes four LLM-capable roles:
 
 1. Architect
 2. Explorer
-3. Coder
+3. Tester (optional, enabled by default)
+4. Coder
 
-Architect is the stateful controller. Explorer and Coder are stateless,
+Architect is the stateful controller. Explorer, Tester and Coder are stateless,
 task-local workers. Verifier is an always-registered tool-only command worker. Scout is a
-tool-only web-research agent that is disabled by default. Guide is separate and only answers usage help
+tool-only web-research agent that is disabled by default. MCP is a model-free
+broker, also disabled by default. Guide is separate and only answers usage help
 questions.
 
 ## Runtime Shape
@@ -19,7 +21,7 @@ questions.
 The user-facing architecture is:
 
 ```text
-Context Loom -> RunContract -> Architect -> Explorer/Coder/Verifier/(optional Scout) -> Policy Gate -> Completion Guard
+Context Loom -> TaskRecord/RunContract -> Architect -> Explorer/Coder/Verifier/(optional Tester/Scout/MCP) -> Policy Gate -> Completion Guard
 ```
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
@@ -32,21 +34,23 @@ allow one initial attempt and at most two repairs after completed failing checks
 
 ## Deck Assembly
 
-`agents/deck.py` creates the default deck and conditionally inserts Scout:
+`agents/deck.py` creates required workers and conditionally inserts optional workers:
 
 ```python
 {
     "explorer": create_explorer_agent(...),
+    **({"tester": create_tester_agent(...)} if tester_enabled else {}),
     "coder": create_coder_agent(...),
     "verifier": create_verifier_agent(...),
     **({"scout": create_scout_agent(...)} if scout_enabled else {}),
+    **({"mcp": create_mcp_agent(...)} if mcp_enabled else {}),
     "architect": create_architect_agent(...),
 }
 ```
 
 Every LLM-capable role receives a separate ProtoLink LLM instance configured
 with the selected provider and model. Architect receives durable conversation
-storage. Explorer and Coder receive task-local in-memory state so their worker
+storage. Explorer, Tester and Coder receive task-local in-memory state so their worker
 calls do not accumulate long-term history. Scout has `llm=None`, no durable
 storage, no enabled conversation state, and `expose_chat=False`; Architect
 discovers the registered agent and calls its tools rather than asking Scout to
@@ -57,10 +61,34 @@ runtime generates the credential automatically, passes the authenticator and
 credential to every enabled agent, and uses the same credential for the
 CLI-side `AgentClient`. Users do not need to configure this mesh token.
 
+The default CLI runtime constructs the deck with `local_children=True` and
+`transport=None`. Architect receives the enabled workers as its native
+`subagents` roster. Each call gets an independent conversation; repeated jobs for
+one worker do not share its previous assignment. Child actions must satisfy the
+Architect's delegation ceiling and the worker's own policy. Architect still has
+no mutation or process tools. `SubagentLimits` caps depth at one, concurrency at
+one and children at 32 per attempt. Shared Graph budgets also cover child work.
+Explicit transport mode uses authenticated Registry discovery instead.
+
+Every model-facing role receives native ContextPolicy preparation and a
+before-model hook for task state and compact small-profile metadata. Large results
+are progressively retrievable through `read_context_artifact`; it reads scoped
+observations and grants no repository or external-tool authority.
+
+## User questions
+
+Architect also has native `ask_user(question, options=None)`. It uses this for
+requirements or preferences that repository evidence cannot resolve, with one
+concise question and up to three suggested answers. Workers do not prompt the
+user directly; they report missing information to Architect. The engine places
+the answer in tool history and continues the same task. Decline and timeout
+supply no answer, and feedback never replaces an execution approval. See
+[runtime interaction](runtime.md#user-questions-and-live-continuation).
+
 ## Prompt Profiles
 
 `prompt_profiles.py` defines the model-capability overlays used by Architect,
-Explorer, and Coder. The base role prompts keep invariant behavior such as
+Explorer, Tester, and Coder. The base role prompts keep invariant behavior such as
 delegation, read-only exploration, and approval-gated writes. A prompt profile
 then tunes reasoning depth, delegation cadence, evidence discipline, and final
 answer style.
@@ -123,14 +151,15 @@ Capabilities:
 | Capability | Effect |
 | --- | --- |
 | `agent.delegate` | allow |
+| `task.manage` | allow |
 | `llm.history.compact` | allow |
 | `state.compact` | allow |
 | `state.describe` | allow |
 | `state.reset` | allow |
 | default | deny |
 
-Architect has no direct workspace read or write tools. It should delegate to
-Explorer for evidence and Coder for file changes. Because workers are
+Architect has task-status, planning and bounded source-packet tools, with no write
+tools. It delegates broader exploration to Explorer and file changes to Coder. Because workers are
 stateless, Architect handoffs must include the objective, relevant paths,
 evidence, and acceptance criteria for the current task.
 
@@ -164,13 +193,17 @@ Policy:
 Source: `core/protoagent_core/agents/coder.py`
 
 Coder is the stateless worker that can prepare file modifications. It does not
-get Explorer's broad read/search tools. It is expected to receive enough context
-from Architect and Explorer for the current task.
+get Explorer's broad search tools. It has bounded `read_file` access and can
+request missing context through `report_task`. Architect can pass real source
+packets using `worker_packet`. The preferred edit is an exact replacement with a
+full-file revision, avoiding reproduction of unaffected source.
 
 Tools registered directly from `protolink.tools.builtins.filesystem_tools()`:
 
 | Tool | Capability | Purpose |
 | --- | --- | --- |
+| `read_file(path, start_line, end_line)` | `workspace.read` | Read a bounded source span and revision |
+| `edit_file(path, old, new, expected_revision)` | `filesystem.write` | Prepare one exact native replacement |
 | `create_file(path, content)` | `filesystem.write` | Approved creation of an absent file |
 | `replace_file(path, content)` | `filesystem.write` | Approved replacement of an existing file |
 | `preview_change(change_id)` | `filesystem.read` | Inspect native recovery state, conflict and diff |
@@ -185,11 +218,22 @@ The Coder factory's `tool_only=True` mode skips model construction for CLI undo.
 The application supplies a dedicated `StorageCheckpointStore` and an
 `ApprovalBroker` as the actual approval handler.
 
+## Tester
+
+Tester is task-local and read-only. It inspects source and existing tests, proposes
+acceptance criteria and regression cases, selects discovered check IDs, and
+classifies observed failures. It cannot edit or run commands. Coder implements
+tests; Verifier supplies measured execution evidence. Task status and validated
+worker reports use `task.manage`. Tester is optional and enabled by default; delegation is
+chosen by Architect rather than required on every request.
+
 ## Verifier
 
 Verifier has `llm=None`, `state=[]` and `expose_chat=False`. It registers native
 `process_tool(max_timeout_seconds=600, max_output_bytes=32768)`.
-Architect calls `execute_command` directly with argv, absolute cwd, explicit env,
+Architect normally calls `run_check(check_id, phase)` using the frozen repository
+plan. Baseline permits later edits; verify closes editing. General preparation
+uses `execute_command` with argv, absolute cwd, explicit env,
 timeout_seconds and max_output_bytes. `process.execute` requires approval.
 
 Native results include exit_code, stdout, stderr, timed_out, canceled, truncated,
@@ -198,7 +242,7 @@ commands run on the host without sandbox isolation. No environment is inherited.
 
 `verification.py` defines application acceptance using native `CompletionCheck`
 and `CompletionValidator`. `workflow.py` bounds repair attempts with Graph and
-keeps edits before checks in each attempt. No application process runner or
+keeps edits before final verification in each attempt. No interactive application process runner or
 integer file-change revision counter remains.
 See [Verify & Recover](../cli/verification-and-recovery.md).
 
@@ -234,7 +278,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.7.1 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.8.0 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |
@@ -275,6 +319,10 @@ Guide is not part of the coding mesh. It is used by `/help QUESTION` and has:
 
 Guide receives a static manual and a redacted current-settings snapshot. It
 answers ProtoAgent usage questions, not project coding questions.
+The manual covers Tester, Scout and MCP toggles in both TUI and shell form,
+their defaults, required roles and when settings take effect. Every help call
+receives their current enabled/disabled states. Guide explains how to configure
+the harness; it has no tools to change settings itself.
 
 ## Agent Manifest
 
@@ -282,13 +330,31 @@ The CLI doctor and fallback paths use `agent_manifest()`:
 
 | Agent | Role | State | Memory | Tools |
 | --- | --- | --- | --- | --- |
-| Architect | stateful controller | stateful | `protoagent-architect` | none |
+| Architect | stateful controller | stateful | `protoagent-architect` | task status, planning, source packets |
 | Explorer | stateless context worker | stateless | task-local | Context/read/search/git tools |
-| Coder | stateless write worker | stateless | task-local | diff/create/restore tools |
-| Verifier | tool-only command worker | stateless | none | `execute_command` |
+| Tester | read-only regression designer | stateless | task-local | read/search, task status and reports |
+| Coder | stateless write worker | stateless | task-local | bounded read, exact edit, native create/replace/restore |
+| Verifier | tool-only command worker | stateless | none | `run_check`, `execute_command` |
 | Scout | optional tool-only web worker | stateless | none | `web_search`, `fetch_url` |
 
 The manifest also reports the runtime kernel, stateful pieces, stateless
 workers, `enabled`/`optional` state, and RunContract rule used by
 `proto-cli agents` and `/agents`. Update this manifest when the visible topology
 changes.
+
+
+## Optional-worker controls and MCP
+
+Architect, Explorer, Coder and Verifier cannot be disabled. Tester defaults on;
+Scout and MCP default off. Use `proto-cli agents tester|scout|mcp on|off`, or
+`/agents tester|scout|mcp on|off`. Settings persist user-wide and apply to the
+next run. Disabled workers are not constructed or advertised, and Architect's
+instructions explain their absence. When Tester is off, Architect defines
+criteria and Coder adds regression tests; repository verification stays required.
+
+The MCP broker has `llm=None`, no conversation memory and three fixed tools:
+`list_mcp_tools`, `mcp_tool_schema`, `call_mcp_tool`. Architect calls it with
+`action="tool_call"`, never `infer`; workers request external evidence through
+Architect. Discovery is lazy, schemas are returned one at a time and calls
+require explicit tool allowlists and native approvals. See [MCP Broker](mcp.md)
+for `mcp`/`/mcp` setup, transports, credentials, limits and effect boundaries.

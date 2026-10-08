@@ -52,6 +52,32 @@ those helpers through `get_agent_settings()` and
 `configure_optional_agent()`. Scout is not constructed or registered while
 disabled.
 
+## Explicit model fallback
+
+Provider settings may include `fallback_models`, with at most two distinct
+same-provider names. This advanced setting is edited in the existing
+`~/.protoagent/config.json`; no setup command is added:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "model": "your-selected-small-model",
+      "fallback_models": ["your-installed-backup-model"]
+    }
+  }
+}
+```
+
+An absent or empty list disables routing. The selected model remains primary.
+ProtoLink's `RoutedLLM` uses the portable JSON action protocol, tries each configured
+candidate once per eligible request failure, and charges every attempt to the
+shared budget. Exposed stream content, validation/policy errors and authentication
+failures prevent fallback. Completed tools are never repeated. All candidates use
+the same provider endpoint, credentials and configured context window; no cloud
+provider or stronger model is selected implicitly. Ensure local backups are installed.
+Routing changes the request contract, so record it when comparing eval results.
+
 ## Provider Aliases
 
 `normalize_provider()` accepts common aliases:
@@ -95,8 +121,8 @@ hint, key metadata, and normalized model records.
 
 Validation strategy:
 
-1. Try ProtoLink validation through the configured LLM when possible.
-2. Fall back to provider model-list endpoint.
+1. Use the provider model-list endpoint without constructing an LLM or calling inference.
+2. Leave unsupported or inconclusive authentication checks unverified.
 3. Cache valid results longer than uncertain results.
 4. Mark a provider as recently valid after a successful live run.
 
@@ -108,6 +134,13 @@ Cache TTLs:
 | Invalid or unverified | 30 seconds |
 
 The cache key hashes the API key so raw secrets are not stored in memory keys.
+
+Model inventory probes run in a bounded pool, preserving provider order. CLI
+requests also perform a short selected-model readiness check before indexing:
+missing selection, local GGUF file, local server or Ollama model is reported
+inline. This check does not run for direct library callers without a frontend
+progress bridge. Cloud connectivity is determined by the actual native request.
+See the [TUI guide](../cli/tui.md) for offline behavior and probe timeouts.
 
 ## LLM Construction
 
@@ -126,6 +159,13 @@ model_params["num_ctx"] = ollama_context_window(cfg)
 
 The same value is written into `LLMModelProfile.context_window`, so request
 parameters and UI metrics do not drift apart.
+
+Ollama also receives `supports_tool_calling=True` when `/api/show` advertises
+the selected model's `tools` capability. The bounded metadata probe is cached;
+missing/unsupported metadata preserves ProtoLink's JSON fallback. Optional
+`providers.ollama.tool_calling` selects `auto` (default), `native` or `json`;
+`PROTOAGENT_OLLAMA_TOOL_CALLING` supplies the mode when the config field is absent.
+Both channels use the engine's typed action validation and dispatch.
 
 ## ProtoLink Readiness
 

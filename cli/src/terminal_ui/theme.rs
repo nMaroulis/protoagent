@@ -5,7 +5,7 @@ use crossterm::{
     style::{Attribute, Color, Print, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal,
 };
-use std::io::Write;
+use std::io::{stdout, Write};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -13,6 +13,18 @@ use super::state::Role;
 
 pub(super) fn size() -> (u16, u16) {
     terminal::size().unwrap_or((100, 30))
+}
+
+pub(super) fn present_overlay(frame: &[u8]) -> Result<()> {
+    // Modal text, borders and cursor changes become one terminal transaction.
+    let mut output = Vec::with_capacity(frame.len() + 16);
+    output.extend_from_slice(b"\x1b[?2026h");
+    output.extend_from_slice(frame);
+    output.extend_from_slice(b"\x1b[?2026l");
+    let mut out = stdout().lock();
+    out.write_all(&output)?;
+    out.flush()?;
+    Ok(())
 }
 
 pub(super) fn write_line(

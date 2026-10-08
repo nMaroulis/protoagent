@@ -2,6 +2,95 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.3.0] - 2026-09-26
+
+### Added
+
+- Runtime-owned TaskRecord with criteria, check selection, scoped worker packets
+  and explicit done/needs_context/blocked worker reports.
+- Stateless, read-only Tester for regression planning and failure analysis.
+- Persistent optional-agent controls for Tester (default on), Scout and MCP
+  (default off). Disabled workers are not constructed or registered; required
+  Architect/Explorer/Coder/Verifier roles cannot be disabled.
+- `mcp` and `/mcp` setup, explicit discovery probes, server/tool allowlists and
+  environment-referenced HTTP authentication. Model-free MCP broker with three
+  fixed discovery/schema/call tools, native approvals and bounded model handoffs.
+- Repository check discovery, `.protoagent/project.json` configuration, and
+  Verifier `run_check(check_id, phase)` with baseline and final verification.
+- Coder bounded source reads and exact single-occurrence `edit_file` with a
+  source revision guard, native diff approval and native recovery.
+- Compact small-profile protocol prompts and worker cards with exact input
+  schemas, omitting repetitive examples and large output schemas.
+- Per-request context admission through native ProtoLink policies and hooks,
+  reserving output tokens and retaining the current task and runtime record.
+  Small profiles with unknown capacity receive an 8192-token application cap.
+- Disposable coding evals with independent acceptance scripts and a same-model
+  single-agent baseline: `proto-cli eval coding --plan|--live`.
+- Owned local subagents through ProtoLink 0.8: independent conversations,
+  inherited policies, shared Graph budgets, sequential dispatch, depth one and
+  configurable per-attempt child limits. Default execution needs no Registry
+  server or loopback sockets; explicit transport meshes remain available.
+- Native ContextPolicy and AgentHooks for current task state, complete-turn
+  pruning and scoped progressive retrieval of large tool/child observations.
+- Optional explicit same-provider `fallback_models` through native RoutedLLM,
+  with bounded transient request fallback, shared accounting and no tool replay.
+- `eval harness [--json]`: native evaluate() runs repeated offline application
+  read/task-state cases with fresh factories and linked child receipt checks.
+- Architect-only native `ask_user` for clarification and same-task continuation.
+  TUI/shell question input supports explicit suggestions, free text, skip and
+  cancellation, correlated replies, native deadlines and no implicit approval.
+
+### Changed
+
+- Python projects without repository checks receive a predefined unittest
+  runner for new root regression tests. Compact task records expose valid and
+  bootstrap check IDs; empty suites still cannot verify changes. Planning
+  mistakes return corrective feedback without changing the plan, and omitted
+  check IDs preserve defaults. Explicit project configuration stays authoritative.
+
+- Ollama models advertising `tools` use ProtoLink's native tool channel, with
+  bounded cached metadata discovery and explicit auto/native/json overrides.
+  Small JSON prompts include an Explorer README delegation example. A native
+  completion hook rejects unfinished action-shaped answers before completion.
+  Earlier malformed answers become invalid-answer notes in model context while
+  valid historical actions and original reports remain intact.
+
+- Code changes require selected repository checks executed at current revisions.
+  Preparation and unrelated successful commands do not satisfy verification.
+  Applied, verified and criteria-supported states are reported separately.
+- Baseline and preparation commands allow subsequent edits; final checks close
+  the edit phase and preserve the two-repair ceiling.
+- Source tools return one bounded source span with line range and SHA-256 revision;
+  the duplicated `raw_content` field is removed.
+- Explicit small-model hints take priority over provider hosting location.
+- Intent classification handles polite requests and explicit no-write instructions.
+- CLI/core/docs coordinated versions advance to 0.3.0; ProtoLink floor advances
+  to 0.8.0 with the HTTP, LLM and MCP extras.
+- Replace model acquisition wrappers with native context policies and lifecycle
+  hooks. The small profile retains compact declarations and exact input schemas.
+- Present local child output from native task records before join, deduplicated
+  against the parent stream, preserving live model/process previews.
+
+### Migration and limits
+
+- Existing code-change runs without a repository check now remain incomplete.
+  Configure explicit argv, cwd, env and dependency paths for uncommon projects.
+- `execute_command` remains approved host execution; only frozen repository checks
+  qualify as verification. Passing checks supports criteria, not arbitrary semantics.
+- Tester is enabled by default and can be disabled with `agents tester off`.
+  Architect/Coder then handle criteria and regressions; required checks remain.
+- MCP tool access is optional and off by default. Calls use managed ProtoLink
+  sessions without automatic retries. Failed started invocations mark external
+  effects uncertain and block further effectful work in the run.
+  Approvals/allowlists do not sandbox server
+  effects; remote receipts cannot satisfy repository verification. Resources,
+  prompts, OAuth and server installation are not part of this integration.
+- Request admission uses token estimates. Runtime-held task state survives observation
+  eviction within a live run. Live model performance remains to be measured with coding evals.
+- Native execution restart/resume, Docker check execution and background model
+  supervision are not integrated into the custom coding Graph. Saved conversations,
+  reports and file recovery are distinct from execution continuation.
+
 ## [0.2.3] - 2026-09-15
 
 ### Added

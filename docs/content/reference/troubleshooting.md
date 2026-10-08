@@ -57,13 +57,49 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.7.1"
+pip install "protolink[http,llms,mcp]>=0.8.0"
 proto-cli check
 ```
 
 `check` should report streaming, metrics, compaction, context, state, reports,
 cancellation, logging, auth, transport, and web tools as ready. Web-tool
 readiness is separate from baseline `agent_ready` because Scout is optional.
+
+## Tool Request Appears As The Answer
+
+A reply such as `{"tool_call":{"name":"explorer",...}}` is an unfinished
+action, not a project explanation. ProtoAgent rejects bare action-shaped finals
+through a native completion hook, so the run reports failure instead of
+`answered`. Check `/trace` for actual tool receipts; printed JSON proves no read.
+
+Ollama models advertising `tools` now use ProtoLink's native tool channel
+automatically. If your server's metadata is unavailable but you know the model
+supports native tools, use `PROTOAGENT_OLLAMA_TOOL_CALLING=native`. If its native
+template is unreliable, use `json` to retain the strict JSON action protocol.
+The small profile provides a concrete Explorer README delegation example.
+An advertised capability does not guarantee the model follows the protocol.
+Failed/interrupted runs are not automatically replayed.
+
+When asking for action-protocol examples, request a code block or explanatory
+prose. Other JSON application answers remain valid.
+
+## Planning Fails Because There Are No Check IDs
+
+The selected project may have no tests or check configuration, even when its
+README lists a test folder. `plan_task` now returns invalid selections as
+corrective feedback and includes valid IDs. Omitting `check_ids` keeps defaults.
+The compact task record shows `available_check_ids` without requiring another
+status call or a large command catalog.
+
+Python projects with no existing checks receive a predefined `python-tests`
+unittest runner. Architect/Tester should ask Coder for focused root `test_*.py`
+regressions. A zero-test baseline means missing coverage, and a final empty suite
+cannot pass verification. There is no automatic dependency installation.
+
+Explicit `.protoagent/project.json` checks take precedence, including an empty
+list. Unsupported projects need a project-owned command configured outside the
+run. Approved edits without a usable check remain unverified/incomplete.
+See [Task Workflow](../core/task-workflow.md).
 
 ## Scout Is Off Or Search Fails
 
@@ -80,7 +116,7 @@ Enable Scout for the next run:
 proto-cli agents scout on
 ```
 
-If `web_tools_ready` is unavailable, install ProtoLink 0.7.1 or newer. Brave is
+If `web_tools_ready` is unavailable, install ProtoLink 0.8.0 or newer. Brave is
 the default search engine and needs:
 
 ```bash
@@ -93,7 +129,7 @@ factual search. Architect can pass either to `web_search`. Wikipedia only suppor
 nonstandard ports, unsafe redirects, binary content, and oversized responses.
 These rejections are safety behavior, not general network failures.
 
-ProtoLink 0.7.1 applies native budget checks to direct tool tasks. If a call
+ProtoLink 0.8.0 applies native budget checks to direct tool tasks. If a call
 stops at a budget boundary, inspect `/trace` and the configured run budget.
 Verifier also has a separate per-command timeout.
 

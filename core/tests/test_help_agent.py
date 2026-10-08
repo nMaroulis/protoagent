@@ -29,6 +29,10 @@ class GuideHelpAgentTests(unittest.TestCase):
                 return_value={
                     "active_provider": "mock",
                     "config_path": "/tmp/protoagent-test/config.json",
+                    "optional_agents": {
+                        "tester": {"enabled": False},
+                        "mcp": {"enabled": True},
+                    },
                     "providers": {
                         "mock": {
                             "label": "Mock",
@@ -57,11 +61,19 @@ class GuideHelpAgentTests(unittest.TestCase):
         self.assertIn("Shell commands (proto-cli ...):", seen_prompt["system"])
         self.assertIn("/agents profile [auto|small|medium|large|api]", seen_prompt["system"])
         self.assertIn("/agents scout on", seen_prompt["system"])
+        self.assertIn("proto-cli agents tester on|off", seen_prompt["system"])
+        self.assertIn("proto-cli agents mcp on|off", seen_prompt["system"])
+        self.assertIn(
+            "Architect, Explorer, Coder and Verifier cannot be disabled", seen_prompt["system"]
+        )
+        self.assertIn("apply to the next run", seen_prompt["system"])
         self.assertIn("BRAVE_SEARCH_API_KEY", seen_prompt["system"])
         self.assertIn("Active provider: mock", seen_prompt["user"])
         self.assertIn("Active model: mock-gpt", seen_prompt["user"])
         self.assertIn("Prompt profile: auto configured, medium resolved", seen_prompt["user"])
         self.assertIn("Optional Scout: disabled", seen_prompt["user"])
+        self.assertIn("Optional tester: disabled", seen_prompt["user"])
+        self.assertIn("Optional mcp: enabled", seen_prompt["user"])
         self.assertIn("Persistent context memory: on (default)", seen_prompt["user"])
         self.assertIn("User help question:\nwhat is the config command?", seen_prompt["user"])
 

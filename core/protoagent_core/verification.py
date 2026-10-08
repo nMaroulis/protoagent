@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from typing import Any
@@ -53,7 +54,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         result = event.payload.get("result")
         if isinstance(result, dict) and result.get("state") == "applied" and result.get("resource"):
             latest_writes[result["resource"]["resource_id"]] = event
-    if contract.requires_write:
+    if contract.requires_write or latest_writes:
         if not latest_writes:
             checks.append(CompletionCheck("applied workspace change", lambda evidence: False))
         for path, event in latest_writes.items():
@@ -84,18 +85,56 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "command": command,
             "cwd": args.get("cwd", ""),
             "attempt": attempt.command_attempts.get(event.action_id, 0),
+            "phase": attempt.command_phases.get(event.action_id, "prepare"),
+            "check_id": attempt.command_checks.get(event.action_id),
         }
         commands.append(item)
         # A newer execution of the same command replaces its failed older evidence.
         key = (command, item["cwd"], tuple(sorted(args.get("env", {}).items())))
-        latest_commands[key] = item
-    if contract.task_kind == "workspace-verification" and not commands:
-        checks.append(CompletionCheck("executed verification", lambda evidence: False))
+        if item["phase"] == "verify" and item["check_id"]:
+            latest_commands[key] = item
+    record = attempt.record
+    docs_only = (
+        contract.allows_unverified_docs
+        and bool(latest_writes)
+        and all(str(path).lower().endswith((".md", ".rst", ".txt")) for path in latest_writes)
+    )
+    needs_checks = contract.task_kind == "workspace-verification" or (
+        (contract.requires_write or bool(latest_writes)) and not docs_only
+    )
+    required_ids = set(record.selected) if record and needs_checks else set()
+    if record:
+        for role, worker in record.reports.items():
+            if worker["status"] != "done":
+                checks.append(
+                    CompletionCheck(
+                        f"unresolved worker: {role} ({worker['status']})",
+                        lambda evidence: False,
+                        require_execution=False,
+                    )
+                )
+    observed_ids = {item["check_id"] for item in latest_commands.values()}
+    if needs_checks and not required_ids:
+        checks.append(
+            CompletionCheck(
+                "repository verification plan", lambda evidence: False, require_execution=False
+            )
+        )
+    for check_id in sorted(required_ids - observed_ids):
+        checks.append(
+            CompletionCheck(
+                f"required check: {check_id}", lambda evidence: False, require_execution=False
+            )
+        )
     for index, item in enumerate(latest_commands.values()):
         action_id = item["action_id"]
         successful = item["exit_code"] == 0 and not any(
             item.get(key) for key in ("timed_out", "canceled", "budget_exceeded")
         )
+        output = str(item.get("stdout", "")) + str(item.get("stderr", ""))
+        if re.search(r"\bRan 0 tests\b", output):
+            successful = False
+            item["empty_test_suite"] = True
         if action_id not in attempt.command_revisions:
 
             def predicate(evidence):
@@ -150,7 +189,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         missing.append("A native denial, blocker or failed action requires a new instruction.")
     if uncertain_changes:
         missing.append(
-            "A recovery record has an uncertain effect; inspect it before requesting new work."
+            "A file or external effect is uncertain; inspect it before requesting new work."
         )
     current_results = [item for item in latest_commands.values()]
     command_validations = [value for value in validations if value["name"].startswith("command ")]
@@ -159,7 +198,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         item["stale"] = validation["status"] == "stale"
     verification_status = (
         "unverified"
-        if not commands
+        if not latest_commands or bool(required_ids - observed_ids)
         else (
             "stale"
             if any(item.get("stale") for item in current_results)
@@ -171,6 +210,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     )
     repairable = (
         contract.requires_write
+        and not (record and any(worker["status"] != "done" for worker in record.reports.values()))
         and outcome == "incomplete"
         and not stopped
         and all(status in {"passed", "failed"} for status in statuses)
@@ -189,6 +229,13 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         {
             "outcome": outcome,
             "satisfied": outcome == "satisfied",
+            "applied": bool(latest_writes),
+            "verified": verification_status == "passed",
+            "criteria_supported": outcome == "satisfied"
+            and (not needs_checks or verification_status == "passed"),
+            "acceptance_criteria": list(record.criteria) if record else [],
+            "required_checks": sorted(required_ids),
+            "evidence_limit": "Passing configured checks supports criteria; it does not prove all requested semantics.",
             "checks": validations,
             "message": "Execution evidence satisfies the application checks."
             if outcome == "satisfied"
@@ -210,8 +257,15 @@ def verification_summary(report: dict[str, Any]) -> str:
     lines = [f"Verification: {report['status']}."]
     if not report["results"]:
         return lines[0] + " No test/build command was executed."
-    for item in report.get("latest", report["results"]):
-        outcome = "timeout" if item.get("timed_out") else f"exit {item['exit_code']}"
+    for item in report.get("latest") or report["results"]:
+        outcome = (
+            "zero tests ran; verification is missing"
+            if item.get("empty_test_suite")
+            else "timeout"
+            if item.get("timed_out")
+            else f"exit {item['exit_code']}"
+        )
+        phase = item.get("phase", "prepare")
         stale = " (resource changed since this check)" if item.get("stale") else ""
-        lines.append(f"- {item['command']}: {outcome}{stale}")
+        lines.append(f"- [{phase}] {item['command']}: {outcome}{stale}")
     return "\n".join(lines)

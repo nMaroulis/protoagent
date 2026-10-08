@@ -282,6 +282,28 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
             "evaluated runtime action",
             decision_effect(payload).if_empty(summary),
         )),
+        "user_input.requested" => Some(item(
+            "QUESTION",
+            &actor,
+            "Human",
+            "asked for clarification",
+            value_string(payload, &["request", "question"]),
+        )),
+        "user_input.answered"
+        | "user_input.declined"
+        | "user_input.timed_out"
+        | "user_input.canceled" => Some(item(
+            "QUESTION",
+            "Human",
+            &actor,
+            match event_type.as_str() {
+                "user_input.answered" => "answered the question",
+                "user_input.declined" => "skipped the question",
+                "user_input.timed_out" => "question timed out",
+                _ => "question canceled",
+            },
+            "",
+        )),
         "approval.required" => Some(item(
             "APPROVAL",
             &actor,

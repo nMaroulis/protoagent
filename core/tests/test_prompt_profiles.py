@@ -20,12 +20,19 @@ class PromptProfileTests(unittest.TestCase):
         for profile in PROMPT_PROFILES.values():
             self.assertIn("web_search", profile.role_prompt("scout"))
 
+    def test_every_resolved_profile_has_a_focused_tester_overlay(self) -> None:
+        for profile in PROMPT_PROFILES.values():
+            self.assertIn("regression", profile.role_prompt("tester"))
+
     def test_auto_inference_uses_model_and_provider_capability_hints(self) -> None:
         self.assertEqual(infer_prompt_profile("ollama", "qwen2.5-coder:7b"), "small")
         self.assertEqual(infer_prompt_profile("lmstudio", "qwen3-coder:14b"), "medium")
         self.assertEqual(infer_prompt_profile("ollama", "llama3.3:70b"), "large")
         self.assertEqual(infer_prompt_profile("openai", "gpt-5.2"), "api")
         self.assertEqual(infer_prompt_profile("anthropic", "claude-opus-4.8"), "api")
+        self.assertEqual(
+            infer_prompt_profile("openai", "qwen3:8b", "https://models.example/v1"), "small"
+        )
 
     def test_explicit_profile_overrides_auto_resolution(self) -> None:
         status = prompt_profile_status(
@@ -50,7 +57,9 @@ class PromptProfileTests(unittest.TestCase):
 
         self.assertIn("Base architect prompt.", prompt)
         self.assertIn("Prompt profile: Small local model.", prompt)
-        self.assertIn("Use the exact agent names `explorer`, `coder`, and `verifier`.", prompt)
+        self.assertIn(
+            "Use exact names `explorer`, `coder`, `verifier` and enabled `tester`.", prompt
+        )
         self.assertIn("Do not reveal hidden chain-of-thought", prompt)
 
     def test_config_persists_prompt_profile(self) -> None:

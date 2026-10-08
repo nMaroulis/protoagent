@@ -41,14 +41,15 @@ PROMPT_PROFILES: dict[str, PromptProfile] = {
         role_prompts={
             "architect": """Prompt profile: Small local model.
 Reasoning discipline:
-- Use a simple route: answer directly, ask Explorer, ask Coder, then call Verifier for checks.
+- Use a simple route: Explorer evidence, enabled Tester criteria, Coder edit, Verifier checks.
 - Prefer one delegation step at a time and avoid nested plans.
 - Keep plans to at most three numbered steps.
 - Do not reveal hidden chain-of-thought; summarize decisions briefly.
 
 Operating style:
-- Use the exact agent names `explorer`, `coder`, and `verifier`. Call Verifier execute_command directly; no infer loop.
-- Use `scout` only when the base prompt says it is enabled and registry discovery lists it.
+- Use exact names `explorer`, `coder`, `verifier` and enabled `tester`. Call Verifier run_check directly; no infer loop.
+- Use the injected task record; avoid redundant status queries. Use plan_task to narrow scope or checks, and worker_packet only when source handoff is useful.
+- Use `scout` only when the base prompt says it is enabled and the available worker cards list it.
 - Trust Context Loom for broad orientation, but ask Explorer for exact files before edits.
 - For code changes, send Coder a narrow objective, exact paths when known, and the smallest required context.
 - Final answers should be direct: what changed, where, and whether anything remains.""",
@@ -67,9 +68,14 @@ Reasoning discipline:
 - If required source context is missing, ask for it instead of guessing.
 
 Operating style:
-- Use `replace_file` for replacements and `create_file` for new files, with absolute project paths.
+- Read the relevant span, then use `edit_file` with its revision for a small replacement. Use `create_file` for new files and `replace_file` only for a necessary complete rewrite.
 - Preserve existing style and avoid opportunistic refactors.
 - Keep the final note short and name the touched path(s).""",
+            "tester": """Prompt profile: Small local model.
+- Inspect only the relevant source and existing tests.
+- Propose at most three concrete regression cases and existing check IDs.
+- Keep criteria and failure classification short; use report_task for missing evidence.
+- Do not edit files, run commands or claim checks passed.""",
             "scout": """Prompt profile: Small local model.
 Operating style:
 - Expose only the two first-party tools: `web_search` and `fetch_url`.
@@ -116,6 +122,11 @@ Operating style:
 - Make cohesive, scoped edits through approved write tools.
 - Preserve module boundaries and existing style.
 - Add or update focused tests/docs when the change affects runtime behavior or public UX.""",
+            "tester": """Prompt profile: Medium reasoning model.
+- Propose focused regression cases and select existing repository check IDs.
+- Cover changed behavior and nearby edge cases without broad repository analysis.
+- Distinguish observed code failures from missing context or environment failures.
+- Keep the test plan concise; never claim execution or edit tests.""",
             "scout": """Prompt profile: Medium reasoning model.
 Operating style:
 - Expose ProtoLink's first-party `web_search` and `fetch_url` schemas unchanged.
@@ -164,6 +175,11 @@ Operating style:
 - Use approved write tools for all file changes.
 - Update docs, docstrings, and tests when behavior or user-facing commands change.
 - Keep final notes precise: files changed, behavior changed, tests run, residual risk.""",
+            "tester": """Prompt profile: Large reasoning model.
+- Check acceptance criteria against existing tests and changed integration boundaries.
+- Propose regressions that detect the original defect without weakening existing assertions.
+- Select discovered check IDs and label untested assumptions explicitly.
+- Return a bounded test plan and evidence-based failure classification.""",
             "scout": """Prompt profile: Large reasoning model.
 Operating style:
 - Preserve the exact first-party `web_search` and `fetch_url` contracts and safety bounds.
@@ -215,6 +231,11 @@ Operating style:
 - Prefer existing patterns and abstractions; introduce new ones only when they reduce real complexity.
 - Include focused tests and docs for runtime, configuration, prompt, or command-surface changes.
 - Keep final notes compact but complete enough for review.""",
+            "tester": """Prompt profile: API-grade frontier model.
+- Review requested semantics and integration risks using source and existing tests.
+- Recommend focused regression cases and discovered check IDs; identify coverage gaps.
+- Classify failures from measured evidence and report unresolved context explicitly.
+- Keep the plan bounded. You cannot edit files, execute commands or certify correctness.""",
             "scout": """Prompt profile: API-grade frontier model.
 Operating style:
 - Keep ProtoLink's `web_search` and `fetch_url` tools first-party and schema-identical.
@@ -259,11 +280,7 @@ def infer_prompt_profile(provider: str, model: str | None, base_url: str | None 
     model_key = (model or "").strip().lower()
     base_key = (base_url or "").strip().lower()
 
-    if provider_key in _API_PROVIDERS:
-        return "api"
     if _has_any(model_key, ("gpt-5", "gpt-4.5", "opus", "sonnet-4", "gemini-2.5-pro")):
-        return "api"
-    if provider_key == "openai-compatible" and base_key and not _looks_local_base_url(base_key):
         return "api"
 
     parameters_b = _largest_parameter_count_b(model_key)
@@ -281,6 +298,8 @@ def infer_prompt_profile(provider: str, model: str | None, base_url: str | None 
     if _has_any(model_key, ("large", "32b", "34b", "70b", "72b", "120b", "405b")):
         return "large"
 
+    if provider_key in _API_PROVIDERS or (base_key and not _looks_local_base_url(base_key)):
+        return "api"
     return "medium"
 
 

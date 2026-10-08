@@ -18,6 +18,7 @@ pages that should usually move with them.
 | `cli/src/terminal_ui/project.rs` | `CLI / Projects And Sessions`, `CLI / Fullscreen TUI` |
 | `cli/src/terminal_ui/model_picker.rs` | `CLI / Models And Config`, `Getting Started / Provider Setup` |
 | `cli/src/terminal_ui/approval.rs` | `CLI / Safety, Tracing, And Cancellation` |
+| `cli/src/question.rs`, `cli/src/terminal_ui/question.rs` | `CLI / Fullscreen TUI`, `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/terminal_ui/diff_view.rs` | `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/progress.rs` | `CLI / Safety, Tracing, And Cancellation`, `Core / Runtime` |
 | `cli/src/timeline.rs` | `CLI / Safety, Tracing, And Cancellation` |
@@ -32,9 +33,10 @@ pages that should usually move with them.
 | `core/pyproject.toml` | `Reference / Versioning`, `Getting Started / Installation` |
 | `core/protoagent_core/runtime.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/runtime_bridge.py` | `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
+| `core/protoagent_core/user_input.py` | `Core / Agent Deck`, `Core / Runtime`, `CLI / Safety, Tracing, And Cancellation` |
 | `core/protoagent_core/history.py` | `Core / State And Memory`, `CLI / Projects And Sessions` |
 | `core/protoagent_core/workflow.py`, `verification.py` | `Core / Runtime`, `CLI / Verify & Recover` |
-| `core/protoagent_core/runtime_policy.py`, `runtime_storage.py`, `checkpoints.py` | `Core / ProtoLink 0.7 Migration`, `Core / Safety And Tools` |
+| `core/protoagent_core/runtime_policy.py`, `runtime_storage.py`, `checkpoints.py` | `Core / ProtoLink Engine Integration`, `Core / Safety And Tools` |
 | `core/protoagent_core/run_contracts.py` | `Core / Runtime`, `Core / Agent Deck`, `Core / Quality Evals` |
 | `core/protoagent_core/llm.py` | `Core / Config And Models`, `Reference / Environment` |
 | `core/protoagent_core/models.py` | `Core / Config And Models`, `CLI / Models And Config` |
@@ -79,3 +81,22 @@ pages that should usually move with them.
 | `docs/src/pages/index.module.css` | Landing page styling. |
 | `docs/src/css/custom.css` | Global Docusaurus theme overrides. |
 | `docs/content/` | Documentation pages. |
+
+## v0.3.0 orchestration additions
+
+| File | Documentation |
+| --- | --- |
+| `core/protoagent_core/task_record.py` | `Core / Task Workflow` |
+| `core/protoagent_core/editing.py` | `Core / Task Workflow`, `Core / Safety And Tools` |
+| `core/protoagent_core/harness_eval.py` | `Core / Quality Evals`, `Core / ProtoLink Engine Integration` |
+| `core/protoagent_core/request_budget.py` | `Core / Task Workflow`, `Core / Context Loom` |
+| `core/protoagent_core/response_contract.py` | `Core / Runtime`, `Reference / Troubleshooting` |
+| `core/protoagent_core/agents/tester.py` | `Core / Agent Deck` |
+| `core/protoagent_core/coding_eval.py` | `Core / Quality Evals` |
+| `whitepaper.md` | Architecture thesis, enforced boundaries and measurement limits |
+
+
+- `core/protoagent_core/mcp.py`: validated MCP config, setup/probes, fixed broker tools and native policy.
+- `core/protoagent_core/agents/mcp.py`: optional model-free broker factory.
+- `core/tests/test_optional_agents_mcp.py`: optional-worker composition, real stdio MCP, approvals, errors, cancellation and delegated receipts.
+- `docs/content/core/mcp.md`: MCP setup and architecture guide.

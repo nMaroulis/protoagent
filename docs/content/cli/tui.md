@@ -17,6 +17,10 @@ alternate screen, raw mode, mouse capture, and fixed layout regions.
 The shell scrollback is not used during fullscreen mode. The transcript owns
 its own scroll offset.
 
+At least 40 columns and 16 rows are needed for the normal layout. A multiline
+prompt may need two more rows. Smaller windows show a resize hint without
+discarding the conversation or draft; expanding the window restores them.
+
 Response metadata and detail labels appear directly beneath the answer in
 faint, light-gray text, aligned with the answer. This uses standard terminal
 styling, with gray as the fallback when faint text is unsupported. The answer
@@ -31,7 +35,7 @@ The pinned panel is a compact status dashboard at the top of the screen.
 | Dashboard | Project, model inventory summary, agent roles, last query, UI mode. |
 | Project | Active project, state, `/project` commands, file-tagging hint, project config path. |
 | Models | Active provider/model, inventory status, provider chips, setup commands, config path. |
-| Agents | Architect, Context Loom, Explorer, Coder, Verifier, optional Scout ON/OFF, and approval boundary. |
+| Agents | Required roles, Tester/Scout/MCP ON/OFF states, their toggle commands, and prompt profile. |
 | Context | Context Loom, context window, memory commands, pack preview, index refresh. |
 | Sessions | Current session, store path, recent sessions. |
 | Timeline | Latest structured agent path. |
@@ -46,14 +50,29 @@ The command bar exposes quick panel commands:
 /dashboard /project /models /agents /context /sessions /timeline /check /config /version /help
 ```
 
-The Agents panel reads the same Python manifest used by the shell command. Its
-Scout row shows whether the optional `web_search`/`fetch_url` worker is
-registered for the next run and gives the inverse toggle command:
+The Agents panel reads the same Python manifest used by the shell command. All
+three optional workers have a visible ON/OFF row and a command to toggle their
+current setting. Open it with `/agents`.
+
+| Worker | Default | Control |
+| --- | --- | --- |
+| Tester | On | `/agents tester on` or `/agents tester off` |
+| Scout | Off | `/agents scout on` or `/agents scout off` |
+| MCP broker | Off | `/agents mcp on` or `/agents mcp off`; `/mcp` configures servers. |
+
+For example:
 
 ```text
+/agents tester off
 /agents scout on
-/agents scout off
+/agents mcp on
 ```
+
+Settings persist user-wide and apply to the next run. Architect, Explorer,
+Coder and Verifier are required and cannot be disabled. Turning Tester off
+removes test-design inference; repository checks remain required. Shell commands
+use the same arguments after `proto-cli agents`, such as
+`proto-cli agents tester off`.
 
 ## Input Editor
 
@@ -71,6 +90,7 @@ three-row composer. Emoji and combining characters are edited as grapheme cluste
 | Up / Down | Move between wrapped rows; browse history for a single-row prompt. |
 | Ctrl-P / Ctrl-N | Browse history from any row, preserving the unsubmitted draft. |
 | Ctrl-R | Search recent prompts and recall a selection without submitting. |
+| Ctrl-L | Redraw the terminal, including while a reply is running. |
 | Tab | Open fuzzy slash-command completion; otherwise insert two spaces. |
 | `@` | Open the project file picker when a project is active. |
 
@@ -117,19 +137,86 @@ Completion updates the status in that same header. The answer stays in place:
 report footnotes and expanding trace blocks do not change its position. Terminal
 frames use synchronized updates where supported to reduce flicker.
 
-Unchanged messages reuse cached Markdown layouts. Streaming paints only changed
-transcript rows; spinner ticks do not copy or reformat an unchanged answer.
-Resize, debug changes and returning from a modal refresh the affected layout.
+Unchanged messages reuse cached Markdown layouts. The header, composer and
+status area have separate paint caches; typing updates the composer and live
+replies paint changed rows. Unchanged frames write nothing. Resize, Ctrl-L,
+debug changes and returning from a modal restore the layout. Frames and modal
+overlays are composed in memory and written under one output lock, using
+synchronized terminal updates where supported. Pickers repaint their background
+when opened or resized rather than on every filter keystroke.
+
+Python stdout/stderr and console logging handlers created before a run are
+captured, bounded and redacted into `/trace` when the call ends. File logging is
+preserved, and handlers created during the run are detached from temporary
+buffers before those buffers close. The renderer owns terminal output during
+the embedded core call. Native subprocess tools retain their separate capture.
 
 Worker activity appears only in the bottom status bar; the top model row shows
 the provider and model. Use `/trace` for the full trace and
 retained worker/command output, or `/diff` for proposed changes. Esc or Ctrl-C
 cancels an active task or Guide answer.
 
+The TUI polls input and progress every 32 ms while running; animation advances
+every 120 ms. These are frontend scheduling intervals, not model latency
+guarantees. Scrolling, resizing and Ctrl-L remain available during a reply.
+Scrolling up anchors the viewport while new answer rows arrive; Ctrl-End returns
+to the live bottom. Cancellation waits for native run cleanup and is shown as
+`canceling`, rather than pretending that execution has already stopped.
+
+Model discovery and `/check` run in background workers. Esc or Ctrl-C dismisses
+their read-only result; a probe already in progress may finish in the background.
+Independent model metadata probes use a bounded pool. Opening a picker validates
+API keys through metadata endpoints without constructing LLM clients or making
+inference calls. Inventory is refreshed explicitly rather than after every answer.
+
+## Questions during a task
+
+Architect may ask a concise question when requirements or preferences are
+missing. A question overlay preserves the surrounding TUI. Type any answer;
+Tab cycles optional suggestions, and Enter sends the current text. Suggestions
+are not selected or submitted automatically. Esc skips the question; Ctrl-C
+cancels the whole run. PageUp/PageDown scroll long questions. Answers have a
+4096-character limit; pasted line breaks become spaces and control bytes are
+removed. Oversized input is rejected rather than silently truncated.
+
+The question and submitted answer appear before the continuing response in the
+transcript. ProtoLink receives the answer as a native tool result and continues
+the existing task. Its 300-second question timeout and remaining run budget also
+close the overlay without requiring a keypress. The UI polls the native request's
+lifetime and redraws the overlay only on input or resize.
+
+A skipped or timed-out question supplies no answer. Feedback never approves
+file changes, commands or MCP calls. This is a live wait; closing and reopening
+the application does not resume an interrupted task or question.
+
+## Using the TUI without a model
+
+Starting the TUI, static `/help`, configuration, agent toggles, MCP setup,
+project selection and checkpoints do not need a running LLM. Guide questions
+(`/help QUESTION`) and coding requests require the selected model.
+
+Before a CLI model run, the core checks the selection and probes local server
+metadata. Loopback requests use a one-second timeout; other configured server
+URLs use three seconds. Missing local models, unreachable servers and missing
+cloud keys get an inline setup message before repository indexing or agent
+construction. Cloud keys are checked locally at this stage; the actual request
+determines remote availability. Compatible servers without a model-list endpoint
+are allowed to continue. No preflight sends an inference request.
+
+For Ollama, start the server with `ollama serve`, make sure the selected model
+is installed, and retry. `/model` chooses another model; `/config` shows the URL.
+Provider errors and malformed final responses leave the TUI open, preserve
+partial output and allow the next command. They are reported as failures rather
+than completed diagnostic fallbacks. `/trace` includes captured console output
+even when no final agent report was returned.
+
 `/help QUESTION` streams from Guide using the active model, without requiring
 an active project. Guide receives a bundled command reference and a redacted
 settings snapshot on each call. For example, `/help what does config do?`
 can explain `/config`, `proto-cli config` and the commands for changing settings.
+Guide's manual includes all three optional-worker toggles, their defaults and
+required roles. Its per-call snapshot includes current Tester, Scout and MCP
+settings; `/help how do I disable Tester?` explains the control without changing it.
 
 ## Quiet composer and debug details
 
@@ -170,6 +257,7 @@ Focused modal modules keep the TUI maintainable:
 | `project.rs` | Project folder prompt and file picker. |
 | `model_picker.rs` | Provider/model picker and masked API key prompt. |
 | `approval.rs` | Runtime approval prompt for ProtoLink actions. |
+| `question.rs` | Native user question, free-text answer and explicit suggestions. |
 | `diff_view.rs` | Diff review modal for proposed file changes. |
 
 ## Context Meter
@@ -196,11 +284,11 @@ When a user submits a task:
 2. A project session id is selected unless `/context off` is active.
 3. A temp progress JSONL file is created.
 4. Python is called through `call_process_prompt_with_progress`.
-5. The TUI tails progress events every 120 ms.
-6. Approval requests are displayed as modals.
+5. The TUI tails progress events and handles navigation every 32 ms.
+6. Native approval and user-question requests are displayed as modals.
 7. Esc or Ctrl-C writes a cancellation request.
 8. The final JSON response is parsed into `CoreResponse`.
-9. The response is appended to the transcript and recorded in `sessions.json`.
+9. The response finalizes the existing message and is recorded in `sessions.json`.
 
 The one-shot runner in `main.rs` uses the same `ProgressFile` bridge but prints
 panels to stdout instead of rendering alternate-screen UI.

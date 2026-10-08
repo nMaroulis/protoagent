@@ -20,16 +20,22 @@ DEFAULT_AGENT_URLS = {
     "coder": "http://127.0.0.1:9130",
     "scout": "http://127.0.0.1:9140",
     "verifier": "http://127.0.0.1:9150",
+    "tester": "http://127.0.0.1:9160",
+    "mcp": "http://127.0.0.1:9170",
 }
 
 RUNTIME_SCOPES = (
     "agent.delegate",
+    "task.manage",
+    "user.interact",
     "workspace.read",
     "filesystem.read",
     "filesystem.write",
     "filesystem.restore",
     "process.execute",
     "network.read",
+    "mcp.connect",
+    "mcp.invoke",
 )
 
 QUIET_LOGGER = QuietLogger(name="protoagent-quiet")

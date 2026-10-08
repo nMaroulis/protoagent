@@ -12,8 +12,10 @@ from typing import Any
 
 from protolink import Agent, AgentGroup, CapabilityPolicy, RunBudget, RunContext, Task
 
+from .agents.common import QUIET_LOGGER
 from .config import CONFIG_DIR, optional_agent_enabled, visible_config
 from .llm import create_llm_from_config
+from .models import model_startup_problem
 from .prompt_profiles import prompt_profile_status
 from .runtime import _content_to_text, _run_event_summary, _streaming_enabled
 from .runtime_bridge import RuntimeBridge
@@ -32,6 +34,16 @@ Manual:
 - ProtoAgent is a local-first coding-agent console. The Rust CLI/TUI embeds the
   Python core through PyO3. ProtoLink is the agent runtime engine.
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
+- The TUI and static `/help` work without a running LLM. Coding and
+  `/help QUESTION` require the selected model. For an unavailable Ollama server,
+  start `ollama serve`, ensure the chosen model is installed, then retry.
+  `/config` shows the URL; `/model` changes the selection. Setup errors stay
+  inline; `/trace` shows captured diagnostics. A configured model is not proof
+  that its server is reachable. Model discovery uses metadata, not inference.
+- Ctrl-L redraws the UI. Wheel/PageUp/PageDown and resize work during replies;
+  Ctrl-End returns to live output. Esc/Ctrl-C dismisses model discovery or
+  `/check`; an already-started read-only probe may finish in the background.
+  Small windows show a resize hint and retain the draft and conversation.
 - One-shot task: `proto-cli run "task"`.
 - The TUI streams answers under AGENT / architect or AGENT / guide with a
   steady mint cursor on the text background and animated thinking dots. Bold,
@@ -45,6 +57,16 @@ Manual:
   Final task status determines completion. Guide also streams via /help QUESTION.
   `PROTOAGENT_STREAM=0` hides live previews without changing execution.
   Ctrl-C in shell mode requests native cancellation and waits for cleanup.
+- Architect can call ProtoLink's native ask_user tool for missing requirements
+  or preferences and continue the same task with your answer. In the question
+  overlay, type any answer or press Tab to use a suggestion, then Enter to send.
+  No suggestion is selected by default. Esc skips the question; Ctrl-C cancels
+  the run. PageUp/PageDown scroll long questions in the TUI. A question waits at
+  most 300 seconds and is also bounded by the run's remaining runtime budget.
+  Answers are limited to 4096 characters. A headless/noninteractive frontend
+  declines rather than inventing an answer. Questions and answers appear in the
+  native trace; do not supply secrets. Feedback never grants execution approval.
+  This is live continuation, not restartable execution after closing the app.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts
@@ -78,7 +100,7 @@ Manual:
   the configuration in the shell. Both are read-only, not configuration editors.
   Use `/model` to select a model, `/key PROVIDER` to store a key,
   `/context window 16k` for Ollama context, and `/agents profile MODE` or
-  `/agents scout on|off` for agent settings. Never suggest a nonexistent
+  `/agents tester|scout|mcp on|off` for agent settings. Never suggest a nonexistent
   `config set` command. Paths below use the configured directory when overridden.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
   or OpenAI-compatible providers. From the shell, use `proto-cli key openai`.
@@ -100,11 +122,26 @@ Manual:
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  RunContract, stateful Architect, stateless Explorer/Coder/Verifier workers, optional
+  TaskRecord and RunContract, stateful Architect, task-local Explorer/Tester/Coder workers, tool-only Verifier, optional
   Scout, policy gate, completion guard, and current prompt profile.
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
+- `/agents tester on|off` toggles optional test design (default on). Architect
+  defines criteria and Coder adds regressions when it is off; Verifier remains
+  required. Shell: `proto-cli agents tester on|off`.
+  Architect, Explorer, Coder and Verifier cannot be disabled. Tester, Scout and
+  MCP settings persist user-wide and apply to the next run; a running task keeps
+  its original settings. Use `/agents` to inspect their current ON/OFF states.
+- `/mcp` shows model-free MCP setup/status. `/mcp add NAME FILE.json` imports a
+  stdio, SSE or Streamable HTTP server with explicit allow_tools. `/mcp on|off`
+  toggles the optional model-free broker (default off). `/agents mcp on|off` and
+  `proto-cli agents mcp on|off` toggle the same setting. `/mcp test NAME` discovers
+  only; `/mcp tools NAME TOOL` reads one schema. Both explicitly connect and never
+  invoke a server tool. `/mcp remove NAME` removes configuration. Shell equivalents
+  start with `proto-cli mcp`. Broker calls require approval, have no infer loop
+  and cannot certify workspace checks. Workers request external evidence through
+  Architect. Secrets for HTTP headers use headers_env environment references.
 - Scout exposes ProtoLink's first-party `web_search` and `fetch_url`
   tools under the explicit `network.read` policy. Brave search is the default
   and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
@@ -155,12 +192,50 @@ Manual:
   `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`,
   `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS`,
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
+- The coding harness defaults to owned local ProtoLink children: no Registry
+  server or loopback sockets. One child runs at a time, nesting depth is one,
+  and PROTOAGENT_MAX_CHILDREN caps children per attempt (default 32).
+  Children share the workflow budget and satisfy ancestor policies. Explicit
+  PROTOAGENT_AGENT_TRANSPORT=sse|runtime|http retains the transport mesh.
+- Native ContextPolicy and before-model hooks reserve output space, retain
+  the runtime task record and make large results retrievable in small pages.
+  Context estimates do not establish the provider's exact token limit.
+- Ollama tool calling defaults to auto: advertised tools capability enables
+  ProtoLink's native provider tool channel; unavailable metadata keeps the JSON
+  action fallback. providers.ollama.tool_calling accepts auto, native or json;
+  PROTOAGENT_OLLAMA_TOOL_CALLING supplies the mode when config does not set it.
+  An unfinished tool/worker request printed as a final answer fails visibly;
+  /trace shows the run. Protocol examples need accompanying prose or a code block.
+- Optional provider fallback_models in config.json lists at most two same-provider
+  models. Empty/absent means off. ProtoLink RoutedLLM falls back on eligible
+  transient requests before exposed output; it never replays tools or switches
+  providers automatically. There is no dedicated fallback setup command.
+- `proto-cli eval harness [--json]` runs four offline native integration samples
+  using scripted actions and disposable read-only fixtures, with no live model.
+  It measures engine contracts. `eval coding --live` measures coding outcomes.
+- ProtoLink durable execution, RunManager, Docker execution and additional
+  presets are engine capabilities; the current coding Graph has no restart/resume
+  or container integration. Saved reports and file restoration are separate.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
-  and builds context as a stateless worker; Coder prepares approval-gated file
+  and builds context as a stateless worker; Tester designs regressions read-only;
+  Coder reads bounded source and prepares revision-checked, approval-gated file
   changes as a stateless worker; Verifier executes approved checks without an
   LLM; optional Scout exposes bounded public-web
   tools without another model loop. Guide is separate and only answers help
   questions.
+- Code changes require all selected repository checks captured before execution.
+- Task planning exposes available_check_ids and bootstrap_checks. plan_task can
+  omit check_ids to keep defaults; invalid selections return corrective feedback
+  and leave the plan unchanged. Python projects with no discovered/configured
+  checks receive a predefined python-tests unittest runner. Coder adds focused
+  root test_*.py regressions; a zero-test run cannot verify changes. Explicit
+  project check configuration takes precedence, including an empty checks list.
+  A project with no usable runner can receive approved edits, but remains
+  unverified/incomplete. There is no automatic dependency installation.
+  Configure unusual checks in .protoagent/project.json. run_check baseline permits
+  later editing; final verify closes the edit phase. Documentation-only changes
+  can complete unverified. eval coding --plan shows disposable same-model deck and
+  single-agent exercises; --live runs them on the host with narrow fixture approvals.
 """
 
 
@@ -210,6 +285,10 @@ def _settings_context(config: dict[str, Any]) -> str:
     lines.append(
         f"- Optional Scout: {'enabled' if optional_agent_enabled('scout', config) else 'disabled'}"
     )
+    for name in ("tester", "mcp"):
+        lines.append(
+            f"- Optional {name}: {'enabled' if optional_agent_enabled(name, config) else 'disabled'}"
+        )
     label = str(active.get("label") or "")
     if label and label != provider:
         lines.append(f"- Provider label: {label}")
@@ -277,8 +356,40 @@ def answer_help_question(question: str, progress_path: str | None = None) -> dic
 
 
 async def _answer_help_question(question: str, progress_path: str | None = None) -> dict[str, Any]:
-    started = time.monotonic()
     bridge = RuntimeBridge(progress_path)
+    started = time.monotonic()
+    try:
+        with bridge.capture_console():
+            if progress_path and (problem := model_startup_problem()):
+                return {
+                    **problem,
+                    "agent": "guide",
+                    "responder": "guide",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
+                }
+            return await _run_help_question(question, bridge)
+    except Exception as exc:
+        if not progress_path:
+            raise
+        detail = f"Guide failed: {exc}"
+        bridge.emit(detail)
+        return bridge.redaction.redact(
+            {
+                "agent": "guide",
+                "responder": "guide",
+                "status": "failed",
+                "answer": "Guide could not answer. Check /config and /check, then retry. Static /help remains available; /trace shows diagnostics.",
+                "warning": str(exc),
+                "events": [detail],
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+            }
+        )
+    finally:
+        bridge.cleanup()
+
+
+async def _run_help_question(question: str, bridge: RuntimeBridge) -> dict[str, Any]:
+    started = time.monotonic()
     config = visible_config()
     provider = str(config.get("active_provider", "ollama"))
     active = config.get("providers", {}).get(provider, {})
@@ -318,6 +429,7 @@ async def _answer_help_question(question: str, progress_path: str | None = None)
         state=[],
         policy=CapabilityPolicy({}, default_effect="deny"),
         expose_chat=False,
+        logger=QUIET_LOGGER,
         verbosity=0,
     )
     task = Task.create_infer(prompt=bridge.redaction.redact(_build_help_prompt(question, config)))

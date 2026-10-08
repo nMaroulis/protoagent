@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.2.3`. It is declared in
+The active core package version is `0.3.0`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:
@@ -41,9 +41,10 @@ The core is responsible for:
 | `models.py` | Local/API model discovery and API key validation. |
 | `config.py` | Provider config, API keys, context window, prompt profile, and optional-agent settings. |
 | `tools.py` | Workspace-safe deterministic tools. |
+| `mcp.py` | Lazy MCP configuration, bounded discovery/calls, native policy and model-free setup/probes. |
 | `help_agent.py` | Isolated Guide agent for `/help QUESTION`. |
 | `context/` | Context Loom indexer, SQLite store, packer, schemas. |
-| `agents/` | Architect, Explorer, Coder, Verifier, optional Scout factories, and deck assembly. |
+| `agents/` | Required Architect/Explorer/Coder/Verifier, optional Tester/Scout/MCP, and deck assembly. |
 
 ## Core Contract With Rust
 
@@ -68,7 +69,7 @@ ProtoLink objects used by the core include:
 
 | ProtoLink object | How ProtoAgent uses it |
 | --- | --- |
-| `Agent` | Architect, Explorer, Coder, Verifier, optional Scout, Guide, and state-control facades. |
+| `Agent` | Architect, Explorer, Coder, Verifier, optional Tester/Scout/MCP, Guide, and state-control facades. |
 | `AgentGroup` | Owned agents, readiness, cleanup and explicitly external resources. |
 | `Registry` | Agent discovery for Architect delegation. |
 | `AgentClient` | Native delegation between agents over the configured transport. |

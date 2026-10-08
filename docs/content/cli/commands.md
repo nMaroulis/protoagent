@@ -10,6 +10,11 @@ See [Verify & Recover](verification-and-recovery.md) for command approvals and f
 
 TUI recovery commands are `/checkpoints` and `/undo [id]`. Enter submits a prompt;
 Ctrl-J adds a newline, Tab completes slash commands, and Ctrl-R searches history.
+Ctrl-L redraws the screen. Scrolling and resize work during replies. Esc/Ctrl-C
+cancels a run or dismisses background model discovery and runtime checks.
+Static help and setup controls work without a running model; Guide questions
+and coding requests require one. See [Fullscreen TUI](tui.md) for offline errors
+and rendering behavior.
 
 ## Shell Commands
 
@@ -42,12 +47,13 @@ Installed examples use `proto-cli <command>`.
 | `project clear` | Clear the active project folder. |
 | `project choose` | Prompt for a project folder. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
-| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Scout state, and tool isolation. |
+| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Tester/Scout/MCP state, and tool isolation. |
 | `agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
 | `agents small`, `agents medium`, `agents large`, `agents api` | Shorthand for setting the deck prompt profile. |
 | `agents scout [on\|off]` | Show, enable, or disable optional Scout. Changes apply to the next run. |
 | `eval profiles [--plan\|--live] [--profile MODE] [--task ID] [--limit N] [--json]` | Run the built-in prompt-profile quality eval harness. |
 | `eval tasks` | List built-in quality eval tasks. |
+| `eval harness [--json]` | Run offline native engine-contract cases with scripted actions; no live model. |
 | `context` | Show Context Loom status for the active project. |
 | `context QUERY` | Build a source-cited Context Pack without running a model. |
 | `context window [16k\|auto]` | Show, set, or clear the Ollama context window override. |
@@ -74,7 +80,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the runtime architecture panel; shows RunContract flow, worker state, prompt profile, and Scout ON/OFF. |
+| `/agents` | Pin the Agents panel; shows required roles, prompt profile, all optional-worker ON/OFF states and their toggle commands. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the deck prompt profile. |
 | `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
 | `/agents scout [on\|off]` | Show or change optional Scout for subsequent runs. |
@@ -149,3 +155,36 @@ read-only evidence unless the user explicitly asks for modifications.
 
 Task cancellation is best-effort and uses ProtoLink's task control path. If a
 task is already terminal, the runtime reports that cancellation arrived too late.
+
+## Coding evaluation
+
+`proto-cli eval coding` prints a planned comparison by default. Add `--live` to
+run disposable coding exercises with the current model and an independent oracle:
+
+```bash
+proto-cli eval coding --plan --json
+proto-cli eval coding --live --profile small --task empty-average --json
+```
+
+Each exercise runs both the normal deck and a single-agent baseline. Live mode
+approves only fixture edits and the exact fixture check; generated code runs on
+the host. See [Quality Evals](../core/quality-evals.md) for scoring and limits.
+
+
+## Optional workers and MCP setup
+
+| Shell command | TUI equivalent | Purpose |
+| --- | --- | --- |
+| `proto-cli agents tester on/off` | `/agents tester on/off` | Test design on by default; off removes the model worker without skipping required checks. |
+| `proto-cli agents mcp on/off` | `/agents mcp on/off` | Model-free broker, off by default. |
+| `proto-cli mcp` | `/mcp` | Status/setup guidance without connecting. |
+| `proto-cli mcp add NAME FILE.json` | `/mcp add NAME FILE.json` | Import a named server and exact tool allowlist; does not connect or enable. |
+| `proto-cli mcp test NAME` | `/mcp test NAME` | Explicit connection/discovery, never server tool invocation. |
+| `proto-cli mcp tools NAME TOOL` | `/mcp tools NAME TOOL` | Inspect one original input schema. |
+| `proto-cli mcp on/off` | `/mcp on/off` | Same toggle as `agents mcp`. |
+| `proto-cli mcp remove NAME` | `/mcp remove NAME` | Remove one saved server. |
+
+Use `on` or `off` as separate commands, not the literal string `on/off`.
+Changes are user-wide and apply to the next run. Architect, Explorer, Coder and
+Verifier cannot be disabled. Quote paths containing spaces. See [MCP Broker](../core/mcp.md)
+for config examples, authentication and runtime approval/effect boundaries.

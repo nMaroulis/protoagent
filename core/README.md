@@ -3,13 +3,13 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Current package version: `0.2.3`. The source of truth is
+Current package version: `0.3.0`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.7.1 or newer with the HTTP and LLM extras:
+Install ProtoLink 0.8.0 or newer with the HTTP, LLM and MCP extras:
 
 ```bash
-pip install "protolink[http,llms]>=0.7.1"
+pip install "protolink[http,llms,mcp]>=0.8.0"
 ```
 
 Recoverable Coder writes require POSIX. The runtime uses the native execution,
@@ -22,15 +22,22 @@ context, configuration, acceptance criteria and terminal presentation.
 - `protoagent_core/_version.py` - Runtime version metadata and component version inventory for the CLI.
 - `protoagent_core/runtime.py` - Embedded ProtoLink mesh runner. It configures `AgentGroup`, `RunHandle`, native storage, scoped approvals and reports.
 - `protoagent_core/history.py` - ProtoLink state-operation facade for automatic Architect token-budget compaction plus explicit history/compact/reset commands.
-- `protoagent_core/runtime_bridge.py` - Application approval and cancellation bridge for the Rust CLI.
+- `protoagent_core/runtime_bridge.py` - UI callback/control bridge for native approvals, questions and cancellation.
+- `protoagent_core/user_input.py` - Architect configuration for native ask_user and retained task clarifications.
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
 - `protoagent_core/command_reference.json` - Packaged TUI/shell reference shared by Guide and Rust command completion. Guide streams via native `AgentGroup`/`RunHandle`, with cancellation and redacted settings on every call.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
+- `protoagent_core/response_contract.py` - Native completion hook rejects unfinished action-shaped answers without executing answer text.
 - `protoagent_core/config.py` - Provider, prompt-profile, optional-agent, and API-key config at `~/.protoagent/config.json`.
 - `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.
-- `protoagent_core/quality_eval.py` - Fixed prompt-profile benchmark tasks and scoring helpers.
+- `protoagent_core/quality_eval.py` - Routing diagnostics and prompt-profile scoring.
+- `protoagent_core/coding_eval.py` - Disposable coding exercises, independent acceptance and same-model single-agent comparison.
+- `protoagent_core/task_record.py` - Runtime-held criteria, scope, source packets, worker reports and frozen check plans.
+- `protoagent_core/editing.py` - Revision-checked exact replacements and prepared check adapters.
+- `protoagent_core/request_budget.py` - Native ContextPolicy/AgentHooks configuration, current task state and compact declarations.
+- `protoagent_core/harness_eval.py` - Offline native evaluation cases with linked child execution evidence.
 - `protoagent_core/context/` - Context Loom indexer, SQLite store, and source-cited Context Pack builder.
-- `protoagent_core/agents/` - ProtoLink Architect, Explorer, Coder, Verifier, and optional Scout factories. Architect is the stateful controller; all workers are task-local and stateless.
+- `protoagent_core/agents/` - ProtoLink Architect, Explorer, Tester, Coder, Verifier, and optional Scout factories. Architect is the stateful controller; all workers are task-local and stateless.
 - `protoagent_core/run_contracts.py` - Application intent classification; native completion checks require execution receipts.
 - `protoagent_core/tools.py` - Application-specific workspace exploration helpers.
 
@@ -44,7 +51,12 @@ commands require `process.execute` approval of the frozen specification.
 `workflow.py` uses Graph for an initial Architect attempt and at most two
 repairs. `verification.py` supplies native completion predicates over executed
 outcomes and current resource revisions. Approval and diff previews cannot
-satisfy completion. All edits precede checks within an attempt.
+satisfy completion. Baselines and preparation allow later edits; final verification
+closes the edit phase. Code changes require selected repository checks; unrelated
+successful commands do not count. See the [task workflow guide](../docs/content/core/task-workflow.md).
+`task_record.py` also declares a standard unittest runner for Python projects
+without checks, and exposes compact valid/bootstrap IDs. Rejected plans return
+feedback without changing requirements; an empty suite cannot verify edits.
 
 `checkpoints.py` configures a private native `StorageCheckpointStore` and a
 single-writer lease. It contains no file mutation implementation. `/undo` needs
@@ -65,17 +77,20 @@ See the [runtime guide](../docs/content/core/runtime.md) and
 
 The CLI invokes the selected provider/model through ProtoLink agents by
 default. The selected model is used to create fresh LLM instances for
-Architect, Explorer, and Coder on each run. Verifier is always registered with
+Architect, Explorer, Coder and enabled Tester on each run. Verifier is always registered with
 no LLM and exposes approved command execution. Scout is a tool-only agent with no
-LLM and is not constructed or registered when it is disabled. Agents use ProtoLink's SSE
-JSON-RPC lifecycle-aware task stream by default, while the Registry remains on
-plain HTTP.
+LLM and is not constructed when it is disabled. The default Architect owns
+enabled workers through ProtoLink local subagents. Children have independent
+conversations, inherited policies and shared Graph budgets. Delegation remains
+sequential, with depth one and 32 children per attempt by default. No Registry
+or server is needed. Explicit `PROTOAGENT_AGENT_TRANSPORT=sse|http|runtime`
+selects the transport mesh instead.
 
 Each LLM is configured through `LLM.configure_metrics(LLMModelProfile(...))`.
 For Ollama, the same selected window is sent as `num_ctx` and recorded in the
 profile, so ProtoLink's `context.prepared`, `llm_context`, and
 `llm_call_metrics` events drive the terminal context meter. Conversation
-continuity lives in ProtoLink's Architect SQLite state. Explorer and Coder use
+continuity lives in ProtoLink's Architect SQLite state. Explorer, Tester and Coder use
 task-local in-memory state; Scout has no model state. Worker calls therefore do
 not accumulate durable conversation history. Before a session resumes, the core uses
 `Agent.compact_state(strategy="tokens")` when the Architect history budget is
@@ -112,6 +127,7 @@ Useful runtime switches:
 
 - `PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native handles still consume execution once.
 - `PROTOAGENT_AGENT_TRANSPORT=http` forces the older HTTP-only agent mesh.
+- `PROTOAGENT_MAX_CHILDREN=32` limits total local child dispatches per Architect attempt.
 - `PROTOAGENT_STREAM_TRACE_LIMIT=120` controls how many stream summaries are retained for the Rust UI.
 - `PROTOAGENT_TRACE=1` enables `LocalTraceTelemetry` JSONL traces at `~/.protoagent/traces.jsonl`.
 - `PROTOAGENT_RUN_MAX_STEPS`, `PROTOAGENT_RUN_MAX_LLM_CALLS`, `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`, `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, and `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` populate the run's typed `RunBudget`.
@@ -123,15 +139,21 @@ PROTOAGENT_SCAFFOLD=1 cargo run --manifest-path cli/Cargo.toml -- run "your task
 ```
 
 The full ProtoLink A2A mesh factories are in `protoagent_core/agents/`.
-The embedded CLI runtime uses ProtoLink's Registry and `AgentClient`, so
-Architect discovers enabled workers through the registry and delegates with
-ProtoLink `agent_call` semantics. Architect persists durable conversation
-memory; Explorer, Coder, and optional Scout are stateless workers for the
+The embedded CLI runtime defaults to ProtoLink's owned local children; explicit
+transport mode uses Registry discovery. Both retain native `agent_call`
+semantics. Architect persists durable conversation
+memory; Explorer, Tester, Coder, Verifier and optional Scout are stateless workers for the
 current run.
+
+Architect's native `ask_user` calls await the CLI/TUI callback and continue the
+same task. Only the controller has `user.interact`; workers report missing
+requirements to it. Native after-tool hooks retain answered clarifications in
+TaskRecord so pruning observations cannot discard them. Feedback supplies no
+execution approval and does not resume runs after an application restart.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.7.1's
+apply to the next run. When enabled, Scout receives ProtoLink 0.8.0's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless
@@ -152,3 +174,29 @@ Interactive help is handled by the isolated Guide agent. `/help` remains a
 static command panel, while `/help <question>` asks Guide using the active
 model. If no model is selected, the CLI shows static help and points the user
 to `/model` before offering interactive help.
+
+
+## Optional workers and MCP in v0.3.0
+
+Tester defaults on, while Scout/MCP default off. `proto-cli agents tester|scout|mcp
+on|off` and the matching `/agents` commands persist optional-worker settings for
+the next run. Disabled workers are not constructed or registered. Architect,
+Explorer, Coder and Verifier remain required; without Tester, Architect defines
+criteria and Coder writes regressions while all selected checks still run.
+
+`proto-cli mcp` (TUI `/mcp`) shows model-free setup/status. Import an explicit
+server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
+`mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
+not invoke server tools. The broker exposes three fixed tools for names, one
+schema and an approved allowlisted invocation. Architect uses `tool_call`,
+never another inference loop. ProtoLink 0.8.0 owns transports, schema validation,
+session cleanup and result/error normalization. See the
+[MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
+
+## Engine integration
+
+The harness uses ProtoLink 0.8 owned local children and native context policies.
+Run `proto-cli eval harness --json` for offline engine-contract checks. Optional
+provider `fallback_models` are configured explicitly; restart/resume and Docker
+execution are outside the current coding workflow integration. See the
+[engine integration guide](../docs/content/core/protolink-migration.md) and [model configuration guide](../docs/content/core/config-models.md).

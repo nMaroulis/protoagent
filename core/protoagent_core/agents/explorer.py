@@ -10,6 +10,7 @@ from protolink.types import TransportType
 
 from .. import tools
 from ..context import build_context_pack as loom_context_pack
+from ..task_record import add_task_tools
 from .common import (
     QUIET_LOGGER,
     create_configured_transport,
@@ -45,6 +46,7 @@ def create_explorer_agent(
     prompt_profile: str = "auto",
     authenticator=None,
     credentials: str | None = None,
+    record=None,
 ):
     """Create the stateless read-only repository worker."""
     agent_url = resolve_agent_url("explorer", url)
@@ -93,6 +95,7 @@ def create_explorer_agent(
         policy=CapabilityPolicy(
             {
                 "workspace.read": "allow",
+                "task.manage": "allow",
             },
             default_effect="deny",
         ),
@@ -104,8 +107,17 @@ def create_explorer_agent(
         description="Read a UTF-8 text file with line numbers.",
         capabilities=["workspace.read"],
     )
-    def read_file(path: str) -> dict[str, Any]:
-        return tools.read_file(path, workspace)
+    def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> dict[str, Any]:
+        result = tools.read_file(
+            path,
+            workspace,
+            start_line=start_line,
+            end_line=end_line,
+            max_chars=4000 if prompt_profile == "small" else 8192,
+        )
+        if record and result.get("success"):
+            record.source_paths.add(str(tools.safe_path(path, workspace)))
+        return result
 
     @agent.tool(
         name="list_directory",
@@ -139,4 +151,5 @@ def create_explorer_agent(
     def build_context_pack(query: str) -> dict[str, Any]:
         return loom_context_pack(query, workspace)
 
+    add_task_tools(agent, record, "explorer")
     return agent

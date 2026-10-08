@@ -44,6 +44,22 @@ without sandbox isolation; no environment is inherited implicitly.
 approval without a model. Native revision conflicts preserve newer edits.
 Uncertain effects require inspection. See [Verify & Recover](verification-and-recovery.md).
 
+## User feedback
+
+Architect uses ProtoLink's native `ask_user` tool to clarify missing requirements
+and continue the current task. Both the TUI and interactive `proto-cli run`
+accept free text or optional suggestions. Tab cycles suggestions; Enter sends a
+nonblank answer; Esc skips; Ctrl-C cancels the run. The TUI also scrolls long
+questions with PageUp/PageDown. No suggested answer is chosen by default.
+
+Native `user_input.*` events retain the question and outcome. Waiting is bounded
+by 300 seconds and the remaining runtime budget; responses are limited to 4096
+characters and correlated with the exact run/task/action/request. Expired prompts
+close automatically. With no interactive frontend (including redirected shell
+stdin/stdout), the question declines without reading stdin or inventing consent.
+An answer never approves a write, command or MCP call. Live feedback is separate
+from checkpointed restart/resume, which is not enabled for the coding Graph.
+
 ## Temporary control files
 
 Rust creates a private directory under the OS temp directory, with 0700
@@ -54,6 +70,8 @@ protoagent-progress-<pid>-<nonce>-<token>/
   progress.jsonl
   progress.jsonl.approval-request.json
   progress.jsonl.approval-decision.json
+  progress.jsonl.input-request.json
+  progress.jsonl.input-response.json
   progress.jsonl.cancel.json
 ```
 
@@ -146,6 +164,7 @@ Timeline kinds include:
 | `ACTION` | Runtime action requested. |
 | `POLICY` | Policy evaluated or denied action. |
 | `APPROVAL` | Human approval requested or decided. |
+| `QUESTION` | User clarification requested, answered, skipped, timed out or canceled. |
 | `CONTEXT` | Model context prepared. |
 | `BUDGET` | Budget warning or exceeded event. |
 | `TASK` | Task status or progress event. |
@@ -153,7 +172,8 @@ Timeline kinds include:
 
 ## Cancellation
 
-When a task is running, Esc or Ctrl-C writes a cancellation request.
+When a task is running, Esc or Ctrl-C writes a cancellation request. Inside a
+question overlay, Esc skips that question and Ctrl-C still cancels the run.
 `RuntimeBridge` forwards it once through `RunHandle.cancel()`. AgentGroup and
 native cancellation clean up owned work, including active processes. Cancellation
 before submission returns a canceled task without model execution. Lost final

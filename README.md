@@ -10,7 +10,7 @@ Its runtime is designed to give smaller models narrow roles, bounded evidence,
 and deterministic completion checks instead of one large prompt with every
 tool attached.
 
-Release `0.2.3` covers the active `proto-cli` and `protoagent-core`
+Release `0.3.0` covers the active `proto-cli` and `protoagent-core`
 components. The ACP editor bridge remains a planned `0.0.0-dev.0` component.
 See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -21,33 +21,42 @@ See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 - **Visible context:** Context Loom incrementally indexes the workspace and
   builds a bounded, source-cited Context Pack before inference.
 - **Narrow agent roles:** Architect coordinates; Explorer reads the repository;
-  Coder prepares policy-gated changes; Verifier runs approved checks; optional
+  Coder prepares policy-gated changes; Tester designs regression cases; Verifier runs approved checks; optional
   Scout researches the public web.
 - **ProtoLink as the engine:** ProtoLink owns agent discovery, delegation,
   tools, state, events, approvals, cancellation, transports, and run reports.
+- **Ask and continue:** Architect uses native user questions to clarify missing
+  requirements, then continues the same task through the CLI/TUI answer callback.
 - **Runtime completion checks:** ProtoAgent derives an application-level
   `RunContract` and does not treat unsupported prose as a completed write task.
 - **Operator-visible behavior:** the Rust CLI exposes provider, model, context,
   agent, readiness, timeline, trace, diff, and session state.
+
+Ollama models advertising tool support use ProtoLink's native tool channel.
+Other models retain the JSON action protocol; a printed unfinished tool request
+cannot count as a completed answer. See [model configuration](docs/content/cli/models-and-config.md#ollama-tool-calling)
+for auto/native/json overrides.
 
 
 ## Architecture
 
 | Surface | Status | Responsibility |
 | --- | --- | --- |
-| `cli/` | Active, `0.2.3` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
-| `core/` | Active, `0.2.3` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
+| `cli/` | Active, `0.3.0` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
+| `core/` | Active, `0.3.0` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
 | `acp/` | Planned, `0.0.0-dev.0` | Future editor-facing Agent Client Protocol adapter. |
 
 The default coding deck is intentionally asymmetric:
 
 | Role | State | Authority |
 | --- | --- | --- |
-| **Architect** | Persistent project conversation | Plans, delegates, and produces the final response; no workspace tools. |
+| **Architect** | Persistent project conversation | Plans, prepares bounded source packets, delegates, and explains results; no writes. |
 | **Explorer** | Task-local | Reads and searches the selected workspace. |
 | **Coder** | Task-local | Native recoverable file changes with write and restore approval. |
+| **Tester** | Optional, default on; task-local | Read-only test planning and failure analysis. |
 | **Verifier** | Tool-only, no memory | Native approved process execution and measured outcomes. |
 | **Scout** | Tool-only, no memory, disabled by default | Exposes ProtoLink's bounded `web_search` and `fetch_url` tools with `network.read`. |
+| **MCP** | Optional, default off; no model | Lazy discovery, one exact schema and approved allowlisted server calls. |
 
 Scout is optional because external research changes the privacy and trust
 boundary. Enable it only when a task needs current public information:
@@ -71,6 +80,26 @@ best-effort search, and English Wikipedia is keyless factual search.
 For the complete design, read the [whitepaper](whitepaper.md) and the
 [maintainer documentation](https://nmaroulis.github.io/protoagent/).
 
+Optional workers can be controlled from the shell or TUI. Architect, Explorer,
+Coder and Verifier stay required. Disabling Tester removes its model and registry
+card; Architect defines criteria and Coder adds regression tests while required
+checks still run.
+
+```bash
+proto-cli agents tester off           # TUI: /agents tester off
+proto-cli agents tester on
+proto-cli mcp                        # Model-free setup/status
+proto-cli mcp add docs ./docs-mcp.json # Import an explicit server/tool allowlist
+proto-cli mcp test docs               # Discover only; no server tool invocation
+proto-cli mcp on                      # TUI: /mcp on
+```
+
+The optional MCP broker uses ProtoLink 0.8.0's native adapter. Architect calls it
+with `tool_call`, never `infer`. Three fixed broker tools keep large server
+catalogs out of small-model prompts; connections and invocations use native
+approvals. See the [MCP setup guide](docs/content/core/mcp.md) for local/remote
+JSON examples, authentication and effect boundaries. Settings apply to the next run.
+
 #### CLI Demo
 
 Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the fullscreen TUI, project and model controls, approvals, cancellation, traces,
@@ -87,7 +116,16 @@ Requirements:
 - Rust toolchain with Cargo 1.85 or newer
 - a supported local or API model provider
 
-ProtoAgent 0.2.3 requires ProtoLink 0.7.1 or newer with the HTTP and LLM extras.
+ProtoAgent 0.3.0 requires ProtoLink 0.8.0 or newer with the HTTP, LLM and MCP extras.
+The default harness uses owned local subagents with fresh conversations,
+inherited policies and shared budgets. It runs one child at a time, with no
+Registry server or loopback transport startup. Explicit transport meshes remain
+available. Native context policies and lifecycle hooks keep task state current
+and make large results retrievable in small pages.
+
+`proto-cli eval harness --json` checks these engine contracts offline, without
+a running model. See the [engine integration guide](docs/content/core/protolink-migration.md)
+for adopted capabilities, optional model fallback and recovery boundaries.
 
 ```bash
 git clone https://github.com/nMaroulis/protoagent.git
@@ -95,7 +133,7 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms]>=0.7.1"
+python -m pip install "protolink[http,llms,mcp]>=0.8.0"
 python -m pip install -e core
 
 cargo build --release --locked --manifest-path cli/Cargo.toml
@@ -126,21 +164,30 @@ cargo run --locked --manifest-path cli/Cargo.toml -- agents
 Provider setup, every CLI command, Context Loom behavior, and troubleshooting
 are covered in the [documentation](https://nmaroulis.github.io/protoagent/docs/intro).
 
-## New in 0.2.3
+## New in 0.3.0
 
-- Show model generation and delegated command output live in the shell and TUI.
-  Previews remain provisional until the native task finishes; Ctrl-C cancels
-  shell runs through the same native runtime as the TUI.
-- Consume delegated receipts directly from native parent reports, removing the
-  stored-worker event join.
-- Configure automatic task/report/metadata redaction on native `SQLiteRunStore`,
-  and use native checkpoint filters and pagination instead of reading Storage.
-- Require ProtoLink 0.7.1 while preserving scoped approvals, recovery conflicts,
-  cancellation, native budgets and the two-repair ceiling.
+- A runtime-owned TaskRecord preserves objectives, criteria, file scope, check IDs
+  and worker outcomes independently of model conversation summaries.
+- Read-only Tester designs regression cases; tool-only Verifier executes frozen
+  repository checks. Arbitrary successful commands cannot verify a code change.
+- Baseline checks and preparation permit later edits. Final checks bind source
+  revisions and close the edit phase, with at most two bounded repairs.
+- Coder reads bounded source spans and uses exact `edit_file` replacements with
+  revision checks instead of regenerating whole files for small changes.
+- Small profiles use compact protocol prompts and worker cards. Estimated
+  request admission reserves output space and accounts for schemas, history and
+  evidence; unknown small-model windows use an 8192-token application cap. Explicit model-size hints take priority over
+  whether the model is served locally or remotely.
+- `proto-cli eval coding --plan` shows disposable coding exercises;
+  `--live --profile small` compares the deck with a single-agent baseline using
+  the same model and independent acceptance tests.
 
-The multiline composer and terminal-styled operator manual remain available.
-Read [Verify & Recover](docs/content/cli/verification-and-recovery.md) for explicit
-environments, host execution, output bounds and recovery limitations.
+Code changes need required final checks. Configure uncommon projects through
+`.protoagent/project.json`; see the [task workflow guide](docs/content/core/task-workflow.md).
+Python projects without checks receive a predefined unittest runner for new
+regressions; zero tests cannot pass verification. Invalid planning selections
+return feedback so the model can correct them within the same run.
+Documentation-only changes may finish with verification explicitly unverified.
 
 ## Safety And Privacy
 
@@ -157,7 +204,7 @@ ProtoLink trace output is opt-in through `PROTOAGENT_TRACE=1`.
 
 ## Project Status
 
-The Rust CLI and Python core are the supported surfaces in `0.2.3`. The
+The Rust CLI and Python core are the supported surfaces in `0.3.0`. The
 [ACP directory](acp/README.md) is a roadmap placeholder; it is not currently an
 installable editor server. Contributions should keep code, CLI help, readiness
 output, docs, tests, and the changelog aligned.

@@ -83,8 +83,13 @@ Prompt-profile eval smoke:
 cargo run --locked --manifest-path cli/Cargo.toml -- eval profiles --limit 3
 ```
 
-Use `--live` only when a model is configured. Live evals auto-deny workspace
-write approvals so Coder behavior can be measured without applying changes.
+Use `--live` only when a model is configured. Routing evals (`eval profiles`)
+auto-deny writes; coding evals (`eval coding`) use disposable fixtures and narrowly
+approve fixture edits and their exact test command. They execute on the host.
+
+```bash
+cargo run --locked --manifest-path cli/Cargo.toml -- eval coding --plan --json
+```
 
 ## Docusaurus Docs
 

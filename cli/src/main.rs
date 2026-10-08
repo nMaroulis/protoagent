@@ -14,12 +14,14 @@ use std::{env, fs};
 mod diff;
 mod inline_style;
 mod progress;
+mod question;
 mod sessions;
 mod terminal_ui;
 mod timeline;
 
 use inline_style::{inline_code_segments, InlineKind};
 use progress::{latest_progress_message, ProgressFile, RuntimeApproval};
+use question::{shell_question, QuestionReply};
 
 const APP_TITLE: &str = "PROTOAGENT";
 const TAGLINE: &str = "MIAMI-80 LOCAL-FIRST AGENT CONSOLE";
@@ -207,6 +209,14 @@ struct ProtolinkStatus {
     #[serde(default)]
     web_tools_ready: bool,
     #[serde(default)]
+    mcp_ready: bool,
+    #[serde(default)]
+    subagents_ready: bool,
+    #[serde(default)]
+    context_policy_ready: bool,
+    #[serde(default)]
+    user_input_ready: bool,
+    #[serde(default)]
     error: String,
 }
 
@@ -263,12 +273,18 @@ struct AgentSettings {
 }
 
 impl AgentSettings {
-    fn is_scout_enabled(&self) -> bool {
-        self.agents
-            .iter()
-            .find(|agent| agent.name.eq_ignore_ascii_case("scout"))
+    fn is_enabled(&self, name: &str) -> bool {
+        self.agent(name)
             .map(|agent| agent.enabled)
-            .unwrap_or(self.scout_enabled)
+            .unwrap_or_else(|| match name {
+                "tester" => true,
+                "scout" => self.scout_enabled,
+                _ => false,
+            })
+    }
+
+    fn is_scout_enabled(&self) -> bool {
+        self.is_enabled("scout")
     }
 
     fn agent(&self, name: &str) -> Option<&AgentManifest> {
@@ -361,6 +377,16 @@ async fn main() -> Result<()> {
             print_header()?;
             handle_agents_command(&args[1..])
         }
+        Some("mcp") => {
+            print_header()?;
+            let text = mcp_settings_text(&args[1..])?;
+            print_panel(
+                "MCP",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
         Some("eval") | Some("evals") => {
             if !args.iter().skip(1).any(|arg| arg == "--json") {
                 print_header()?;
@@ -438,7 +464,14 @@ fn print_cli_help() {
         "  proto-cli agents profile     Show or set prompt profile: auto|small|medium|large|api"
     );
     println!("  proto-cli agents scout       Show or set optional Scout: on|off");
-    println!("  proto-cli eval profiles      Run prompt-profile evals; use --live for model calls");
+    println!("  proto-cli agents tester      Show or set optional test design: on|off");
+    println!("  proto-cli agents mcp         Show or set optional MCP broker: on|off");
+    println!("  proto-cli mcp                Setup: add NAME FILE.json, test NAME, tools NAME [TOOL], on|off, remove NAME");
+    println!(
+        "  proto-cli eval profiles      Routing diagnostics; --live contacts the model
+  proto-cli eval coding        Disposable coding exercises; --live includes a single-agent baseline
+  proto-cli eval harness       Offline ProtoLink engine-contract checks; no live model"
+    );
     println!("  proto-cli context [query]    Show Context Loom status or a Context Pack");
     println!("  proto-cli context window 16k Set Ollama context window; use auto to reset");
     println!("  proto-cli context history    Inspect saved ProtoLink conversation memory");
@@ -456,7 +489,7 @@ fn print_cli_help() {
 pub(crate) fn help_availability_text() -> String {
     match selected_model_label() {
         Some(selection) => {
-            format!("Guide is available on {selection}. Ask ProtoAgent usage questions with `/help <question>`.")
+            format!("Guide is configured to use {selection}; its model server must be running. Ask usage questions with `/help <question>`. Static help and setup commands work without an LLM.")
         }
         None => {
             "Static help is available now. Choose a model with `/model` or `proto-cli model`, then ask Guide with `/help <question>`.".to_string()
@@ -488,7 +521,7 @@ async fn stream_help_question(question: &str) -> Result<()> {
                     }
                 }
                 result = &mut task => {
-                    break result?.map_err(|err| anyhow!("Python Guide help error: {err:?}"))?;
+                    break result?.map_err(|err| anyhow!("Python Guide help error: {err}"))?;
                 }
                 _ = tokio::time::sleep(Duration::from_millis(80)) => {
                     print_help_output(progress.read_new_batch(), &mut shown)?;
@@ -573,29 +606,45 @@ async fn run_orchestration(query: &str) -> Result<CoreResponse> {
                     Err(err) => break Err(err.into()),
                 };
                 ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
-                break raw.map_err(|err| anyhow!("Python core error: {err:?}"));
+                break raw.map_err(|err| anyhow!("Python core error: {err}"));
             }
             _ = tokio::time::sleep(Duration::from_millis(140)) => {
                 ingest_shell_progress(&pb, &mut progress_events, &mut output_stream, progress_file.read_new_batch())?;
-                if let Some(approval) = progress_file.take_approval_request() {
-                    let approved = pb.suspend(|| -> Result<bool> {
-                        render_runtime_approval(&approval);
-                        if !approval.diff.trim().is_empty() {
-                            render_diff(&approval.diff);
+                if !cancellation_requested {
+                    if let Some(question) = progress_file.take_question() {
+                        let reply = pb.suspend(|| shell_question(&progress_file, &question))?;
+                        match reply {
+                            QuestionReply::Answered(answer) => progress_file.answer_question(&question, Some(&answer))?,
+                            QuestionReply::Declined => progress_file.answer_question(&question, None)?,
+                            QuestionReply::Expired => {},
+                            QuestionReply::Canceled => {
+                                progress_file.request_cancel("Canceled while answering in the ProtoAgent CLI")?;
+                                cancellation_requested = true;
+                            }
                         }
-                        if !approval.preview.trim().is_empty() {
-                            println!("{}", approval.preview);
-                        }
-                        Ok(Confirm::new("Authorize this Protolink action?")
-                            .with_default(false)
-                            .prompt()?)
-                    })?;
-                    progress_file.decide(&approval, approved)?;
-                    progress_events.push(format!(
-                        "Approval {}: {}.",
-                        if approved { "approved" } else { "denied" },
-                        approval.description
-                    ));
+                    }
+                }
+                if !cancellation_requested {
+                    if let Some(approval) = progress_file.take_approval_request() {
+                        let approved = pb.suspend(|| -> Result<bool> {
+                            render_runtime_approval(&approval);
+                            if !approval.diff.trim().is_empty() {
+                                render_diff(&approval.diff);
+                            }
+                            if !approval.preview.trim().is_empty() {
+                                println!("{}", approval.preview);
+                            }
+                            Ok(Confirm::new("Authorize this Protolink action?")
+                                .with_default(false)
+                                .prompt()?)
+                        })?;
+                        progress_file.decide(&approval, approved)?;
+                        progress_events.push(format!(
+                            "Approval {}: {}.",
+                            if approved { "approved" } else { "denied" },
+                            approval.description
+                        ));
+                    }
                 }
                 pb.set_message(latest_progress_message(&progress_events));
             }
@@ -899,10 +948,8 @@ fn show_dashboard() -> Result<()> {
     }
     print_panel("COCKPIT", &rows, PanelTone::Magenta);
 
-    let scout_enabled = load_agent_settings()
-        .map(|settings| settings.is_scout_enabled())
-        .unwrap_or(false);
-    print_agent_graph(scout_enabled);
+    let settings = load_agent_settings().unwrap_or_default();
+    print_agent_graph(&settings);
 
     if let Ok(inventory) = inventory {
         render_provider_strip(&inventory);
@@ -915,7 +962,7 @@ fn show_dashboard() -> Result<()> {
         "Use @ inside a task to tag project files".to_string(),
         "/agents shows runtime kernel, RunContract, and worker state".to_string(),
         "/agents profile controls small/medium/large/API prompt modes".to_string(),
-        "/agents scout on|off toggles optional web research for the next run".to_string(),
+        "/agents tester|scout|mcp on|off toggles optional workers for the next run".to_string(),
         "/context shows Context Loom evidence; /context history shows model memory".to_string(),
         "/check checks runtime wiring".to_string(),
         "Type any coding task to dispatch RunContract -> Architect -> workers".to_string(),
@@ -1219,7 +1266,7 @@ fn ensure_cli_provider_key(provider: &mut ModelProvider) -> Result<()> {
     );
     let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.id.clone(), api_key)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     if let Some(updated) = load_inventory_with_validation(true)?
         .providers
         .into_iter()
@@ -1358,7 +1405,7 @@ fn choose_model(preselected_provider: Option<&str>) -> Result<()> {
     };
 
     call_set_model(provider.id.clone(), model.clone(), base_url)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     print_panel(
         "MODEL SELECTED",
         &[format!("{} / {}", provider.id, model)],
@@ -1383,7 +1430,7 @@ fn add_key(preselected_provider: Option<&str>) -> Result<()> {
 
     let api_key = Password::new("API key").without_confirmation().prompt()?;
     call_add_api_key(provider.clone(), api_key)
-        .map_err(|err| anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python config error: {err}"))?;
     let rows = match load_inventory_with_validation(true)
         .ok()
         .and_then(|inventory| {
@@ -1501,7 +1548,7 @@ fn format_component_version_rows(versions: &[ComponentVersion]) -> Vec<String> {
 
 fn load_component_versions() -> Result<Vec<ComponentVersion>> {
     let json = call_component_versions(env!("CARGO_PKG_VERSION").to_string())
-        .map_err(|err| anyhow!("Python component version error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python component version error: {err}"))?;
     let inventory: ComponentVersionInventory = serde_json::from_str(&json)?;
     Ok(inventory.components)
 }
@@ -1519,7 +1566,7 @@ fn show_check() -> Result<()> {
                 "Protolink : {}",
                 if report.protolink.installed && report.protolink.agent_ready {
                     format!(
-                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}",
+                        "installed {}, stream {}, metrics {}, compaction {}, context {}, state {}, reports {}, cancellation {}, logging {}, auth {}, transport {}, web tools {}, MCP {}, children {}, context policy {}, user input {}",
                         empty_as_unknown(&report.protolink.version),
                         readiness(report.protolink.streaming_ready),
                         readiness(report.protolink.metrics_ready),
@@ -1532,6 +1579,10 @@ fn show_check() -> Result<()> {
                         readiness(report.protolink.auth_ready),
                         readiness(report.protolink.transport_ready),
                         readiness(report.protolink.web_tools_ready),
+                        readiness(report.protolink.mcp_ready),
+                        readiness(report.protolink.subagents_ready),
+                        readiness(report.protolink.context_policy_ready),
+                        readiness(report.protolink.user_input_ready),
                     )
                 } else if report.protolink.installed {
                     format!(
@@ -1578,6 +1629,7 @@ enum AgentsCommand {
     Status,
     Profile(Option<String>),
     Scout(Option<bool>),
+    Optional(String, Option<bool>),
 }
 
 fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, String> {
@@ -1598,8 +1650,13 @@ fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, Str
         }
         ["enable", "scout"] => Ok(AgentsCommand::Scout(Some(true))),
         ["disable", "scout"] => Ok(AgentsCommand::Scout(Some(false))),
+        [name] if matches!(*name, "tester" | "mcp") => Ok(AgentsCommand::Optional((*name).to_string(), None)),
+        [name, value] if matches!(*name, "tester" | "mcp") => parse_scout_toggle(value)
+            .map(|enabled| AgentsCommand::Optional((*name).to_string(), Some(enabled))),
+        [command, name] if matches!(*command, "enable" | "disable") && matches!(*name, "tester" | "mcp") =>
+            Ok(AgentsCommand::Optional((*name).to_string(), Some(*command == "enable"))),
         _ => Err(
-            "Usage: agents [status | profile [auto|small|medium|large|api] | scout [on|off]]"
+            "Usage: agents [status | profile [auto|small|medium|large|api] | tester|scout|mcp [on|off]]. Architect, Explorer, Coder and Verifier are required."
                 .to_string(),
         ),
     }
@@ -1609,7 +1666,7 @@ fn parse_scout_toggle(value: &str) -> std::result::Result<bool, String> {
     match value {
         "on" | "enable" | "enabled" | "true" => Ok(true),
         "off" | "disable" | "disabled" | "false" => Ok(false),
-        _ => Err("Scout state must be `on` or `off`.".to_string()),
+        _ => Err("Agent state must be `on` or `off`.".to_string()),
     }
 }
 
@@ -1636,6 +1693,15 @@ fn handle_agents_command(args: &[String]) -> Result<()> {
             print_panel("SCOUT", &format_scout_settings(&settings), PanelTone::Cyan);
             Ok(())
         }
+        AgentsCommand::Optional(name, enabled) => {
+            let settings = optional_agent_settings(&name, enabled)?;
+            print_panel(
+                &name.to_uppercase(),
+                &format_optional_agent_settings(&settings, &name),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
     }
 }
 
@@ -1649,7 +1715,7 @@ fn readiness(ready: bool) -> &'static str {
 
 fn show_agents() -> Result<()> {
     let settings = load_agent_settings()?;
-    print_agent_graph(settings.is_scout_enabled());
+    print_agent_graph(&settings);
     print_panel(
         "RUNTIME ARCHITECTURE",
         &format_architecture_manifest(&settings.architecture),
@@ -1662,7 +1728,12 @@ fn show_agents() -> Result<()> {
     );
     print_panel(
         "OPTIONAL WORKERS",
-        &format_scout_settings(&settings),
+        &[
+            format_optional_agent_settings(&settings, "tester"),
+            format_scout_settings(&settings),
+            format_optional_agent_settings(&settings, "mcp"),
+        ]
+        .concat(),
         PanelTone::Magenta,
     );
     let rows: Vec<String> = settings.agents.iter().map(format_agent_manifest).collect();
@@ -1706,19 +1777,62 @@ fn format_agent_manifest(agent: &AgentManifest) -> String {
 
 fn load_agent_settings() -> Result<AgentSettings> {
     let raw = call_no_args("get_agent_settings")
-        .map_err(|err| anyhow!("Python agent settings error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python agent settings error: {err}"))?;
     Ok(serde_json::from_str(&raw)?)
 }
 
 fn scout_settings(enabled: Option<bool>) -> Result<AgentSettings> {
+    optional_agent_settings("scout", enabled)
+}
+
+fn optional_agent_settings(name: &str, enabled: Option<bool>) -> Result<AgentSettings> {
     match enabled {
         Some(enabled) => {
-            let raw = call_configure_optional_agent("scout".to_string(), enabled)
-                .map_err(|err| anyhow!("Python Scout configuration error: {err:?}"))?;
+            let raw = call_configure_optional_agent(name.to_string(), enabled)
+                .map_err(|err| anyhow!("Python {name} configuration error: {err}"))?;
             Ok(serde_json::from_str(&raw)?)
         }
         None => load_agent_settings(),
     }
+}
+
+fn format_optional_agent_settings(settings: &AgentSettings, name: &str) -> Vec<String> {
+    let agent = settings.agent(name);
+    vec![
+        format!(
+            "{name}: {}",
+            if settings.is_enabled(name) {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "Role: {}",
+            agent.map(|a| a.role.as_str()).unwrap_or("optional worker")
+        ),
+        format!(
+            "Contract: {}",
+            agent.map(|a| a.contract.as_str()).unwrap_or("")
+        ),
+        format!("Next run: /agents {name} on|off | proto-cli agents {name} on|off"),
+    ]
+}
+
+fn mcp_settings_text(args: &[String]) -> Result<String> {
+    let raw = call_mcp_configuration(serde_json::to_string(args)?, false)
+        .map_err(|err| anyhow!("Python MCP setup error: {err}"))?;
+    Ok(serde_json::to_string_pretty(
+        &serde_json::from_str::<Value>(&raw)?,
+    )?)
+}
+
+fn mcp_settings_text_input(text: &str) -> Result<String> {
+    let raw = call_mcp_configuration(text.to_string(), true)
+        .map_err(|err| anyhow!("Python MCP setup error: {err}"))?;
+    Ok(serde_json::to_string_pretty(
+        &serde_json::from_str::<Value>(&raw)?,
+    )?)
 }
 
 fn format_scout_settings(settings: &AgentSettings) -> Vec<String> {
@@ -1777,9 +1891,9 @@ fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<Stri
 pub(crate) fn agent_profile_text(value: Option<String>) -> Result<String> {
     let raw = match value {
         Some(value) => call_configure_agent_prompt_profile(Some(value))
-            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+            .map_err(|err| anyhow!("Python prompt profile error: {err}"))?,
         None => call_no_args("get_agent_prompt_profile")
-            .map_err(|err| anyhow!("Python prompt profile error: {err:?}"))?,
+            .map_err(|err| anyhow!("Python prompt profile error: {err}"))?,
     };
     let status: PromptProfileStatus = serde_json::from_str(&raw)?;
     let selection = if status.model.trim().is_empty() {
@@ -1872,6 +1986,21 @@ mod agent_command_tests {
         );
         assert!(parse_agents_command(&["status", "extra"]).is_err());
         assert!(parse_agents_command(&["scout", "maybe"]).is_err());
+        assert_eq!(
+            parse_agents_command(&["tester", "off"]).unwrap(),
+            AgentsCommand::Optional("tester".to_string(), Some(false))
+        );
+        assert_eq!(
+            parse_agents_command(&["enable", "mcp"]).unwrap(),
+            AgentsCommand::Optional("mcp".to_string(), Some(true))
+        );
+        assert_eq!(
+            parse_agents_command(&["mcp"]).unwrap(),
+            AgentsCommand::Optional("mcp".to_string(), None)
+        );
+        for name in ["architect", "explorer", "coder", "verifier"] {
+            assert!(parse_agents_command(&[name, "off"]).is_err());
+        }
     }
 
     #[test]
@@ -1958,24 +2087,59 @@ struct EvalCommandOptions {
 }
 
 fn handle_eval_command(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("harness") {
+        if args[1..].iter().any(|arg| arg != "--json") {
+            return Err(anyhow!(
+                "Usage: proto-cli eval harness [--json] (offline; no model)"
+            ));
+        }
+        let raw = call_no_args("run_harness_eval")
+            .map_err(|err| anyhow!("Python harness eval error: {err}"))?;
+        let report: Value = serde_json::from_str(&raw)?;
+        if args.iter().any(|arg| arg == "--json") {
+            println!("{raw}");
+        } else {
+            print_panel(
+                "OFFLINE HARNESS EVAL",
+                &[
+                    format!("Passed: {} | samples: {}", report["passed"], report["samples"].as_array().map_or(0, Vec::len)),
+                    format!("Scores: {}", report["scores"]),
+                    "Scripted actions measure integration; eval coding --live measures model behavior.".to_string(),
+                ],
+                PanelTone::Cyan,
+            );
+        }
+        if report["passed"] != true {
+            return Err(anyhow!("Offline harness evaluation failed"));
+        }
+        return Ok(());
+    }
     let (subcommand, rest) = match args.first().map(String::as_str) {
         None => ("profiles", args),
         Some("profiles") | Some("profile") => ("profiles", &args[1..]),
+        Some("coding") => ("coding", &args[1..]),
         Some("tasks") | Some("list") => ("tasks", &args[1..]),
         Some(value) if value.starts_with('-') || is_prompt_profile_value(value) => {
             ("profiles", args)
         }
         Some(other) => {
             return Err(anyhow!(
-                "Unknown eval command: {other}. Use `proto-cli eval profiles`."
+                "Unknown eval command: {other}. Use `proto-cli eval profiles` or `proto-cli eval coding`."
             ))
         }
     };
 
-    let options = parse_eval_options(rest)?;
+    let mut options = parse_eval_options(rest)?;
+    if subcommand == "coding"
+        && !rest
+            .iter()
+            .any(|arg| arg == "--live" || arg == "--scaffold")
+    {
+        options.mode = "plan".to_string();
+    }
     if subcommand == "tasks" {
         let raw = call_list_quality_eval_tasks()
-            .map_err(|err| anyhow!("Python quality eval task error: {err:?}"))?;
+            .map_err(|err| anyhow!("Python quality eval task error: {err}"))?;
         if options.json {
             println!("{raw}");
         } else {
@@ -1992,8 +2156,15 @@ fn handle_eval_command(args: &[String]) -> Result<()> {
     };
     let profiles = join_optional(&options.profiles);
     let tasks = join_optional(&options.tasks);
-    let raw = call_run_quality_eval(mode, profiles, tasks, options.limit, workspace_dir_string())
-        .map_err(|err| anyhow!("Python quality eval error: {err:?}"))?;
+    let raw = call_run_quality_eval(
+        mode,
+        profiles,
+        tasks,
+        options.limit,
+        workspace_dir_string(),
+        subcommand == "coding",
+    )
+    .map_err(|err| anyhow!("Python quality eval error: {err}"))?;
     if options.json {
         println!("{raw}");
         return Ok(());
@@ -2102,17 +2273,18 @@ fn print_quality_eval_report(value: &Value) {
                         .map(|value| format!("{:.1}%", value * 100.0))
                         .unwrap_or_else(|| "not scored".to_string());
                     let error = value_str(task, "error");
+                    let architecture = value_str(task, "architecture");
+                    let task_label = if architecture.is_empty() {
+                        value_str(task, "task_id")
+                    } else {
+                        format!("{} [{}]", value_str(task, "task_id"), architecture)
+                    };
                     let suffix = if error.is_empty() {
                         String::new()
                     } else {
                         format!(" | error: {}", truncate_plain(&error, 64))
                     };
-                    profile_rows.push(format!(
-                        "{} | {}{}",
-                        value_str(task, "task_id"),
-                        score,
-                        suffix
-                    ));
+                    profile_rows.push(format!("{} | {}{}", task_label, score, suffix));
                 }
             }
             print_panel(
@@ -2214,7 +2386,7 @@ pub(crate) fn context_window_text(value: Option<String>) -> Result<String> {
         None | Some("status") => call_no_args("get_context_settings"),
         Some(value) => call_configure_context_window(Some(value.to_string())),
     }
-    .map_err(|err| anyhow!("Python context configuration error: {err:?}"))?;
+    .map_err(|err| anyhow!("Python context configuration error: {err}"))?;
     let settings: Value = serde_json::from_str(&raw)?;
     let provider = settings
         .get("provider")
@@ -2257,7 +2429,7 @@ pub(crate) fn compact_context_history(values: &[&str]) -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_compact_protolink_history(session_id, strategy.to_string(), limit)
-        .map_err(|err| anyhow!("Python ProtoLink compaction error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink compaction error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let summary = report
         .get("summary")
@@ -2279,7 +2451,7 @@ pub(crate) fn reset_context_history() -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_reset_protolink_history(session_id)
-        .map_err(|err| anyhow!("Python ProtoLink history reset error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink history reset error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let summary = report
         .get("summary")
@@ -2303,7 +2475,7 @@ pub(crate) fn context_history_text() -> Result<String> {
     let workspace = require_project_dir_string()?;
     let session_id = project_session_id(&workspace);
     let raw = call_describe_protolink_history(session_id)
-        .map_err(|err| anyhow!("Python ProtoLink history inspection error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python ProtoLink history inspection error: {err}"))?;
     let report: Value = serde_json::from_str(&raw)?;
     let mut rows = vec![report
         .get("summary")
@@ -2496,7 +2668,7 @@ fn show_context_status() -> Result<()> {
 fn show_context_pack(query: &str) -> Result<()> {
     let workspace = require_project_dir_string()?;
     let raw = call_context_pack(query.to_string(), workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     print_panel(
         "CONTEXT LOOM PACK",
@@ -2531,7 +2703,7 @@ fn show_sessions() -> Result<()> {
     Ok(())
 }
 
-fn print_agent_graph(scout_enabled: bool) {
+fn print_agent_graph(settings: &AgentSettings) {
     let rows = vec![
         "[USER]".to_string(),
         "   |".to_string(),
@@ -2548,7 +2720,27 @@ fn print_agent_graph(scout_enabled: bool) {
         "   |".to_string(),
         format!(
             "   +--> [SCOUT] optional network worker: {} (web_search, fetch_url)",
-            if scout_enabled { "on" } else { "off" }
+            if settings.is_scout_enabled() {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "   +--> [TESTER] optional read-only test designer: {}",
+            if settings.is_enabled("tester") {
+                "on"
+            } else {
+                "off"
+            }
+        ),
+        format!(
+            "   +--> [MCP] optional tool-only broker: {} (discover, schema, approved call)",
+            if settings.is_enabled("mcp") {
+                "on"
+            } else {
+                "off"
+            }
         ),
         "   |".to_string(),
         "   +--> [CODER] stateless write worker: approved edits, checkpoints, undo".to_string(),
@@ -2570,24 +2762,24 @@ fn load_inventory() -> Result<ModelInventory> {
 
 fn load_inventory_with_validation(validate_api_keys: bool) -> Result<ModelInventory> {
     let json = call_list_models(validate_api_keys)
-        .map_err(|err| anyhow!("Python model discovery error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python model discovery error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 fn load_visible_config() -> Result<VisibleConfig> {
-    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err:?}"))?;
+    let json = call_no_args("get_config").map_err(|err| anyhow!("Python config error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 fn load_doctor() -> Result<DoctorReport> {
-    let json = call_doctor(workspace_dir_string())
-        .map_err(|err| anyhow!("Python doctor error: {err:?}"))?;
+    let json =
+        call_doctor(workspace_dir_string()).map_err(|err| anyhow!("Python doctor error: {err}"))?;
     Ok(serde_json::from_str(&json)?)
 }
 
 pub(crate) fn context_status_text(workspace: String) -> Result<String> {
     let raw = call_context_status(workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = vec![context_memory_text()];
     rows.extend(context_status_rows(&value));
@@ -2596,14 +2788,14 @@ pub(crate) fn context_status_text(workspace: String) -> Result<String> {
 
 pub(crate) fn refresh_context_text(workspace: String) -> Result<String> {
     let raw = call_refresh_context(workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     Ok(context_status_rows(&value).join("\n"))
 }
 
 pub(crate) fn context_pack_text(query: String, workspace: String) -> Result<String> {
     let raw = call_context_pack(query, workspace)
-        .map_err(|err| anyhow!("Python Context Loom error: {err:?}"))?;
+        .map_err(|err| anyhow!("Python Context Loom error: {err}"))?;
     let value: Value = serde_json::from_str(&raw)?;
     let mut rows = context_pack_rows(&value);
     if let Some(items) = value.get("items").and_then(Value::as_array) {
@@ -2818,7 +3010,7 @@ fn render_brand_header() {
     println!("{}", style(TAGLINE).cyan().bold());
     println!(
         "{}",
-        style("RunContract -> Architect -> stateless workers // approval-gated local ops").dim()
+        style("TaskRecord -> focused workers -> required checks // approval-gated local ops").dim()
     );
     println!("{}", style(repeat_char('=', width)).magenta().bold());
     println!();
@@ -3110,6 +3302,21 @@ fn call_configure_optional_agent(name: String, enabled: bool) -> PyResult<String
     })
 }
 
+fn call_mcp_configuration(value: String, text: bool) -> PyResult<String> {
+    Python::attach(|py| {
+        prepare_python_path(py)?;
+        let module = py.import("protoagent_core.agent_engine")?;
+        module
+            .getattr(if text {
+                "configure_mcp_text"
+            } else {
+                "configure_mcp"
+            })?
+            .call1((value,))?
+            .extract()
+    })
+}
+
 fn call_answer_help_question(question: String, progress_path: Option<String>) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
@@ -3127,12 +3334,17 @@ fn call_run_quality_eval(
     task_ids: Option<String>,
     limit: Option<usize>,
     workspace: String,
+    coding: bool,
 ) -> PyResult<String> {
     Python::attach(|py| {
         prepare_python_path(py)?;
         let module = py.import("protoagent_core.agent_engine")?;
         module
-            .getattr("run_quality_eval")?
+            .getattr(if coding {
+                "run_coding_eval"
+            } else {
+                "run_quality_eval"
+            })?
             .call1((mode, profiles, task_ids, limit, workspace))?
             .extract()
     })

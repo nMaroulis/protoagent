@@ -57,6 +57,27 @@ without manual migration.
 
 The CLI renders provider cards and compact provider strips from this inventory.
 
+## Ollama Tool Calling
+
+Tool calling defaults to `auto`. Before constructing a model, ProtoAgent reads
+Ollama's `/api/show` metadata. If the model advertises `tools`, ProtoLink sends
+native tool declarations and consumes structured calls. Models without that
+capability, or servers without usable metadata, keep the JSON action protocol.
+The one-second metadata probe is cached per server/model: ten minutes for
+supported models, thirty seconds otherwise. It does not generate text.
+
+To override the choice, set `providers.ollama.tool_calling` in `config.json` to
+`auto`, `native` or `json`. Without that config field, the environment can set it:
+
+```bash
+PROTOAGENT_OLLAMA_TOOL_CALLING=json proto-cli run "Explain this project"
+```
+
+Native support is an advertised capability, not a guarantee of model accuracy.
+A tool or worker request printed as the final answer is rejected before
+completion. It is never executed by parsing the displayed answer. Use `/trace`
+to inspect a failed run; actual effects remain governed by ProtoLink.
+
 ## Agent Prompt Profile
 
 The deck prompt profile controls how Architect, Explorer, and Coder reason and
