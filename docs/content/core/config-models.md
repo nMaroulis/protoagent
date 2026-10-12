@@ -160,12 +160,16 @@ model_params["num_ctx"] = ollama_context_window(cfg)
 The same value is written into `LLMModelProfile.context_window`, so request
 parameters and UI metrics do not drift apart.
 
-Ollama also receives `supports_tool_calling=True` when `/api/show` advertises
-the selected model's `tools` capability. The bounded metadata probe is cached;
-missing/unsupported metadata preserves ProtoLink's JSON fallback. Optional
+Ollama receives native `tool_calling="auto"` by default. ProtoLink owns the
+authenticated `/api/show` request, five-minute capability cache and task-local
+protocol choice; missing/unsupported metadata selects JSON. Optional
 `providers.ollama.tool_calling` selects `auto` (default), `native` or `json`;
 `PROTOAGENT_OLLAMA_TOOL_CALLING` supplies the mode when the config field is absent.
 Both channels use the engine's typed action validation and dispatch.
+Other adapters retain engine defaults unless `providers.PROVIDER.tool_calling`
+is explicitly configured. `providers.PROVIDER.max_tool_corrections` forwards the
+native runtime allowance (default two per inference), including to RoutedLLM's
+outer loop. Neither setting is sent as a generation parameter.
 
 ## ProtoLink Readiness
 
@@ -184,6 +188,7 @@ features ProtoAgent expects:
 | `logging_ready` | the shared no-output `QuietLogger` exists for embedded agent runs. |
 | `auth_ready` | `APIKeyAuth` plus agent and HTTP transport credential hooks exist. |
 | `transport_ready` | shared transport configuration, limits, capabilities, health, request context, and metrics APIs exist. |
+| `action_validation_ready` | native rejection/limit errors, tool-calling policy/resolution/refresh APIs and inference-support metadata exist. |
 | `web_tools_ready` | ProtoLink's `web_search` and `fetch_url` factories return first-party `network.read` tools. |
 
 `agent_ready` is true only when all required baseline runtime capabilities are

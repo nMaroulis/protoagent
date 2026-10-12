@@ -84,6 +84,7 @@ class OllamaContextTests(unittest.TestCase):
         self.assertTrue(report["subagents_ready"])
         self.assertTrue(report["context_policy_ready"])
         self.assertTrue(report["user_input_ready"])
+        self.assertTrue(report["action_validation_ready"])
         self.assertTrue(report["agent_ready"], report["error"])
         self.assertEqual(QUIET_LOGGER.name, "protoagent-quiet")
         self.assertEqual(QUIET_LOGGER.__class__.__module__, "protolink.logging.quiet")

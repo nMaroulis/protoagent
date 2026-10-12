@@ -204,8 +204,21 @@ Manual:
   ProtoLink's native provider tool channel; unavailable metadata keeps the JSON
   action fallback. providers.ollama.tool_calling accepts auto, native or json;
   PROTOAGENT_OLLAMA_TOOL_CALLING supplies the mode when config does not set it.
-  An unfinished tool/worker request printed as a final answer fails visibly;
-  /trace shows the run. Protocol examples need accompanying prose or a code block.
+  ProtoLink owns authenticated metadata discovery, its five-minute cache and
+  task-local mode selection. Other providers retain adapter defaults unless
+  providers.PROVIDER.tool_calling is explicitly configured.
+  Recognizable malformed action envelopes receive native parse correction;
+  explanatory prose and explicit final.content remain application data.
+  /trace shows actual execution receipts, rejections and correction exhaustion.
+- Invalid plans, stale/ambiguous edit proposals and invalid check requests use
+  native no-change rejection feedback. Correct them from details/suggestion in
+  the same run. Verifier/Scout/MCP accept tool calls, not inference; ProtoLink
+  validates advertised worker capabilities before dispatch.
+  providers.PROVIDER.max_tool_corrections sets the native correction allowance
+  (default two per inference), shared by unknown tools, schemas, application
+  rejections and delegation mistakes. Success does not reset it; all model calls
+  and actual tool invocations consume the existing budgets. There is no extra
+  retry agent. Denials, execution failures and uncertain effects are terminal.
 - Optional provider fallback_models in config.json lists at most two same-provider
   models. Empty/absent means off. ProtoLink RoutedLLM falls back on eligible
   transient requests before exposed output; it never replays tools or switches

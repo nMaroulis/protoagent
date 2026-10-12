@@ -72,7 +72,9 @@ For Python projects with no checks, a predefined `python-tests` runner can execu
 new root `test_*.py` unittest regressions. Architect includes test creation in
 Coder's scope; Verifier runs the captured command with approval. Zero tests
 reports missing verification, even if Python exits successfully. Invalid planning
-IDs return feedback for correction instead of aborting the task. Explicit project
+IDs receive native no-change feedback for correction within the shared allowance
+(default two per inference). Rejected plans or check requests cannot provide
+verification evidence. Explicit project
 check configuration takes precedence. See [Task Workflow](../core/task-workflow.md).
 
 Baseline and preparation commands permit subsequent edits. Final verification

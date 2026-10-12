@@ -262,7 +262,9 @@ class TaskWorkflowTests(NativeRuntimeCase):
         record = self.configure_check()
         record.plan(["sample.py"], ["Empty input returns zero"], ["regression"])
         record.frozen = True
-        with self.assertRaisesRegex(ValueError, "frozen"):
+        from protolink import ToolRejectedError
+
+        with self.assertRaisesRegex(ToolRejectedError, "frozen"):
             record.plan(["sample.py"], ["Anything is fine"], ["regression"])
 
     async def test_write_scope_still_allows_reading_supporting_source(self):

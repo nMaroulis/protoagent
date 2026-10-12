@@ -10,17 +10,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from protolink import ToolRejectedError
+
 from .tools import read_file, safe_path
 
 PYTHON_BOOTSTRAP_SOURCE = "Python unittest bootstrap"
-
-
-class PlanValidationError(ValueError):
-    """Expected planning feedback; no plan fields change on rejection."""
-
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
 
 
 @dataclass(frozen=True)
@@ -224,7 +218,7 @@ class TaskRecord:
         self, paths: list[str], criteria: list[str], check_ids: list[str] | None = None
     ) -> dict[str, Any]:
         if self.frozen:
-            raise PlanValidationError(
+            raise self._plan_rejection(
                 "plan_frozen",
                 "The plan is frozen after the first write or final check; use the existing plan",
             )
@@ -233,23 +227,25 @@ class TaskRecord:
             or len(criteria) > 8
             or any(not x.strip() or len(x) > 1000 for x in criteria)
         ):
-            raise PlanValidationError(
+            raise self._plan_rejection(
                 "invalid_criteria", "Provide one to eight concrete acceptance criteria"
             )
         if len(paths) > 16:
-            raise PlanValidationError("invalid_paths", "A worker task may target at most 16 paths")
+            raise self._plan_rejection("invalid_paths", "A worker task may target at most 16 paths")
         if check_ids is None:
             check_ids = list(self.selected)
         if len(check_ids) > 16:
-            raise PlanValidationError("invalid_check_ids", "Select at most 16 repository check IDs")
+            raise self._plan_rejection(
+                "invalid_check_ids", "Select at most 16 repository check IDs"
+            )
         docs_only = bool(paths) and all(p.lower().endswith((".md", ".rst", ".txt")) for p in paths)
         if any(x not in self.checks for x in check_ids):
-            raise PlanValidationError(
+            raise self._plan_rejection(
                 "unknown_check_ids",
                 "Unknown check ID; choose from available_check_ids, not command text",
             )
         if not check_ids and self.checks and not docs_only:
-            raise PlanValidationError(
+            raise self._plan_rejection(
                 "check_required",
                 "Select at least one available check ID, or omit check_ids to keep the default selection",
             )
@@ -257,6 +253,19 @@ class TaskRecord:
         self.criteria = tuple(criteria)
         self.selected = tuple(dict.fromkeys(check_ids))
         return self.snapshot()
+
+    def _plan_rejection(self, code: str, message: str) -> ToolRejectedError:
+        """All plan validation precedes mutation; native rejection guarantees no change."""
+        return ToolRejectedError(
+            message,
+            code=code,
+            details={
+                "available_check_ids": list(self.checks),
+                "required_checks": list(self.selected),
+                "frozen": self.frozen,
+            },
+            suggestion="Use task_status for current criteria, scope and check IDs; keep a frozen plan.",
+        )
 
     def check_for(self, arguments: dict[str, Any]) -> str | None:
         return next((key for key in self.selected if self.checks[key].matches(arguments)), None)
@@ -289,7 +298,11 @@ class TaskRecord:
 
     def packet(self, role: str, objective: str, paths: list[str]) -> dict[str, Any]:
         if role not in {"explorer", "coder", "tester"} or len(paths) > 8:
-            raise ValueError("Use a known worker and at most eight source paths")
+            raise ToolRejectedError(
+                "Use a known worker and at most eight source paths",
+                code="invalid_worker_packet",
+                details={"roles": ["explorer", "coder", "tester"], "max_paths": 8},
+            )
         sources = []
         for path in paths:
             absolute = str(safe_path(path, self.workspace))
@@ -320,7 +333,14 @@ class TaskRecord:
             "needs_context",
             "blocked",
         }:
-            raise ValueError("Unknown worker or outcome")
+            raise ToolRejectedError(
+                "Unknown worker or outcome",
+                code="invalid_worker_report",
+                details={
+                    "roles": ["explorer", "coder", "tester"],
+                    "statuses": ["done", "needs_context", "blocked"],
+                },
+            )
         value = {
             "status": status,
             "summary": summary[:1500],
@@ -350,7 +370,7 @@ class TaskRecord:
 def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
     if record is None:
         return
-    suffix = ":protoagent-task-plan-2"
+    suffix = ":protoagent-task-plan-3"
     if not agent.execution_version.endswith(suffix):
         agent.execution_version += suffix
 
@@ -365,18 +385,8 @@ def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
         def plan_task(
             paths: list[str], criteria: list[str], check_ids: list[str] | None = None
         ) -> dict[str, Any]:
-            """Set criteria and write paths before editing. Omit check_ids to keep defaults; use only available_check_ids. Rejected plans return feedback without changing the plan."""
-            try:
-                return {"success": True, **record.plan(paths, criteria, check_ids)}
-            except PlanValidationError as exc:
-                return {
-                    "success": False,
-                    "code": exc.code,
-                    "message": str(exc),
-                    "available_check_ids": list(record.checks),
-                    "required_checks": list(record.selected),
-                    "frozen": record.frozen,
-                }
+            """Set criteria and write paths before editing. Omit check_ids to keep defaults; use only available_check_ids. Invalid plans receive native no-change rejection feedback."""
+            return {"success": True, **record.plan(paths, criteria, check_ids)}
 
         @agent.tool(capabilities=["task.manage"])
         def worker_packet(role: str, objective: str, paths: list[str]) -> dict[str, Any]:

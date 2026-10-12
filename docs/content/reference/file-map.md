@@ -90,7 +90,6 @@ pages that should usually move with them.
 | `core/protoagent_core/editing.py` | `Core / Task Workflow`, `Core / Safety And Tools` |
 | `core/protoagent_core/harness_eval.py` | `Core / Quality Evals`, `Core / ProtoLink Engine Integration` |
 | `core/protoagent_core/request_budget.py` | `Core / Task Workflow`, `Core / Context Loom` |
-| `core/protoagent_core/response_contract.py` | `Core / Runtime`, `Reference / Troubleshooting` |
 | `core/protoagent_core/agents/tester.py` | `Core / Agent Deck` |
 | `core/protoagent_core/coding_eval.py` | `Core / Quality Evals` |
 | `whitepaper.md` | Architecture thesis, enforced boundaries and measurement limits |

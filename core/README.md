@@ -6,10 +6,10 @@ through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 Current package version: `0.3.0`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.8.0 or newer with the HTTP, LLM and MCP extras:
+Install ProtoLink 0.8.1 or newer with the HTTP, LLM and MCP extras:
 
 ```bash
-pip install "protolink[http,llms,mcp]>=0.8.0"
+pip install "protolink[http,llms,mcp]>=0.8.1"
 ```
 
 Recoverable Coder writes require POSIX. The runtime uses the native execution,
@@ -27,7 +27,6 @@ context, configuration, acceptance criteria and terminal presentation.
 - `protoagent_core/help_agent.py` - Isolated Guide agent for `/help <question>` usage help; it is not registered with the coding mesh and has no tools, delegation, storage, or project session.
 - `protoagent_core/command_reference.json` - Packaged TUI/shell reference shared by Guide and Rust command completion. Guide streams via native `AgentGroup`/`RunHandle`, with cancellation and redacted settings on every call.
 - `protoagent_core/models.py` - Ollama, LM Studio, OpenAI-compatible, llama.cpp, and API model inventory.
-- `protoagent_core/response_contract.py` - Native completion hook rejects unfinished action-shaped answers without executing answer text.
 - `protoagent_core/config.py` - Provider, prompt-profile, optional-agent, and API-key config at `~/.protoagent/config.json`.
 - `protoagent_core/prompt_profiles.py` - Small/medium/large/API prompt profiles for the agent deck.
 - `protoagent_core/quality_eval.py` - Routing diagnostics and prompt-profile scoring.
@@ -153,7 +152,7 @@ execution approval and does not resume runs after an application restart.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.8.0's
+apply to the next run. When enabled, Scout receives ProtoLink 0.8.1's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless
@@ -189,13 +188,19 @@ server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
 `mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
 not invoke server tools. The broker exposes three fixed tools for names, one
 schema and an approved allowlisted invocation. Architect uses `tool_call`,
-never another inference loop. ProtoLink 0.8.0 owns transports, schema validation,
+never another inference loop. ProtoLink 0.8.1 owns transports, schema validation,
 session cleanup and result/error normalization. See the
 [MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
 
 ## Engine integration
 
-The harness uses ProtoLink 0.8 owned local children and native context policies.
+The harness uses ProtoLink's owned local children, context policies, action
+validation and capability selection. Native `ToolRejectedError` feedback handles
+invalid plans, stale/ambiguous edit proposals and invalid check requests before
+effects. The same model can correct them within `max_tool_corrections` (default
+two per inference, shared with tool/schema/delegation validation). Rejected
+requests cannot satisfy completion; execution failures and denials still stop.
+ProtoAgent's old capability cache and final-answer rejection hook are removed.
 Run `proto-cli eval harness --json` for offline engine-contract checks. Optional
 provider `fallback_models` are configured explicitly; restart/resume and Docker
 execution are outside the current coding workflow integration. See the

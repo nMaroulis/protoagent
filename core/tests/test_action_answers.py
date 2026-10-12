@@ -1,7 +1,6 @@
 """A provider's intended action must execute through ProtoLink or fail visibly."""
 
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -9,7 +8,6 @@ from protolink.llms.metrics import estimate_token_count
 from protolink.llms.server.ollama_client import OllamaLLM
 from runtime_support import NativeRuntimeCase
 
-from protoagent_core.response_contract import validate_final_answer
 from protoagent_core.runtime import _run_agent_deck
 
 UNFINISHED = {"tool_call": {"name": "explorer", "args": {"tool": "read_file", "path": "README.md"}}}
@@ -52,25 +50,120 @@ class ActionAnswerTests(NativeRuntimeCase):
                 )
         return result, requests
 
-    async def test_screenshot_wrapper_is_not_a_successful_answer_in_either_mode(self):
+    async def test_screenshot_wrapper_gets_native_correction_then_a_real_read_in_either_mode(self):
+        (self.root / "README.md").write_text("A small task management service.\n")
+        action = {
+            "type": "agent_call",
+            "agent": "explorer",
+            "action": "tool_call",
+            "tool": "read_file",
+            "args": {"path": "README.md"},
+        }
         for native in (False, True):
             with self.subTest(native=native):
                 result, requests = await self.run_replies(
-                    [{"content": json.dumps(UNFINISHED)}], native=native
+                    [
+                        {"content": json.dumps(UNFINISHED)},
+                        {"content": json.dumps(action)},
+                        {"content": json.dumps({"type": "final", "content": "A task service."})},
+                    ],
+                    native=native,
+                )
+                self.assertEqual(result["status"], "completed", result["answer"])
+                self.assertEqual(result["answer"], "A task service.")
+                self.assertEqual(len(requests), 3)
+                self.assertIn("Action validation failed", json.dumps(requests[1]["messages"]))
+                self.assertEqual(
+                    sum(
+                        event["type"] == "action.completed"
+                        and event.get("agent_name") == "explorer"
+                        and event["payload"].get("action", {}).get("name") == "read_file"
+                        for event in result["run_events"]
+                        if isinstance(event["payload"].get("action"), dict)
+                    ),
+                    1,
+                )
+
+    async def test_repeated_malformed_wrappers_stop_at_the_engine_parse_limit(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                result, requests = await self.run_replies(
+                    [{"content": json.dumps(UNFINISHED)}] * 3, native=native
                 )
                 self.assertEqual(result["status"], "failed", result["answer"])
-                self.assertIn("unfinished tool or worker request", result["answer"])
-                self.assertNotIn(json.dumps(UNFINISHED), result["answer"])
-                self.assertEqual(len(requests), 1, "A rejected answer must not replay the run")
+                self.assertEqual(len(requests), 3)
+                self.assertFalse(
+                    any(event["type"] == "subagent.started" for event in result["run_events"])
+                )
                 self.assertFalse(
                     any(
                         event["payload"].get("llm_event_type") == "llm_final"
                         for event in result["run_events"]
                     )
                 )
-                self.assertFalse(
-                    any(event["type"] == "subagent.started" for event in result["run_events"])
-                )
+
+    async def test_native_plan_rejection_is_corrected_without_restarting(self):
+        (self.root / "sample.py").write_text("value = 0\n")
+
+        def plan(arguments):
+            return {"tool_calls": [{"function": {"name": "plan_task", "arguments": arguments}}]}
+
+        result, requests = await self.run_replies(
+            [
+                plan({"paths": ["sample.py"], "criteria": ["Value is 42"], "check_ids": []}),
+                plan({"paths": ["sample.py", "test_sample.py"], "criteria": ["Value is 42"]}),
+                {"content": "Plan includes the runner and a regression test."},
+            ],
+            native=True,
+        )
+        self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(len(requests), 3)
+        self.assertIn("check_required", json.dumps(requests[1]["messages"]))
+        self.assertIn("python-tests", json.dumps(requests[1]["messages"]))
+        self.assertEqual((self.root / "sample.py").read_text(), "value = 0\n")
+        self.assertTrue(any(event["type"] == "action.rejected" for event in result["run_events"]))
+        self.assertFalse(any(event["type"] == "action.failed" for event in result["run_events"]))
+
+    async def test_native_tools_only_inference_is_rejected_before_correct_delegation(self):
+        (self.root / "README.md").write_text("A task management service.\n")
+        result, requests = await self.run_replies(
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "protolink_delegate_agent",
+                                "arguments": {
+                                    "agent": "verifier",
+                                    "prompt": "Explain the project",
+                                },
+                            }
+                        }
+                    ]
+                },
+                {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "protolink_call_agent_tool",
+                                "arguments": {
+                                    "agent": "explorer",
+                                    "tool": "read_file",
+                                    "args_json": '{"path":"README.md"}',
+                                },
+                            }
+                        }
+                    ]
+                },
+                {"content": "A task management service."},
+            ],
+            native=True,
+        )
+        self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(len(requests), 3)
+        self.assertIn("unsupported_inference", json.dumps(requests[1]["messages"]))
+        self.assertIn("A task management service", json.dumps(requests[2]["messages"]))
+        self.assertFalse(any(event["type"] == "action.failed" for event in result["run_events"]))
 
     async def test_native_delegation_reads_readme_and_returns_project_explanation(self):
         (self.root / "README.md").write_text("# TaskFlow\nA small task management service.\n")
@@ -150,15 +243,21 @@ class ActionAnswerTests(NativeRuntimeCase):
             )
         )
 
-    def test_genuine_json_and_documented_action_examples_are_preserved(self):
+    async def test_genuine_json_and_explicit_final_data_are_preserved_by_the_native_engine(self):
         for content in (
             '{"summary":"Task service","files":3}',
             '{"type":"final","content":"a genuine JSON answer"}',
             '{"type":[],"values":[1,2]}',
             "Example: " + json.dumps(UNFINISHED),
-            "```json\n" + json.dumps(UNFINISHED) + "\n```",
-            '{"tool_call":{"count":3}}',
+            "A protocol example:\n```json\n" + json.dumps(UNFINISHED) + "\n```",
         ):
-            response = SimpleNamespace(content=content)
-            validate_final_answer(response)
-            self.assertEqual(response.content, content)
+            expected = "a genuine JSON answer" if '"type":"final"' in content else content
+            result, requests = await self.run_replies([{"content": content}], native=True)
+            self.assertEqual(result["status"], "completed", result["answer"])
+            self.assertEqual(result["answer"], expected)
+            self.assertEqual(len(requests), 1)
+        explicit = json.dumps({"type": "final", "content": json.dumps(UNFINISHED)})
+        result, requests = await self.run_replies([{"content": explicit}], native=True)
+        self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(result["answer"], json.dumps(UNFINISHED))
+        self.assertEqual(len(requests), 1)

@@ -6,7 +6,7 @@ import hashlib
 import shutil
 from pathlib import Path
 
-from protolink import Artifact, Part
+from protolink import Artifact, Part, ToolRejectedError
 from protolink.tools.prepared import PreparedTool
 
 from .tools import safe_path
@@ -84,11 +84,21 @@ def edit_tool(native_replace, workspace):
         target = safe_path(arguments["path"], workspace)
         data = target.read_bytes()
         if hashlib.sha256(data).hexdigest() != arguments["expected_revision"]:
-            raise ValueError("Source revision changed; read the file again before editing")
+            raise ToolRejectedError(
+                "Source revision changed; no edit was prepared",
+                code="stale_source_revision",
+                details={"path": str(target)},
+                suggestion="Read the current source and use its returned revision in a new edit request.",
+            )
         content = data.decode("utf-8")
         old = arguments["old"]
         if not old or content.count(old) != 1:
-            raise ValueError("old must match exactly once; include more surrounding source")
+            raise ToolRejectedError(
+                "old must match exactly once; no edit was prepared",
+                code="ambiguous_source_match",
+                details={"matches": content.count(old) if old else 0},
+                suggestion="Read the assigned source and include enough surrounding text for one exact match.",
+            )
         action = native_replace.action_builder(
             {"path": str(target), "content": content.replace(old, arguments["new"], 1)}, context
         )
@@ -113,7 +123,15 @@ def check_tool(native_process, record):
     def prepare(arguments, context):
         check_id, phase = arguments["check_id"], arguments.get("phase", "verify")
         if phase not in {"baseline", "verify"} or check_id not in record.selected:
-            raise ValueError("Select a required check ID and phase baseline or verify")
+            raise ToolRejectedError(
+                "Select a required check ID and phase baseline or verify",
+                code="invalid_check_request",
+                details={
+                    "required_checks": list(record.selected),
+                    "phases": ["baseline", "verify"],
+                },
+                suggestion="Use a required check ID; arbitrary commands cannot satisfy verification.",
+            )
         action = native_process.action_builder(record.checks[check_id].arguments(), context)
         action.metadata.update(check_id=check_id, check_phase=phase)
         return action

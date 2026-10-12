@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "protolink[http,llms,mcp]>=0.8.0",
+    "protolink[http,llms,mcp]>=0.8.1",
 ]
 
 [project.urls]

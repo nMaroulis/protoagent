@@ -3,7 +3,7 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.3.0 requires **ProtoLink 0.8.0**. `runtime.py` configures an embedded
+ProtoAgent 0.3.0 requires **ProtoLink 0.8.1**. `runtime.py` configures an embedded
 local child roster by default; `workflow.py` defines coding acceptance and repair routing. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
@@ -55,17 +55,17 @@ write or final check. See [Task Workflow](task-workflow.md).
 Only Graph dispatch opens a new repair attempt. Graph limits and shared native
 budgets bound repair work independently of `RetryPolicy`.
 
-Provider-native tools are selected for Ollama models that advertise them;
-otherwise the compact JSON prompt includes an explicit Explorer README example.
-A `before_complete` hook rejects bare tool/worker requests returned as final
-content. The native run fails before emitting `llm_final` or committing that
-answer. The application does not translate this text into executable actions or
-replay the run. Ordinary JSON answers and protocol examples with prose or code
-fences remain valid. See [Models And Config](../cli/models-and-config.md).
-The before-model hook replaces earlier malformed answer envelopes with an
-explicit invalid-answer note in conversation context. Valid historical action
-messages and original run receipts remain intact; an old printed request cannot
-teach the next turn that printing a tool request successfully executes it.
+ProtoLink selects the action protocol for each inference. Ollama defaults to
+`tool_calling="auto"`; other adapters retain their defaults unless configured.
+The engine corrects recognizable malformed action envelopes in JSON/native
+modes, preserving completed tool observations in the current run. The compact
+JSON prompt retains an Explorer README example. Prose, ordinary JSON answers
+and data inside explicit `final.content` remain answers. ProtoAgent has no
+second action dispatcher or final-answer rejection hook. See
+[Models And Config](../cli/models-and-config.md).
+The before-model hook neutralizes malformed legacy assistant messages through
+the native parser. Valid historical actions, explicit final data and original
+execution reports remain intact.
 
 `run_contracts.py` classifies the original prompt. Write contracts require a
 native applied-file receipt at its current revision; verification requests
@@ -73,9 +73,21 @@ require all selected repository checks. Successful unrelated commands do not cou
 cannot satisfy execution checks. Structured denials and blockers are preserved
 as unsuccessful outcomes. A write without any command is explicitly unverified.
 
-Planning validation errors return structured tool feedback and preserve the
-current plan; native inference can correct the selection without restarting the
-run. Python projects lacking checks can use an application-declared unittest
+Planning validation errors raise native `ToolRejectedError` before mutation,
+preserving the current plan. Stale or ambiguous exact-edit preparation, invalid
+worker packets/reports and invalid check requests also reject without effects.
+The native loop can correct the request without restarting. `action.rejected`
+and inference `action_rejection` artifacts distinguish rejection from execution;
+they never satisfy completion checks. The shared correction allowance defaults
+to two per inference, successful actions do not reset it, and existing budgets
+still apply. Denials, ordinary execution errors and uncertain effects stop.
+
+The engine derives `supports_inference` independently of model connection
+health and validates worker targets, advertised tools and schemas before
+dispatch. Verifier, Scout and MCP accept tools only; reasoning workers accept
+inference. The compact roster preserves that distinction.
+
+Python projects lacking checks can use an application-declared unittest
 runner captured before inference and populated with Coder's regression tests.
 The runner uses the existing native process, approval and receipt path. Zero-test
 final runs never satisfy verification. See [Task Workflow](task-workflow.md).
@@ -211,7 +223,7 @@ handles still consume execution once. Peer capabilities determine whether
 delegated output arrives live or with the final snapshot. Even an HTTP worker
 mesh can show live output from the locally invoked Architect.
 
-ProtoLink 0.8.0 puts delegated events and receipts directly in parent streams,
+ProtoLink 0.8.1 puts delegated events and receipts directly in parent streams,
 tasks and reports, with native identity preservation and deduplication. Completion
 uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
 handle's complete report events into the Graph task, preserving model metrics

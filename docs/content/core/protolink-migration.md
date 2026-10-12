@@ -1,10 +1,10 @@
 ---
 title: ProtoLink Engine Integration
-description: How ProtoAgent uses ProtoLink 0.8 execution, local supervision, context policies, routing and evaluation.
+description: How ProtoAgent uses native execution, action correction, capability selection, local supervision and evaluation.
 ---
 
 ProtoLink is ProtoAgent's execution engine. The core requires
-`protolink[http,llms,mcp]>=0.8.0`; CLI, core and documentation remain at **0.3.0**.
+`protolink[http,llms,mcp]>=0.8.1`; CLI, core and documentation remain at **0.3.0**.
 The coding harness defines task state, evidence, editing scope and acceptance.
 The engine owns action dispatch, authorization, child execution, budgets,
 cancellation, observations and execution receipts.
@@ -18,8 +18,10 @@ cancellation, observations and execution receipts.
 | Shared root budgets and inherited policies | Children consume the Graph's shared budget and must satisfy both the Architect's capability ceiling and their own role policy. |
 | `ContextPolicy` | Reserve output space, prune complete old turns, clear older observations and offload large tool results to scoped artifacts. |
 | `AgentHooks.before_model` | Refresh the application TaskRecord, compact small-profile declarations, prepare delegated observations and account for native schemas. Provider acquisition methods are not wrapped. |
-| `AgentHooks.before_complete` | Reject an unfinished action returned as answer text before final output and conversation commit; no second action dispatcher or automatic replay. |
-| Ollama `supports_tool_calling` | Native tools for models advertising the capability; bounded cached metadata discovery, JSON fallback and explicit mode overrides. |
+| Shared action parser and native normalization | Correct recognizable malformed requests inside the current run in JSON/native modes; preserve completed observations and legitimate explicit final data. |
+| `tool_calling`, `resolve_tool_calling()`, `refresh_capabilities()` | Ollama defaults to engine-owned automatic discovery; authenticated exact-tag metadata, five-minute cache, JSON for unknown support and explicit mode overrides. |
+| `ToolRejectedError`, `max_tool_corrections` | Invalid plans, exact-edit preconditions and check selection return explicit no-change feedback. Native correction is bounded, retains receipts and emits distinct rejection events/artifacts. |
+| `AgentCapabilities.supports_inference` | Native cards distinguish reasoning workers from tool-only Verifier/Scout/MCP. The compact roster retains this field; the engine validates targets, tools and schemas before dispatch. |
 | `read_context_artifact` | Progressive retrieval of offloaded results. Offloading changes model observations; existing execution receipts retain their authority. |
 | `RoutedLLM` | Optional, explicit same-provider `fallback_models`; no extra model orchestrates selection. Each candidate request consumes the shared budget. |
 | `ask_user_tool`, `UserInputRequest` | Architect-only live clarification; the CLI/TUI returns an answer through a correlated callback and the native loop continues. |
@@ -40,9 +42,32 @@ use the explicit Registry/transport mesh. JSON-RPC aliases still map to SSE.
 These paths retain native transport authentication and diagnostics; they do not
 have the local supervisor's aggregate child accounting contract.
 
+## Correction and engine ownership
+
+The application no longer probes or caches Ollama tool capability independently,
+and no longer aborts malformed proposals through a final-answer hook. ProtoLink
+owns normalization, parse correction, protocol selection and request correction.
+The before-model hook still prepares coding context and neutralizes malformed
+legacy assistant messages using the native parser; explicit final data is retained.
+
+`plan_task`, invalid worker packets/reports, `edit_file` source checks and
+`run_check` selection use `ToolRejectedError` only before any mutation or
+external effect. The application supplies its error code, valid IDs and concise
+guidance; the engine supplies the observation, counter, event and receipt.
+Ordinary exceptions, denied approvals, interrupted writes and failed MCP calls
+retain their failure behavior. A rejected request never establishes completion.
+
+The correction allowance defaults to two per inference and is shared across
+local and delegated request errors. Configure `providers.PROVIDER.max_tool_corrections`
+to change it. Successful actions do not reset it, and correction consumes the
+existing model-call/output/runtime budgets. Parse errors have the engine's
+separate parse circuit breaker. Neither path restarts the coding Graph.
+Native durable rejection handling remains an upstream capability; it does not
+enable restart/resume for this application's Graph.
+
 ## Live child observations
 
-ProtoLink 0.8.0 records local child output in the parent's native Task before
+ProtoLink 0.8.1 records local child output in the parent's native Task before
 joining the child. Some events reach the outer stream at join. ProtoAgent's
 presentation adapter reads those already-recorded delegated events in bounded
 batches, deduplicates event IDs against `RunHandle.events()`, and forwards live
@@ -83,4 +108,9 @@ request overflow, transient model fallback, bounded repairs, question continuati
 skip, timeout, cancellation, stale-answer rejection and the separation between
 feedback and execution approval. Scripted actions
 verify integration contracts; they do not measure small-model reasoning quality.
+Regression cases also cover malformed-envelope correction and exhaustion,
+capability discovery through the engine, tools-only inference rejection,
+invented worker tools, preservation/deduplication of completed reads, shared
+correction limits, ordinary exception/denial behavior and rejected edit/check
+preparation without an approval or effect.
 Use [coding evaluations](quality-evals.md) for independently accepted changes.

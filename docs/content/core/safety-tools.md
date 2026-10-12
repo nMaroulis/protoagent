@@ -74,6 +74,14 @@ process-group cleanup and cancellation. `process.output` and `process.finished`
 are native events; successful dispatch emits an `action.completed` receipt.
 Approval is authorization, never proof that execution succeeded.
 
+Correctable application input uses native `ToolRejectedError` only when it is
+rejected before mutation or external effects: plan fields, worker packet/report
+parameters, exact-edit revision/match checks and repository check selection.
+Inference receives compact no-change feedback with a bounded native allowance.
+`action.rejected` and rejection artifacts cannot satisfy completion checks.
+Workspace escapes, permission denials, partial writes, failed started MCP calls
+and uncertain outcomes retain their failure/inspection behavior.
+
 ## Rust approval rendering
 
 The approval request retains the original native fingerprint. The display copy

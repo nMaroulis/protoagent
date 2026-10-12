@@ -167,6 +167,14 @@ it exposes `run_check(check_id, phase)` for selected repository checks and
 `execute_command` for approved preparation. The Architect invokes those tools
 directly; the Verifier executes them without an LLM inference loop.
 
+Request capabilities should describe what a worker accepts independently of
+whether its model connection is currently healthy. The kernel can then reject
+an inference request to a tool-only worker, an invented tool or invalid arguments
+before dispatch. The coordinator receives compact correction guidance while
+retaining previous observations. A custom deterministic prompt handler may
+support inference without containing a model; model presence alone is not the
+request contract.
+
 The Architect is the routing authority. Workers have task-local contexts and do
 not create their own delegation trees. This bounds coordination depth and makes
 handoffs visible, although it also makes the controller a potential bottleneck.
@@ -235,10 +243,13 @@ inference from a model name remains an approximation that a user can override.
 The action channel should remain distinct from the answer channel. Where a
 provider advertises native tool support, structured declarations reduce the
 need for a small model to invent a transport envelope. A JSON fallback still
-needs exact examples and validation. A final response containing an unfinished
-tool request is not completion: it should fail visibly rather than become a
-displayed answer or be executed by a second parser. Advertised capability alone
-does not establish reliable tool use.
+needs exact examples and validation. Recognizable malformed requests should
+enter the kernel's bounded correction loop before dispatch, retaining completed
+observations and consuming the same run budgets. Repeated invalid proposals
+must produce a visible terminal failure. Ordinary answers, explanatory examples
+and data explicitly supplied as final content remain application data. There
+should be one authoritative action parser and dispatcher. Advertised capability
+alone does not establish reliable tool use.
 
 These mechanisms introduce their own costs. Retrieval can miss important
 context, truncation can hide an edge case, and evicted observations may need to
@@ -267,10 +278,21 @@ usable runner exists, approved edits may be applied while the task remains
 unverified and incomplete.
 
 Planning mistakes should return compact corrective feedback, including valid
-check identifiers, while preserving the previous plan. A small model can then
-correct its selection within the same bounded native run. Authorization,
-interrupted effects and uncertain execution remain separate boundaries and
-must not be converted into retryable planning feedback.
+check identifiers, while preserving the previous plan. The same principle
+applies to a stale source revision or an ambiguous exact-edit proposal rejected
+before any write is prepared. The application must explicitly guarantee that
+the rejected request made no changes; an ordinary exception cannot supply that
+guarantee. The kernel records rejection separately from successful execution,
+and rejection provides no evidence for completion.
+
+A small model can correct such a request within the current run without a
+separate retry agent. A shared request-correction allowance bounds tool,
+argument and delegation mistakes; successful actions do not replenish it.
+Already completed operations retain their receipts and must not be replayed
+merely to obtain correction. Authorization failures, interrupted effects and
+uncertain execution remain separate boundaries and must not be converted into
+retryable planning feedback. This reduces coordination overhead by design;
+the effect on coding accuracy still requires measurement.
 
 Execution evidence must remain tied to the source it measured. If a captured
 dependency changes after a check, that check cannot establish verification of

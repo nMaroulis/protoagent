@@ -59,12 +59,16 @@ The CLI renders provider cards and compact provider strips from this inventory.
 
 ## Ollama Tool Calling
 
-Tool calling defaults to `auto`. Before constructing a model, ProtoAgent reads
-Ollama's `/api/show` metadata. If the model advertises `tools`, ProtoLink sends
+Tool calling defaults to `auto`. ProtoAgent passes that policy to ProtoLink;
+the engine reads Ollama's `/api/show` metadata when resolving the protocol.
+If the model advertises `tools`, ProtoLink sends
 native tool declarations and consumes structured calls. Models without that
 capability, or servers without usable metadata, keep the JSON action protocol.
-The one-second metadata probe is cached per server/model: ten minutes for
-supported models, thirty seconds otherwise. It does not generate text.
+The authenticated metadata request uses the exact model tag and endpoint.
+ProtoLink caches evidence for five minutes, invalidates it when configuration
+changes, and exposes `refresh_capabilities()` to explicit API callers. Discovery
+does not generate text or execute tools. Each inference keeps its selected
+protocol consistent through prompting and correction.
 
 To override the choice, set `providers.ollama.tool_calling` in `config.json` to
 `auto`, `native` or `json`. Without that config field, the environment can set it:
@@ -74,9 +78,32 @@ PROTOAGENT_OLLAMA_TOOL_CALLING=json proto-cli run "Explain this project"
 ```
 
 Native support is an advertised capability, not a guarantee of model accuracy.
-A tool or worker request printed as the final answer is rejected before
-completion. It is never executed by parsing the displayed answer. Use `/trace`
-to inspect a failed run; actual effects remain governed by ProtoLink.
+Recognizable malformed action envelopes enter ProtoLink's parse correction
+loop in JSON/native modes. Completed observations remain available; there is
+no run restart or application parser executing displayed answers. Explanatory
+prose and examples inside explicit `final.content` remain data. Use `/trace`
+to inspect correction and actual execution receipts.
+
+## Request correction limits
+
+`providers.PROVIDER.max_tool_corrections` in `config.json` sets the native
+allowance, default two corrective turns per inference. For example:
+
+```json
+{"providers":{"ollama":{"tool_calling":"auto","max_tool_corrections":2}}}
+```
+
+Unknown tools, invalid argument schemas, no-change application rejections and
+invalid worker requests share the allowance. Successful actions do not replenish
+it. Subsequent model calls and actual tools also consume existing run budgets;
+the limit is a runtime setting, never a generation parameter. Parse failures use
+a separate native circuit breaker. `/trace` and `/timeline` show rejected requests
+and correction exhaustion separately from executed tools and permission denials.
+Denials, execution failures and uncertain effects do not receive blind retries.
+
+Other providers accept an explicit `tool_calling` policy through the same config
+field and otherwise retain adapter defaults. With `fallback_models`, RoutedLLM
+uses its portable JSON protocol and retains the configured correction allowance.
 
 ## Agent Prompt Profile
 

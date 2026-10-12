@@ -43,7 +43,7 @@ class EngineContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Current request", seen[0])
         self.assertIs(agent.llm.call_action.__func__, sync)
         self.assertIs(agent.llm.call_action_stream.__func__, stream)
-        self.assertTrue(agent.execution_version.endswith(":protoagent-context-2"))
+        self.assertTrue(agent.execution_version.endswith(":protoagent-context-3"))
         self.assertEqual(agent.llm.protoagent_context_admission["request_count"], 1)
 
     async def test_tool_offload_is_retrievable_and_keeps_full_receipt(self):
@@ -85,7 +85,11 @@ class EngineContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "completed", result.error)
         contents = [message["content"] for message in seen[0]]
         self.assertNotIn(json.dumps(broken), contents)
-        self.assertNotIn(json.dumps({"type": "final", "content": json.dumps(broken)}), contents)
+        self.assertIn(
+            json.dumps({"type": "final", "content": json.dumps(broken)}),
+            contents,
+            "Explicit final content is application data, including protocol examples",
+        )
         self.assertIn(
             json.dumps(executed), contents, "Executed action history must retain its correlation"
         )

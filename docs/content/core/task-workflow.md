@@ -31,8 +31,9 @@ Architect's `task_status()` reads the record. `plan_task(paths, criteria, check_
 selects checks and a write scope before effects. The default record uses the
 original objective and all discovered checks when no narrower plan is submitted.
 Omitting `check_ids` preserves the current selection. Invalid IDs or an empty
-selection when checks exist return `success=false`, a reason and valid IDs;
-the native inference loop can correct the plan in the same run. Rejection does
+selection when checks exist raise native `ToolRejectedError`, with a reason
+and `details.available_check_ids`. The native inference loop can correct the
+plan within its shared allowance (default two per inference). Rejection does
 not change criteria, file scope or selected checks. The admitted task record
 always includes compact `available_check_ids` and `bootstrap_checks`, even when
 full command specifications are omitted to save context.
@@ -180,7 +181,7 @@ are counted as the additional provider payload. Integration tests exercise actua
 JSON/native streaming and delegation under an 8192-token admission cap. This is
 mechanical context validation, not a live-model coding quality result.
 
-ProtoLink 0.8.0 also bounds each individual inference loop to ten model actions;
+ProtoLink 0.8.1 also bounds each individual inference loop to ten model actions;
 shared run budgets are separate. Focused jobs can use the default task record and
 Coder's direct reads to avoid redundant planning/status calls. For a project with
 many mandatory commands, a project-owned check script captured as one check ID

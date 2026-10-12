@@ -70,6 +70,14 @@ no mutation or process tools. `SubagentLimits` caps depth at one, concurrency at
 one and children at 32 per attempt. Shared Graph budgets also cover child work.
 Explicit transport mode uses authenticated Registry discovery instead.
 
+Native cards derive `supports_inference` from the request handler independently
+of connection health. Architect, Explorer, Coder and enabled Tester accept
+inference; Verifier, Scout and MCP accept tool calls only. Small-profile worker
+metadata retains this field and exact tool schemas. ProtoLink rejects unsupported
+inference, invented worker tools and invalid arguments before dispatch and
+returns bounded correction guidance to the coordinator. Legacy external cards
+with unknown inference support retain the engine's compatibility behavior.
+
 Every model-facing role receives native ContextPolicy preparation and a
 before-model hook for task state and compact small-profile metadata. Large results
 are progressively retrievable through `read_context_artifact`; it reads scoped
@@ -278,7 +286,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.8.0 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.8.1 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |

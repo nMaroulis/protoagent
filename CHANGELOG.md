@@ -42,6 +42,21 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ### Changed
 
+- ProtoLink 0.8.1 owns action normalization/correction, Ollama automatic capability
+  discovery and task-local protocol selection. Remove the application metadata
+  probe/cache and final-answer rejection hook; retain compact coding context and
+  legacy history preparation through the native parser.
+- Native `ToolRejectedError` replaces custom planning feedback and handles
+  invalid worker packets/reports, stale or ambiguous exact-edit proposals and
+  invalid check requests before effects. Rejections have distinct events and
+  inference artifacts, never completion evidence. Provider `max_tool_corrections`
+  defaults to two per inference; native tools/schema/delegation errors share it,
+  including the outer RoutedLLM loop. Successful actions do not reset it.
+- Compact worker cards retain native `supports_inference`; the engine rejects
+  unsupported inference, unknown worker tools and invalid schemas before dispatch.
+  CLI progress, timeline and trace distinguish rejection and correction exhaustion
+  from execution and denial. `check` includes native action-validation readiness.
+
 - Python projects without repository checks receive a predefined unittest
   runner for new root regression tests. Compact task records expose valid and
   bootstrap check IDs; empty suites still cannot verify changes. Planning
@@ -49,11 +64,10 @@ This file records user-visible changes to the active ProtoAgent components.
   check IDs preserve defaults. Explicit project configuration stays authoritative.
 
 - Ollama models advertising `tools` use ProtoLink's native tool channel, with
-  bounded cached metadata discovery and explicit auto/native/json overrides.
-  Small JSON prompts include an Explorer README delegation example. A native
-  completion hook rejects unfinished action-shaped answers before completion.
-  Earlier malformed answers become invalid-answer notes in model context while
-  valid historical actions and original reports remain intact.
+  native cached metadata discovery and explicit auto/native/json overrides.
+  Small JSON prompts include an Explorer README delegation example. Earlier
+  malformed proposals become notes in model context while valid historical
+  actions, explicit final data and original reports remain intact.
 
 - Code changes require selected repository checks executed at current revisions.
   Preparation and unrelated successful commands do not satisfy verification.
@@ -65,7 +79,7 @@ This file records user-visible changes to the active ProtoAgent components.
 - Explicit small-model hints take priority over provider hosting location.
 - Intent classification handles polite requests and explicit no-write instructions.
 - CLI/core/docs coordinated versions advance to 0.3.0; ProtoLink floor advances
-  to 0.8.0 with the HTTP, LLM and MCP extras.
+  to 0.8.1 with the HTTP, LLM and MCP extras.
 - Replace model acquisition wrappers with native context policies and lifecycle
   hooks. The small profile retains compact declarations and exact input schemas.
 - Present local child output from native task records before join, deduplicated

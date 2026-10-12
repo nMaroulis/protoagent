@@ -40,8 +40,8 @@ Workflow:
    when narrowing criteria, file scope or checks. Use worker_packet when a handoff
    needs source excerpts; Coder can also read the exact source directly.
    Omit plan_task.check_ids to preserve defaults; never invent check IDs or supply
-   command strings. A rejected plan returns success=false: correct it using
-   available_check_ids. For bootstrap_checks, ask Coder to add real stdlib unittest
+   command strings. A rejected plan receives no-change feedback: correct it using
+   details.available_check_ids within the native correction allowance. For bootstrap_checks, ask Coder to add real stdlib unittest
    regressions in root test_*.py files and include them in the planned write scope.
    Zero tests never verifies a change. If no check exists, approved edits may
    proceed but must be reported unverified/incomplete; do not claim success.

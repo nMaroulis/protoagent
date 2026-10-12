@@ -601,6 +601,23 @@ fn run_event_summary(value: &Value) -> Option<String> {
     let metadata = payload.get("metadata").unwrap_or(&Value::Null);
 
     match (event_type.as_str(), llm_type.as_str()) {
+        ("action.rejected", _) => {
+            let rejection = payload
+                .get("rejection")
+                .or_else(|| metadata.get("rejection"))
+                .unwrap_or(&Value::Null);
+            let reason = value_string(rejection, &["message"]);
+            return Some(if reason.is_empty() {
+                format!("{agent}: Request rejected; nothing changed in that request.")
+            } else {
+                format!("{agent}: Request rejected; nothing changed in that request. {reason}")
+            });
+        }
+        ("tool.correction.exhausted", _) => {
+            return Some(format!(
+                "{agent}: Request correction limit reached; run stopped."
+            ));
+        }
         ("action.started", "agent_call_start") => {
             let target = display_agent(&value_string(metadata, &["agent"]));
             let action = value_string(metadata, &["action"]);
@@ -1077,6 +1094,29 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rejection_is_visible_without_claiming_execution_or_retry() {
+        let event = serde_json::json!({
+            "type": "action.rejected", "agent_name": "architect",
+            "payload": {"llm_event_type": "tool_rejected", "metadata": {
+                "tool": "plan_task", "recoverable": true,
+                "rejection": {"message": "Select python-tests", "changes_made": false}
+            }}
+        });
+        let summary = super::run_event_summary(&event).unwrap();
+        assert!(summary.contains("Request rejected"));
+        assert!(summary.contains("nothing changed in that request"));
+        assert!(summary.contains("Select python-tests"));
+        assert!(!summary.contains("returned"));
+        assert!(!summary.contains("failed"));
+        let exhausted = serde_json::json!({
+            "type": "tool.correction.exhausted", "agent_name": "architect"
+        });
+        assert!(super::run_event_summary(&exhausted)
+            .unwrap()
+            .contains("run stopped"));
+    }
+
     #[test]
     fn architect_answer_is_separate_complete_and_replaced_on_a_new_attempt() {
         let mut output = super::LiveOutput::default();

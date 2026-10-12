@@ -365,6 +365,20 @@ fn parse_run_event(event: &Value, _causal: &CausalIndex) -> Option<TimelineItem>
                 summary,
             ))
         }
+        "action.rejected" => Some(item(
+            "REJECT",
+            &actor,
+            &target,
+            "request rejected; nothing changed in that request",
+            rejection_detail(payload).if_empty(summary),
+        )),
+        "tool.correction.exhausted" => Some(item(
+            "LIMIT",
+            &actor,
+            "ProtoLink",
+            "request correction limit reached",
+            summary,
+        )),
         "action.denied" => Some(item(
             "POLICY",
             &actor,
@@ -454,6 +468,15 @@ fn trace_summary(event: &Value) -> String {
         value_string(event, &["type"]).as_str(),
         value_string(payload, &["llm_event_type"]).as_str(),
     ) {
+        ("action.rejected", _) => {
+            let detail = rejection_detail(payload);
+            if detail.is_empty() {
+                "request rejected; nothing changed in that request".to_string()
+            } else {
+                format!("request rejected; nothing changed in that request: {detail}")
+            }
+        }
+        ("tool.correction.exhausted", _) => "request correction limit reached".to_string(),
         ("action.started", "agent_call_start") => {
             let target = event_target(event);
             let mode = value_string(metadata, &["action"]);
@@ -485,6 +508,18 @@ fn trace_summary(event: &Value) -> String {
         ("llm.stream", "llm_final") => "final response produced".to_string(),
         _ => String::new(),
     }
+}
+
+fn rejection_detail(payload: &Value) -> String {
+    let rejection = payload
+        .get("rejection")
+        .or_else(|| {
+            payload
+                .get("metadata")
+                .and_then(|data| data.get("rejection"))
+        })
+        .unwrap_or(&Value::Null);
+    value_string(rejection, &["message"])
 }
 
 trait EmptyString {
@@ -956,6 +991,26 @@ mod tests {
         format_timeline_from_run_events,
     };
     use serde_json::json;
+
+    #[test]
+    fn distinguishes_rejected_requests_from_executed_tools_and_denials() {
+        let events = vec![
+            json!({"type": "action.rejected", "agent_name": "architect",
+            "payload": {"llm_event_type": "agent_call_rejected", "metadata": {
+                "agent": "verifier", "rejection": {"message": "Use run_check, not infer"}
+            }}}),
+            json!({"type": "tool.correction.exhausted", "agent_name": "architect"}),
+        ];
+        let items = build_timeline_from_run_events(&events, &[]);
+        assert_eq!(items[0].kind, "REJECT");
+        assert_eq!(items[0].target, "Verifier");
+        assert!(items[0].detail.contains("Use run_check"));
+        assert_eq!(items[1].kind, "LIMIT");
+        let trace = format_run_trace(&events, &[]);
+        assert!(trace.contains("nothing changed in that request"));
+        assert!(trace.contains("Use run_check"));
+        assert!(!trace.contains("completed runtime action"));
+    }
 
     #[test]
     fn builds_agent_handoff_timeline() {

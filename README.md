@@ -33,9 +33,11 @@ See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
   agent, readiness, timeline, trace, diff, and session state.
 
 Ollama models advertising tool support use ProtoLink's native tool channel.
-Other models retain the JSON action protocol; a printed unfinished tool request
-cannot count as a completed answer. See [model configuration](docs/content/cli/models-and-config.md#ollama-tool-calling)
-for auto/native/json overrides.
+Other models retain the JSON action protocol. ProtoLink corrects malformed action
+envelopes and rejects invalid tool or worker requests in the same bounded run,
+preserving completed observations. Rejections prove no execution. See
+[model configuration](docs/content/cli/models-and-config.md#ollama-tool-calling)
+for auto/native/json overrides and correction limits.
 
 
 ## Architecture
@@ -94,7 +96,7 @@ proto-cli mcp test docs               # Discover only; no server tool invocation
 proto-cli mcp on                      # TUI: /mcp on
 ```
 
-The optional MCP broker uses ProtoLink 0.8.0's native adapter. Architect calls it
+The optional MCP broker uses ProtoLink 0.8.1's native adapter. Architect calls it
 with `tool_call`, never `infer`. Three fixed broker tools keep large server
 catalogs out of small-model prompts; connections and invocations use native
 approvals. See the [MCP setup guide](docs/content/core/mcp.md) for local/remote
@@ -116,7 +118,7 @@ Requirements:
 - Rust toolchain with Cargo 1.85 or newer
 - a supported local or API model provider
 
-ProtoAgent 0.3.0 requires ProtoLink 0.8.0 or newer with the HTTP, LLM and MCP extras.
+ProtoAgent 0.3.0 requires ProtoLink 0.8.1 or newer with the HTTP, LLM and MCP extras.
 The default harness uses owned local subagents with fresh conversations,
 inherited policies and shared budgets. It runs one child at a time, with no
 Registry server or loopback transport startup. Explicit transport meshes remain
@@ -133,7 +135,7 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.8.0"
+python -m pip install "protolink[http,llms,mcp]>=0.8.1"
 python -m pip install -e core
 
 cargo build --release --locked --manifest-path cli/Cargo.toml

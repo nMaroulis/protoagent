@@ -17,7 +17,7 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.8.0"
+python -m pip install "protolink[http,llms,mcp]>=0.8.1"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
@@ -272,13 +272,18 @@ server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
 `mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
 not invoke server tools. The broker exposes three fixed tools for names, one
 schema and an approved allowlisted invocation. Architect uses `tool_call`,
-never another inference loop. ProtoLink 0.8.0 owns transports, schema validation,
+never another inference loop. ProtoLink 0.8.1 owns transports, schema validation,
 session cleanup and result/error normalization. See the
 [MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
 
 ## Engine integration
 
-The harness uses ProtoLink 0.8 owned local children and native context policies.
+The harness uses ProtoLink's owned local children, context policies, capability
+selection and bounded action correction. Progress, `/trace` and `/timeline`
+distinguish rejected requests from executed tools. Invalid plans, stale or
+ambiguous edit proposals and invalid check requests receive no-change feedback
+in the same run. Provider `max_tool_corrections` defaults to two per inference;
+successful actions do not reset it. Actual execution failures and denials stop.
 Run `proto-cli eval harness --json` for offline engine-contract checks. Optional
 provider `fallback_models` are configured explicitly; restart/resume and Docker
 execution are outside the current coding workflow integration. See the

@@ -3,7 +3,7 @@
 import json
 from unittest.mock import patch
 
-from protolink import Agent, CapabilityPolicy, RunHandle, Task
+from protolink import Agent, CapabilityPolicy, RunHandle, Task, ToolRejectedError
 from protolink.llms.factory import create_llm
 from runtime_support import NativeRuntimeCase
 
@@ -87,12 +87,23 @@ class PlanningCheckTests(NativeRuntimeCase):
         self.assertEqual(result.status, "completed", result.error)
         self.assertEqual(len(inputs), 3)
         self.assertIn('"available_check_ids": ["python-tests"]', inputs[0][0]["content"])
-        self.assertIn('"success": false', json.dumps(inputs[1]).replace('\\"', '"'))
+        self.assertIn('"changes_made": false', json.dumps(inputs[1]).replace('\\"', '"'))
         self.assertEqual(record.selected, ("python-tests",))
         self.assertEqual(
             record.allowed_paths, (str(self.root / "sample.py"), str(self.root / "test_sample.py"))
         )
         self.assertFalse(any(event.type == "action.failed" for event in result.report.events))
+        self.assertTrue(any(event.type == "action.rejected" for event in result.report.events))
+        self.assertTrue(any(item.kind == "action_rejection" for item in result.task.artifacts))
+        self.assertEqual(
+            sum(
+                event.type == "action.completed"
+                and event.payload.get("metadata", {}).get("tool") == "plan_task"
+                for event in result.report.events
+            ),
+            1,
+            "Only the accepted plan produces a completed tool receipt",
+        )
         self.assertEqual((self.root / "sample.py").read_text(), "value = 0\n")
 
     def test_bootstrap_does_not_add_requirements_to_a_project_with_existing_checks(self):
@@ -178,13 +189,14 @@ class PlanningCheckTests(NativeRuntimeCase):
         add_task_tools(agent, record, "architect")
         tool = agent.tools["plan_task"].func
         original = record.snapshot()
-        rejected = tool(["sample.py"], ["Ignore tests"], ["invented"])
-        self.assertFalse(rejected["success"])
-        self.assertEqual(rejected["code"], "unknown_check_ids")
+        with self.assertRaises(ToolRejectedError) as rejected:
+            tool(["sample.py"], ["Ignore tests"], ["invented"])
+        self.assertEqual(rejected.exception.code, "unknown_check_ids")
+        self.assertFalse(rejected.exception.to_dict()["changes_made"])
         self.assertEqual(original, record.snapshot())
         record.frozen = True
         frozen = record.snapshot()
-        self.assertEqual(
-            tool(["sample.py"], ["Ignore tests"], ["python-tests"])["code"], "plan_frozen"
-        )
+        with self.assertRaises(ToolRejectedError) as rejected:
+            tool(["sample.py"], ["Ignore tests"], ["python-tests"])
+        self.assertEqual(rejected.exception.code, "plan_frozen")
         self.assertEqual(frozen, record.snapshot())
