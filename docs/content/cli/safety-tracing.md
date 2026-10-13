@@ -37,7 +37,15 @@ sequenceDiagram
 
 Verifier's native `execute_command` requires `process.execute` approval. Its
 JSON preview contains argv, absolute cwd, explicit env, timeout, output cap and
-host execution boundary. Press V to inspect it. Commands run with host access,
+host execution boundary. **V opens details; it does not approve or execute.**
+Press **Y** to approve and run the exact command, or **N/Esc** to deny from the
+approval screen. Inside details or a diff, Y/N decides and Enter/Esc returns
+without a decision. The screen distinguishes baseline checks, final verification,
+other commands and file changes. A command preview has no proposed file diff;
+Coder's file changes receive separate diff approvals. Native cancellation,
+timeout and run-budget expiry close the modal and its review automatically.
+Late decisions for an ended or replaced presentation are not sent.
+Commands run with host access,
 without sandbox isolation; no environment is inherited implicitly.
 
 `/undo [id]` selects an applied native change and asks for a fresh restoration
@@ -59,6 +67,19 @@ close automatically. With no interactive frontend (including redirected shell
 stdin/stdout), the question declines without reading stdin or inventing consent.
 An answer never approves a write, command or MCP call. Live feedback is separate
 from checkpointed restart/resume, which is not enabled for the coding Graph.
+
+After edits, you can type **"don't run it, I'll do it"** in a verification
+question, even when it is not a suggested answer. ProtoAgent stops immediately
+and reports applied files with **verification deferred to you**. The native
+failed check remains in `/trace`; the change is not marked verified or satisfied.
+Skipping the question does not make that choice. Waiting for your answer counts
+toward the run's default ten-minute runtime budget.
+
+The live trace preview retains 120 summary messages by default. Its limit notice
+does not stop the run or truncate the stored native report. `/trace` retains the
+full report, and later decisions and execution outcomes remain live. Configure
+the preview with `PROTOAGENT_STREAM_TRACE_LIMIT`; the run deadline uses the
+separate `PROTOAGENT_RUN_MAX_SECONDS` setting.
 
 ## Temporary control files
 

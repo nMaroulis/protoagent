@@ -574,16 +574,24 @@ async fn run_agent(
                             app.last_diff_preview = approval.diff.clone();
                         }
                         terminal.render(app, None)?;
-                        let approved = approval_prompt(terminal, app, &approval)?;
+                        app.activity = "waiting for your approval · Y runs/applies · V views details".into();
+                        let approved = approval_prompt(terminal, app, &approval, &progress_file)?;
                         // Modal painting bypasses the transcript cache. Restore the
                         // complete frame before returning to incremental updates.
                         terminal.render(app, None)?;
-                        progress_file.decide(&approval, approved)?;
-                        let decision = if approved { "approved" } else { "denied" };
-                        progress_events.push(format!(
-                            "Approval {decision}: {}.",
-                            if approval.description.is_empty() { approval.action_name } else { approval.description }
-                        ));
+                        if let Some(approved) = approved {
+                            if progress_file.decide(&approval, approved)? {
+                                let decision = if approved { "approve" } else { "deny" };
+                                progress_events.push(format!(
+                                    "Approval decision sent ({decision}): {}.",
+                                    if approval.description.is_empty() { approval.action_name } else { approval.description }
+                                ));
+                            } else {
+                                progress_events.push("Approval ended before the decision could be sent.".into());
+                            }
+                        } else {
+                            progress_events.push("Approval closed: the native wait ended.".into());
+                        }
                     }
                 }
                 if poll_runtime_input(app, terminal, cancellation_requested)? {
@@ -631,6 +639,7 @@ async fn run_agent(
         "incomplete" => "incomplete",
         "failed" => "failed",
         "uncertain" => "uncertain",
+        "unverified" => "verification deferred",
         "input_required" => "input required",
         "fallback" | "ready" => "diagnostics",
         _ => "completed",

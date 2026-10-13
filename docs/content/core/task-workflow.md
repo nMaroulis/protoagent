@@ -8,6 +8,15 @@ state. `TaskRecord` owns the objective, acceptance criteria, allowed file paths,
 available and selected check IDs, source references and worker reports. It
 survives conversation compaction and request-level observation eviction.
 
+RunContract first selects a per-turn surface. Recognized conversation bypasses
+Context Loom, source tags and check discovery and uses Architect without tools.
+Repository questions retain evidence and clarification state without coding
+criteria, check plans or Coder/Verifier tools. Explicit verification exposes
+Verifier and discovers checks while denying file writes. Editing requests use
+the workflow below. Native permissions preserve these limits even if the model
+tries an unsupported route. Optional-agent settings enable availability within
+the appropriate route; they do not force a worker onto every turn.
+
 ## Worker responsibilities
 
 The small profile's owned local runs offer direct typed worker calls:
@@ -62,13 +71,18 @@ measures the results. A Tester report is advice, never completion evidence.
 Architect's `task_status()` reads the record. `plan_task(paths, criteria, check_ids)`
 selects checks and a write scope before effects. The default record uses the
 original objective and all discovered checks when no narrower plan is submitted.
-Omitting `check_ids` preserves the current selection. Invalid IDs or an empty
-selection when checks exist raise native `ToolRejectedError`, with a reason
+Omitting `check_ids`, or supplying an empty list for code, preserves the current
+selection. Documentation-only plans can explicitly select no checks. Invalid IDs
+raise native `ToolRejectedError`, with a reason
 and `details.available_check_ids`. The native inference loop can correct the
 plan within its shared allowance (default two per inference). Rejection does
 not change criteria, file scope or selected checks. The admitted task record
 always includes compact `available_check_ids` and `bootstrap_checks`, even when
 full command specifications are omitted to save context.
+For bootstrap coding without existing tests, a narrowed write scope must include
+a root `test_*.py` regression file. An incomplete scope is rejected before any
+plan mutation or file approval, so Coder is not trapped by a plan that excludes
+the required tests. Owner-configured empty checks remain authoritative.
 Once a write or final check is proposed the plan is frozen for the run, including
 repairs. A plan cannot remove checks after observing a failure.
 
@@ -134,18 +148,35 @@ This ID appears in `bootstrap_checks`: it is a runner for tests that Coder must
 create, not existing coverage. Architect/Tester propose behavioral regressions
 in root `test_*.py` files and include those files in the write scope. This avoids
 requiring a test directory or another dependency. The runner still requires
-native process approval. A baseline may report zero tests; final verification
-cannot pass until actual tests run successfully. Other discovered checks and
+native process approval. `baseline_check_ids` identifies checks with an available
+baseline. For a bootstrap runner with no root test files, coding tasks inspect
+source and create the requested change and regressions first; an empty bootstrap
+baseline proposal receives native no-change feedback before command preparation
+or approval. Once regression files exist, a baseline can run. Explicit diagnostic
+requests may still measure an empty suite; zero tests never verify a code change.
+Final verification cannot pass until actual tests run successfully. Other discovered checks and
 explicit configuration take precedence; the model cannot replace this command.
 Discovery does not import application code or install dependencies.
 
-Automatic Python checks prefer the project's `.venv` interpreter, then an
-external interpreter belonging to the running Python installation, with PATH
-lookup as a final fallback. The Rust CLI embeds CPython, so `sys.executable`
+Automatic Python checks prefer the project's `.venv` interpreter, then the
+active Python environment. When the Rust CLI loads a virtual environment's
+packages into embedded CPython, checks also use that environment's interpreter
+before falling back to bare runtime Python or PATH lookup. Selection reads
+executable paths and `pyvenv.cfg`; it runs no discovery commands and does not
+install missing dependencies. A project-specific environment or explicit check
+configuration remains the way to select the project's own dependencies.
+The Rust CLI embeds CPython, so `sys.executable`
 can name `proto-cli`; that host binary is excluded. Interpreter symlink spelling
 is retained to preserve virtual environments. Check argv and the explicit
 environment are still captured before inference and reviewed through native
 process approval. Coding evaluation scripts use the same interpreter selection.
+
+After editing or starting final checks, an explicit answer such as "don't run
+it, I'll do it" to a verification question stops execution immediately. The
+application reports `unverified`, verification is `deferred`, and no new model
+call or repair is needed to honor the handoff. Applied file receipts and previous
+failed checks remain in the report; `verified` and `satisfied` stay false.
+Uncertain effects, denied actions and stale revisions still take precedence.
 
 If no check can be configured, an empty plan may still scope approved edits.
 Such code changes remain `unverified` and `incomplete` at completion. An explicit
@@ -155,7 +186,7 @@ bootstrap selection. Configure a real check outside the run for verified work.
 ## Baseline, editing and final verification
 
 1. Inspect source and choose criteria/check IDs.
-2. Call `run_check(check_id, phase="baseline")` to reproduce existing behavior.
+2. For `baseline_check_ids`, call `run_check(check_id, phase="baseline")` to reproduce existing behavior.
    Baseline failure is evidence and does not close the edit phase.
 3. Perform approved edits. `execute_command` preparation, such as creating a
    directory, also permits later edits unless it exactly matches a selected
@@ -164,6 +195,33 @@ bootstrap selection. Configure a real check outside the run for verified work.
    Final verification closes the edit phase for this attempt.
 5. After completed failing final checks, Graph may start at most two repairs.
    Canceled, denied, timed-out and uncertain effects stop autonomous repair.
+
+### Command preparation and moving tests
+
+`execute_command` accepts an argv array, project-relative `cwd` (default `.`),
+`env` (default empty), a 60-second default timeout and an 8192-byte default output
+limit. Bare programs such as `mkdir` resolve through an explicit `env.PATH` or
+the application's fixed system search path. Without PATH, `python` and `python3`
+use project/runtime interpreter selection. Resolution does not copy PATH or
+credentials into the child: the native preview contains the exact absolute
+executable, directory, environment and limits before approval.
+
+The small local worker interface validates native command preparation before
+dispatch. An unknown executable, nonexistent cwd or invalid limit returns typed
+no-change feedback to ProtoLink's bounded correction loop. There is no child,
+approval or command execution for that rejected request. Policy denial and
+errors after dispatch remain stopping conditions.
+
+For root unittest tests moving into `test/` or `tests/`, inspect the existing
+runner, use separately approved argv calls to create the folder and move the
+files, then have Coder add `__init__.py` and any necessary import changes.
+The frozen root discovery command can then recurse into the package. It is
+not replaced with an arbitrary successful command; zero tests still cannot
+verify the move. Current test files and package markers enter bounded revision
+capture, so a later edit to a moved test invalidates its check. Explicit owner
+check configuration stays authoritative; a runner fixed to another folder may
+need configuration outside the run. Host `mv` has no native file checkpoint or
+automatic rollback; command approval is separate from Coder's file diffs.
 
 Commands have the same approval, cancellation, environment and output limits as
 native ProtoLink execution. `run_check` expands a check ID into its exact frozen
@@ -196,10 +254,30 @@ retain numbered evidence. Large files can be read in
 spans, up to an 8 MiB file ceiling. A partial long line is marked explicitly.
 
 `edit_file(path, old, new, expected_revision)` replaces exactly one occurrence.
-Ambiguous source or a stale revision fails before approval. It preserves other
+Ambiguous source or a stale revision produces no-change feedback before write
+approval. ProtoLink 0.8.1 corrects execution-time `ToolRejectedError`; preparation
+exceptions otherwise end inference. The adapter therefore prepares a read-only
+validation action for these two source-selection errors and raises the typed
+rejection when that action executes. It never prepares a write, freezes the plan
+or creates a recovery record for invalid source. The native inference loop owns
+the correction limit; direct invocation still returns rejection without retrying.
+A valid proposal adds native `filesystem.write` authority and requires its exact
+diff approval, preserving the original preimage and recovery guards. Ordinary
+errors, denied actions and interrupted effects retain their stop behavior.
+
+Coder copies a short unique `old` span literally from `read_file.content`, using
+the returned revision. Truncated source is paginated before changing unseen code.
+It preserves other
 source and line endings, then uses native ProtoLink replacement for its diff,
 preimage, approval, cancellation and recovery. New files still use `create_file`;
 whole-file `replace_file` remains available for necessary complete replacements.
+
+Coder's create/replace interface accepts project-relative paths for model input
+and joins them to the selected root before native preparation. Absolute inputs
+retain their spelling. The adapter does not resolve symlinks or remove parent
+traversal; ProtoLink's original root, path and symlink checks still run. The
+approved operation and diff contain the absolute path. This matches the
+project-relative reads and exact-edit interface without adding a file executor.
 
 Per-request admission estimates instructions, tool declarations, agent cards,
 history and evidence together and reserves output space. Older observations are

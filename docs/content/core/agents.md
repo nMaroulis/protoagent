@@ -11,7 +11,8 @@ The default coding mesh exposes four LLM-capable roles:
 4. Coder
 
 Architect is the stateful controller. Explorer, Tester and Coder are stateless,
-task-local workers. Verifier is an always-registered tool-only command worker. Scout is a
+task-local workers. Verifier is the required tool-only command worker for coding
+and explicit verification. Scout is a
 tool-only web-research agent that is disabled by default. MCP is a model-free
 broker, also disabled by default. Guide is separate and only answers usage help
 questions.
@@ -21,7 +22,7 @@ questions.
 The user-facing architecture is:
 
 ```text
-Context Loom -> TaskRecord/RunContract -> Architect -> Explorer/Coder/Verifier/(optional Tester/Scout/MCP) -> Policy Gate -> Completion Guard
+RunContract -> request-scoped context and workers -> Architect -> ProtoLink policy and execution -> Completion Guard
 ```
 
 The ProtoLink runtime kernel owns `RunContext`, budgets, events, approval
@@ -32,9 +33,25 @@ lacks an executed native file change at its current resource revision.
 Approval, preview and model prose never count as execution. Native Graph limits
 allow one initial attempt and at most two repairs after completed failing checks.
 
+The original request also determines what the model can see and do:
+
+| Request | Per-turn surface |
+| --- | --- |
+| Recognized conversation, such as `hi` or `thanks` | Architect alone; no tools, questions, Context Loom scan or check discovery. |
+| Repository question | Explorer evidence and needed enabled Scout/MCP tools; no Coder, Tester, commands or patch planning. |
+| Explicit verification | Explorer and Verifier; checks may execute with approval, but file edits are denied. |
+| Editing | Coding workers, task criteria, check plan and enabled optional tools. |
+
+These are native permission ceilings as well as smaller prompts/tool catalogs.
+Skipped clarification provides no new objective. Answers clarify a live request
+without expanding its original authority. Intent classification is conservative
+and heuristic. The `/agents` panel shows the available catalog and optional
+settings; it does not mean every worker runs on every turn.
+
 ## Deck Assembly
 
-`agents/deck.py` creates required workers and conditionally inserts optional workers:
+`agents/deck.py` creates the workers needed by `run_contract` and conditionally
+inserts optional workers. An editing deck is:
 
 ```python
 {
@@ -89,7 +106,7 @@ observations and grants no repository or external-tool authority.
 
 ## User questions
 
-Architect also has native `ask_user(question, options=None)`. It uses this for
+Outside recognized conversation, Architect has native `ask_user(question, options=None)`. It uses this for
 requirements or preferences that repository evidence cannot resolve, with one
 concise question and up to three suggested answers. Workers do not prompt the
 user directly; they report missing information to Architect. The engine places
@@ -208,6 +225,9 @@ Policy:
 Source: `core/protoagent_core/agents/coder.py`
 
 Coder is the stateless worker that can prepare file modifications. It does not
+require the model to assemble absolute paths for new files: project-relative
+create/replace inputs are joined to the selected root before native preparation,
+with the original traversal, symlink and allowed-root checks preserved. It does not
 get Explorer's broad search tools. It has bounded `read_file` access and can
 request missing context through `report_task`. Architect can pass real source
 packets using `worker_packet` outside the simplified local interface. Coder
@@ -216,12 +236,12 @@ Small-profile inference omits redundant `task_status` and `list_files` tools.
 The preferred edit is an exact replacement with a
 full-file revision, avoiding reproduction of unaffected source.
 
-Tools registered directly from `protolink.tools.builtins.filesystem_tools()`:
+Coder uses native `filesystem_tools()` and application read/exact-edit adapters:
 
 | Tool | Capability | Purpose |
 | --- | --- | --- |
 | `read_file(path, start_line, end_line)` | `workspace.read` | Read a bounded source span and revision |
-| `edit_file(path, old, new, expected_revision)` | `filesystem.write` | Prepare one exact native replacement |
+| `edit_file(path, old, new, expected_revision)` | `workspace.read` for validation; `filesystem.write` on valid preparation | Reject invalid source without effects, or prepare an approved exact native replacement |
 | `create_file(path, content)` | `filesystem.write` | Approved creation of an absent file |
 | `replace_file(path, content)` | `filesystem.write` | Approved replacement of an existing file |
 | `preview_change(change_id)` | `filesystem.read` | Inspect native recovery state, conflict and diff |
@@ -251,8 +271,13 @@ Verifier has `llm=None`, `state=[]` and `expose_chat=False`. It registers native
 `process_tool(max_timeout_seconds=600, max_output_bytes=32768)`.
 Architect normally calls `run_check(check_id, phase)` using the frozen repository
 plan. Baseline permits later edits; verify closes editing. General preparation
-uses `execute_command` with argv, absolute cwd, explicit env,
-timeout_seconds and max_output_bytes. `process.execute` requires approval.
+uses `execute_command` with argv, project-relative cwd (default `.`), env
+(default empty), timeout_seconds (default 60) and max_output_bytes (default 8192).
+Bare programs resolve through explicit env.PATH or a fixed application search
+path; python/python3 without PATH use project/runtime Python. The native command
+preview retains absolute paths and the exact child environment. Small local
+calls validate command preparation before dispatch and return no-change input
+rejections through the native correction loop. `process.execute` requires approval.
 
 Native results include exit_code, stdout, stderr, timed_out, canceled, truncated,
 duration_seconds and budget_exceeded. ProtoLink owns execution and cleanup;

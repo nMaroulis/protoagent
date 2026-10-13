@@ -18,6 +18,56 @@ from protoagent_core.verification import validate_completion, verification_summa
 
 
 class PlanningCheckTests(NativeRuntimeCase):
+    async def test_relative_new_test_path_prepares_an_absolute_native_diff(self):
+        handle = self.start_tool(
+            self.coder, "create_file", {"path": "test_sample.py", "content": "import unittest\n"}
+        )
+        (approval,) = await self.pending()
+        self.assertEqual(
+            approval.request.action.payload["arguments"]["path"], str(self.root / "test_sample.py")
+        )
+        self.assertIn(
+            "test_sample.py", json.dumps([a.to_dict() for a in approval.request.action.artifacts])
+        )
+        from protolink import ApprovalDecision
+
+        self.broker.resolve(
+            ApprovalDecision(True, approval.request.request_id),
+            scope=self.authorization.scope,
+            fingerprint=approval.fingerprint,
+        )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual((self.root / "test_sample.py").read_text(), "import unittest\n")
+
+    async def test_relative_write_still_rejects_traversal_and_symlinks_before_approval(self):
+        (self.root / "sample.py").write_text("value = 0\n")
+        (self.root / "link.py").symlink_to(self.root / "sample.py")
+        for path in ("../outside.py", "link.py"):
+            result = await self.start_tool(
+                self.coder, "replace_file", {"path": path, "content": "value = 42\n"}
+            ).result()
+            self.assertEqual(result.status, "failed")
+        self.assertFalse(self.broker.records(self.authorization.scope))
+        self.assertEqual((self.root / "sample.py").read_text(), "value = 0\n")
+        self.assertFalse((self.root.parent / "outside.py").exists())
+
+    async def test_empty_bootstrap_baseline_for_a_write_task_rejects_before_approval(self):
+        (self.root / "sample.py").write_text("value = 0\n")
+        record = self.discover()
+        record.objective = "Fix sample.py so value is 42"
+        self.assertEqual(record.snapshot()["baseline_check_ids"], [])
+        result = await self.start_tool(
+            self.verifier, "run_check", {"check_id": "python-tests", "phase": "baseline"}
+        ).result()
+        self.assertEqual(result.status, "failed")
+        self.assertIn("baseline_unavailable", json.dumps(result.report.to_dict()))
+        self.assertFalse(self.broker.records(self.authorization.scope))
+        self.assertFalse(record.frozen)
+        self.assertFalse(any(e.type == "process.started" for e in result.report.events))
+        (self.root / "test_sample.py").write_text("import unittest\n")
+        self.assertEqual(record.snapshot()["baseline_check_ids"], ["python-tests"])
+
     def discover(self):
         record = self.attempt.record
         record.checks = discover_checks(str(self.root))
@@ -53,6 +103,7 @@ class PlanningCheckTests(NativeRuntimeCase):
     async def test_plan_feedback_allows_correction_in_the_same_native_run(self):
         (self.root / "sample.py").write_text("value = 0\n")
         record = self.discover()
+        record.objective = "Fix sample.py so value is 42"
         responses = [
             {
                 "type": "tool_call",
@@ -105,6 +156,23 @@ class PlanningCheckTests(NativeRuntimeCase):
             "Only the accepted plan produces a completed tool receipt",
         )
         self.assertEqual((self.root / "sample.py").read_text(), "value = 0\n")
+
+    def test_empty_code_check_selection_keeps_defaults_and_bootstrap_scope_rejects_without_mutation(
+        self,
+    ):
+        (self.root / "server.py").write_text("value = 0\n")
+        record = self.discover()
+        record.objective = "Change server.py from Starlette to FastAPI"
+        original = record.snapshot()
+        with self.assertRaises(ToolRejectedError) as error:
+            record.plan(["server.py"], ["Preserve endpoints"], [])
+        self.assertEqual(error.exception.code, "regression_scope_missing")
+        self.assertEqual(record.snapshot(), original)
+        plan = record.plan(["server.py", "test_server.py"], ["Preserve endpoints"], [])
+        self.assertEqual(plan["required_checks"], ["python-tests"])
+        self.assertEqual(
+            plan["allowed_paths"], [str(self.root / "server.py"), str(self.root / "test_server.py")]
+        )
 
     def test_bootstrap_does_not_add_requirements_to_a_project_with_existing_checks(self):
         (self.root / "package.json").write_text('{"scripts":{"test":"node --test"}}')

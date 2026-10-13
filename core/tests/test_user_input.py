@@ -13,7 +13,7 @@ from protoagent_core.agents.architect import create_architect_agent
 from protoagent_core.agents.deck import create_agent_deck
 from protoagent_core.runtime import _run_agent_deck
 from protoagent_core.runtime_bridge import RuntimeBridge
-from protoagent_core.user_input import MAX_ANSWER_CHARS
+from protoagent_core.user_input import MAX_ANSWER_CHARS, hands_off_verification
 
 
 class UserInputTests(NativeRuntimeCase):
@@ -175,6 +175,65 @@ class UserInputTests(NativeRuntimeCase):
         self.assertNotEqual(result.status, "completed")
         self.assertRegex(str(result.error), "(?i)(budget|runtime|deadline)")
         self.assertFalse(self.bridge.input_request_path.exists())
+
+    async def test_verification_handoff_stops_before_another_model_call(self):
+        calls = []
+
+        def script(history, prompt):
+            calls.append(prompt)
+            if len(calls) > 1:
+                self.fail("Manual verification must not need another model response")
+            return {
+                "type": "tool_call",
+                "tool": "ask_user",
+                "args": {
+                    "question": "Verification failed: fastapi is missing. Install it or run tests again?",
+                    "options": ["Install", "Run again"],
+                },
+            }
+
+        self.attempt.record.frozen = True
+        handle = self.start(self.controller(callback=script))
+        request = await self.question()
+        self.answer(request, "do not run it its ok Ill do it ")
+        result = await asyncio.wait_for(handle.result(), 3)
+        self.assertEqual(result.status, "canceled", result.error)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            self.attempt.record.verification_handoff["answer"],
+            "do not run it its ok Ill do it ",
+        )
+        types = [event.type for event in result.report.events]
+        self.assertLess(types.index("user_input.answered"), types.index("verification.deferred"))
+        self.assertEqual(types.count("verification.deferred"), 1)
+        self.assertFalse(self.bridge.input_request_path.exists())
+
+    def test_handoff_requires_explicit_verification_stop(self):
+        question = "Verification failed: missing fastapi dependency. Install it?"
+        for answer in (
+            "do not run it its ok Ill do it",
+            "don't run tests, I'll do it",
+            "skip the verification please",
+            "stop tests",
+            "I'll verify it myself; stop here.",
+        ):
+            with self.subTest(answer=answer):
+                self.assertTrue(hands_off_verification(question, answer))
+        for answer in (
+            "Install fastapi",
+            "don't run tests yet; first install fastapi",
+            "dont run it, but fix server.py first",
+            "don't install anything, run tests",
+            "don't run tests. Install fastapi first",
+            "I'll install fastapi myself",
+            "I'll handle dependency setup myself",
+            "I'll do it",
+            "I cannot resolve dependency issue. Please clarify environment setup.",
+            "",
+        ):
+            with self.subTest(answer=answer):
+                self.assertFalse(hands_off_verification(question, answer))
+        self.assertFalse(hands_off_verification("Which server framework?", "do not run it"))
 
     async def test_headless_questions_decline_and_do_not_authorize_later_writes(self):
         self.assertEqual(

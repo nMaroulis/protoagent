@@ -9,7 +9,7 @@ from protolink.types import TransportType
 
 from .. import tools
 from ..checkpoints import checkpoint_store
-from ..editing import edit_tool
+from ..editing import edit_tool, workspace_file_tool
 from ..runtime_policy import WorkspacePolicy
 from ..task_record import add_task_tools
 from ..tools import workspace_root
@@ -32,9 +32,15 @@ exploring after the requested edits or promise to run checks yourself.
 
 Read the assigned source using read_file(path, start_line, end_line). Use edit_file
 with one exact old/new replacement and the returned revision. Prefer it over
-regenerating a file. Use create_file for new files and replace_file only for
+regenerating a file. Copy old literally from read_file.content, including spaces
+and line breaks. Use a short unique span, such as one import or one function;
+never reconstruct the old file or invent placeholder source. If a read is
+truncated, use next_line to read more before changing unseen code. After a
+no-change source rejection, reread and correct the selection within the native
+allowance. Do not retry denied, interrupted or uncertain writes.
+Use create_file for new files and replace_file only for
 small complete replacements. Follow task_status criteria and file scope. Paths
-must be absolute and beneath the project root; parent directories must already
+may be project-relative or absolute beneath the project root; parent directories must already
 exist. The native tools reject symlinks. Ask Architect for an explicitly approved
 command if a missing directory must be created before a later edit attempt.
 For bootstrap_checks, create focused stdlib unittest regressions in root
@@ -152,8 +158,14 @@ def create_coder_agent(
         roots=[workspace_root(workspace)],
         checkpoints=checkpoints if checkpoints is not None else checkpoint_store(workspace),
     ):
-        agent.add_tool(tool)
+        agent.add_tool(
+            workspace_file_tool(tool, workspace)
+            if tool.name in {"create_file", "replace_file"}
+            else tool
+        )
+    agent.execution_version += ":protoagent-file-paths-1"
     agent.add_tool(edit_tool(agent.tools["replace_file"], workspace))
+    agent.execution_version += ":protoagent-source-feedback-1"
 
     @agent.tool(capabilities=["workspace.read"])
     def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> dict:

@@ -65,9 +65,11 @@ def create_verifier_agent(
         approval_handler=approval_handler,
     )
     native = process_tool_with_identity(
-        process_tool(max_timeout_seconds=600, max_output_bytes=32768)
+        process_tool(max_timeout_seconds=600, max_output_bytes=32768),
+        workspace,
     )
     agent.add_tool(native)
+    agent.execution_version += ":protoagent-command-paths-2"
     if attempt is not None and attempt.record is not None:
         agent.add_tool(check_tool(native, attempt.record))
     return agent

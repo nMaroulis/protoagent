@@ -254,7 +254,7 @@ class EngineCorrectionTests(NativeRuntimeCase):
                 {
                     "type": "tool_call",
                     "tool": "plan_task",
-                    "args": {"paths": [], "criteria": ["Fix value"], "check_ids": []},
+                    "args": {"paths": [], "criteria": [], "check_ids": []},
                 },
             ],
             max_tool_corrections=1,

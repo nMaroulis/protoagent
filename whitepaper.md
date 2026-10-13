@@ -114,6 +114,18 @@ The diagram shows responsibility and evidence flow. It does not require every
 request to traverse every worker. A direct answer, a repository explanation and
 a code change have different evidence requirements.
 
+Selective specialization also applies before inference. The harness derives a
+request contract from the original user instruction and uses it to select the
+worker roster, tool surface, context and native capability ceilings. Conversation
+needs no repository scan, acceptance criteria or testing tools. A repository
+question needs evidence access; an explicit verification request also needs a
+command worker; an editing request needs the coding workflow. This removes
+irrelevant choices from a small model's input and enforces the boundary through
+ProtoLink permissions rather than relying solely on prompt compliance. A model
+cannot expand that authority by inventing a plan or interpreting declined
+clarification as a new instruction. Classification remains heuristic, so the
+design does not claim to recognize every conversational or task formulation.
+
 ## 4. Task state, memory and evidence
 
 The architecture distinguishes conversation memory, task state and source
@@ -135,7 +147,7 @@ resolved; it should not disappear merely because the next message sounds
 confident.
 
 The implementation retains these obligations in a runtime-owned task record.
-It initializes a conservative plan before inference and freezes the selected
+For editing and verification, it initializes a conservative plan before inference and freezes the selected
 criteria, write scope and checks once editing or final verification begins.
 Repairs inherit that plan. This prevents a failing result from becoming
 successful merely by weakening the requirements after the change.
@@ -210,6 +222,14 @@ results, deadlines and cancellation. A skipped or expired question contains no
 answer, and feedback does not expand execution authority. This mechanism can
 reduce pressure on a small model to guess; its effect on correctness and user
 effort still requires measurement.
+
+Feedback can also reduce execution authority. When the user explicitly takes
+over verification, the harness should honor that decision without relying on
+another model response. Applied edits, measured failures and unsatisfied checks
+remain separate facts: a handoff stops further commands and repair, but does
+not turn a failed check into a pass or establish acceptance. Keeping this small
+application decision outside inference reduces both latency and the chance
+that a small model misinterprets the user's stop instruction.
 
 Separating test design from editing can provide another perspective on a
 change. It does not establish independent correctness: both workers may use the
@@ -287,13 +307,39 @@ verify a change. Explicit project configuration remains authoritative. If no
 usable runner exists, approved edits may be applied while the task remains
 unverified and incomplete.
 
+Check specifications also need an explicit execution environment. In an
+embedded runtime, the interpreter loading dependencies and the subprocess
+interpreter can differ. Automatic selection should preserve the project's
+virtual environment, or the active runtime environment when no project one is
+available, without probing or installing dependencies during discovery. The
+chosen executable and environment must remain visible before approval; their
+selection alone does not prove that project dependencies are installed.
+
+Routine command preparation should also be software responsibility. A small
+model can name an installed program and a project-relative working directory;
+the harness resolves those inputs into exact paths before native authorization.
+Executable lookup does not require inheriting the host's environment. A rejected
+preparation request should return no-change feedback before child dispatch,
+while denial and errors after execution remain stopping conditions. Keeping
+input correction distinct from replay avoids turning an ordinary missing PATH
+or invalid limit into a failed workflow, without weakening the approval boundary.
+
+Verification must account for changes to test layout as well as source content.
+A frozen discovery command can remain valid when tests move into a discoverable
+package, provided the new test paths and package markers enter revision capture.
+A successful process that no longer discovers tests remains insufficient.
+
 Planning mistakes should return compact corrective feedback, including valid
 check identifiers, while preserving the previous plan. The same principle
 applies to a stale source revision or an ambiguous exact-edit proposal rejected
 before any write is prepared. The application must explicitly guarantee that
 the rejected request made no changes; an ordinary exception cannot supply that
 guarantee. The kernel records rejection separately from successful execution,
-and rejection provides no evidence for completion.
+and rejection provides no evidence for completion. For an exact edit, source
+validation can be represented as a read-only action that emits typed no-change
+feedback. Only a valid proposal becomes an effectful native replacement with
+write authorization and an exact diff approval. This keeps input correction
+separate from retrying a mutation that may already have happened.
 
 A small model can correct such a request within the current run without a
 separate retry agent. A shared request-correction allowance bounds tool,
@@ -452,6 +498,13 @@ run scope; a UI display alone cannot certify execution or completion. Another
 frontend would need to implement the approval, live question and cancellation contracts before
 it could operate the same harness.
 
+Review and authorization are distinct operator actions. Approval screens name
+the operation and its phase: baseline measurement, final checking, preparation
+or a file change. Viewing command details or a diff leaves execution paused;
+an explicit decision authorizes or denies the native request. The interface
+tracks that request's lifetime and closes both approval and review views when
+the native wait ends, without sending a late decision to another operation.
+
 Operator inspection can also remain outside inference. The CLI provides shallow
 directory listing, folder navigation and a read-only file viewer with bounded
 previews. `/ls`, `/browse`, `/open` and `/cat` make repository inspection available
@@ -463,15 +516,18 @@ do not create execution or verification evidence.
 
 | Mechanism | Practical behavior |
 | --- | --- |
+| Request routing | RunContract selects the per-turn workers, tools, prompt and native RunContext permission ceilings. Recognized conversation uses Architect without tools or project/check discovery. Repository questions omit Coder, Tester and Verifier; explicit verification adds Verifier. |
 | Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
 | Worker handoff | Small-profile local runs expose fixed typed reads, `coder(task)`, optional `tester(task)`, Verifier checks and enabled external operations. Prepared calls reach original workers through native ProtoLink child supervision. Other profiles/transports retain native delegation. Low-level packet preparation remains an unexecuted context operation. |
-| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique old span and a matching revision before preparing a native recoverable write. |
+| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique observed span and matching revision. Invalid selections execute only read validation feedback through native bounded correction; valid proposals prepare native recoverable writes with exact approval. Project-relative create/replace inputs preserve native path and symlink guards. |
 | Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
 | Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
 | Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
 | User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
 | Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
-| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection provides conventional fallbacks without executing discovery commands. Python commands select an external interpreter, preferring the project's virtual environment, rather than the embedding CLI host executable. |
+| Manual verification | A prepared-tool adapter consumes the validated native answer and uses ProtoLink cancellation to honor an explicit verification stop without another model call. Applied changes remain `unverified`, verification is `deferred`, failed receipts remain intact and no repair is started. Uncertain effects, denial and stale evidence take precedence. |
+| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection supplies fallbacks without executing discovery commands. Omitted/empty code check selections retain defaults. Narrowed bootstrap scopes must include regression files. A runner without existing tests supplies no coding baseline; changes and regressions precede final checking. |
+| Command preparation | Project-relative cwd and bare programs are resolved before native approval without inheriting environment values. Native preparation validation in the small local interface returns typed no-change rejection before child dispatch. Defaults fit configured execution ceilings; the engine owns execution, correction budgets and cleanup. |
 | Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
 | Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |
 | MCP access | Three fixed broker tools provide name discovery, one exact schema and an allowlisted invocation. Pages contain at most 12 descriptors; schemas over 12,000 characters are rejected and results over 6,000 characters are marked truncated. |

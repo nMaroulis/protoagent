@@ -55,7 +55,16 @@ _READ_ONLY_WRITE_CLAUSE = re.compile(
 _VERIFICATION_PREFIX = re.compile(
     r"^\s*(?:please\s+)?(?:run|execute|verify|check|build|test|lint)\b", re.IGNORECASE
 )
-_GREETING = re.compile(r"^\s*(hi|hello|hey|thanks|thank you)\W*$", re.IGNORECASE)
+_VERIFICATION_CLAUSE = re.compile(
+    r"(?:\b(?:and|then|also|but)\b|[,:;.!?])\s+(?:please\s+)?"
+    r"(?:run|execute|verify|check|build|test|lint)\b",
+    re.IGNORECASE,
+)
+_GREETING = re.compile(
+    r"^\s*(?:(?:hi|hello|hey)(?:\s+(?:there|protoagent))?|thanks|thank you|"
+    r"good\s+(?:morning|afternoon|evening)|how\s+are\s+you|what\s+can\s+you\s+do)\W*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,17 @@ class RunContract:
         data["expected_workers"] = list(self.expected_workers)
         data["expected_artifacts"] = list(self.expected_artifacts)
         return data
+
+    def permissions(self, scopes: tuple[str, ...]) -> dict[str, str]:
+        """Native capability ceilings derived from the original request, before inference."""
+        denied = set()
+        if self.task_kind == "direct-answer":
+            denied.update(scopes)
+        elif not self.requires_write:
+            denied.update({"filesystem.write", "filesystem.restore"})
+            if self.task_kind != "workspace-verification":
+                denied.update({"process.execute", "task.manage"})
+        return {scope: "deny" if scope in denied else "allow" for scope in scopes}
 
 
 def infer_run_contract(user_prompt: str) -> RunContract:
@@ -114,7 +134,9 @@ def infer_run_contract(user_prompt: str) -> RunContract:
         )
     )
     write_intent = not forbidden_write and _has_write_intent(prompt)
-    verification_intent = not write_intent and bool(_VERIFICATION_PREFIX.match(prompt))
+    verification_intent = not write_intent and bool(
+        _VERIFICATION_PREFIX.match(prompt) or _VERIFICATION_CLAUSE.search(prompt)
+    )
     expected_workers = ("explorer", "coder") if write_intent else ("explorer",)
     if verification_intent:
         expected_workers = ("explorer", "verifier")

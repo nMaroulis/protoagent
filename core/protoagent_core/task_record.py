@@ -201,19 +201,27 @@ class TaskRecord:
     frozen: bool = False
     forbids_write: bool = False
     clarifications: dict[str, dict[str, str]] = field(default_factory=dict)
+    verification_handoff: dict[str, str] | None = None
 
     @classmethod
-    def create(cls, workspace: str, objective: str) -> TaskRecord:
+    def create(cls, workspace: str, objective: str, *, contract=None) -> TaskRecord:
         from .run_contracts import infer_run_contract
 
-        checks = discover_checks(workspace)
+        workspace_task = (
+            contract is None
+            or contract.requires_write
+            or (contract.task_kind == "workspace-verification")
+        )
+        checks = discover_checks(workspace) if workspace_task else {}
         return cls(
             workspace,
             objective,
             checks,
             tuple(checks),
-            (objective[:1000],),
-            forbids_write=infer_run_contract(objective).forbids_write,
+            (objective[:1000],) if workspace_task else (),
+            forbids_write=not contract.requires_write
+            if contract is not None
+            else infer_run_contract(objective).forbids_write,
         )
 
     def plan(
@@ -234,13 +242,13 @@ class TaskRecord:
             )
         if len(paths) > 16:
             raise self._plan_rejection("invalid_paths", "A worker task may target at most 16 paths")
-        if check_ids is None:
+        docs_only = bool(paths) and all(p.lower().endswith((".md", ".rst", ".txt")) for p in paths)
+        if check_ids is None or (not check_ids and not docs_only):
             check_ids = list(self.selected)
         if len(check_ids) > 16:
             raise self._plan_rejection(
                 "invalid_check_ids", "Select at most 16 repository check IDs"
             )
-        docs_only = bool(paths) and all(p.lower().endswith((".md", ".rst", ".txt")) for p in paths)
         if any(x not in self.checks for x in check_ids):
             raise self._plan_rejection(
                 "unknown_check_ids",
@@ -251,7 +259,32 @@ class TaskRecord:
                 "check_required",
                 "Select at least one available check ID, or omit check_ids to keep the default selection",
             )
-        self.allowed_paths = tuple(str(safe_path(p, self.workspace)) for p in paths)
+        allowed_paths = tuple(str(safe_path(p, self.workspace)) for p in paths)
+        from .run_contracts import infer_run_contract
+
+        contract = infer_run_contract(self.objective)
+        bootstrap_needs_tests = any(
+            self.checks[key].source == PYTHON_BOOTSTRAP_SOURCE
+            and key not in self.baseline_check_ids()
+            for key in check_ids
+        )
+        if (
+            contract.requires_write
+            and not contract.allows_unverified_docs
+            and bootstrap_needs_tests
+            and allowed_paths
+            and not any(
+                Path(path).parent == Path(self.workspace) and Path(path).match("test_*.py")
+                for path in allowed_paths
+            )
+        ):
+            raise ToolRejectedError(
+                "The bootstrap runner needs regression tests, but the proposed write scope excludes them",
+                code="regression_scope_missing",
+                details={"paths": paths, "required_test_pattern": "root test_*.py"},
+                suggestion="Include a focused root test_*.py regression file alongside implementation paths, or keep the default unrestricted project scope by omitting plan_task. Do not drop required checks.",
+            )
+        self.allowed_paths = allowed_paths
         self.criteria = tuple(criteria)
         self.selected = tuple(dict.fromkeys(check_ids))
         return self.snapshot()
@@ -275,6 +308,38 @@ class TaskRecord:
     def dependencies(self) -> set[str]:
         paths = set(self.source_paths)
         for key in self.selected:
+            check = self.checks[key]
+            if check.source != ".protoagent/project.json" and check.argv[1:] == (
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                ".",
+                "-p",
+                "test_*.py",
+                "-q",
+            ):
+                # A root runner remains frozen when tests move into packages.
+                # Capture its current test inputs, including new package markers,
+                # without changing the command or trusting exit zero alone.
+                pending = [Path(self.workspace)]
+                while pending:
+                    directory = pending.pop()
+                    for child in directory.iterdir():
+                        if child.is_symlink():
+                            continue
+                        if child.is_file() and (
+                            child.match("test_*.py") or child.name == "__init__.py"
+                        ):
+                            paths.add(str(child))
+                            if len(paths) > 512:
+                                raise ValueError(
+                                    "Check dependencies exceed 512 files; narrow project check paths"
+                                )
+                        elif child.is_dir():
+                            marker = child / "__init__.py"
+                            if marker.is_file() and not marker.is_symlink():
+                                pending.append(child)
             for raw in self.checks[key].paths:
                 path = Path(raw)
                 if path.is_dir():
@@ -353,12 +418,22 @@ class TaskRecord:
         self.reports[role] = value
         return value
 
+    def baseline_check_ids(self) -> list[str]:
+        """A bootstrap runner has no existing baseline until test files exist."""
+        bootstrap_ready = any(path.is_file() for path in Path(self.workspace).glob("test_*.py"))
+        return [
+            key
+            for key in self.selected
+            if self.checks[key].source != PYTHON_BOOTSTRAP_SOURCE or bootstrap_ready
+        ]
+
     def snapshot(self) -> dict[str, Any]:
         return {
             "objective": self.objective[:1000],
             "acceptance_criteria": list(self.criteria),
             "allowed_paths": list(self.allowed_paths),
             "required_checks": list(self.selected),
+            "baseline_check_ids": self.baseline_check_ids(),
             "available_check_ids": list(self.checks),
             "bootstrap_checks": [
                 key for key, check in self.checks.items() if check.source == PYTHON_BOOTSTRAP_SOURCE
@@ -368,13 +443,16 @@ class TaskRecord:
             "frozen": self.frozen,
             "forbids_write": self.forbids_write,
             "user_clarifications": {key: dict(value) for key, value in self.clarifications.items()},
+            "verification_handoff": dict(self.verification_handoff)
+            if self.verification_handoff
+            else None,
         }
 
 
 def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
     if record is None:
         return
-    suffix = ":protoagent-task-plan-3"
+    suffix = ":protoagent-task-plan-5"
     if not agent.execution_version.endswith(suffix):
         agent.execution_version += suffix
 
@@ -389,7 +467,7 @@ def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
         def plan_task(
             paths: list[str], criteria: list[str], check_ids: list[str] | None = None
         ) -> dict[str, Any]:
-            """Set criteria and write paths before editing. Omit check_ids to keep defaults; use only available_check_ids. Invalid plans receive native no-change rejection feedback."""
+            """Set criteria and write paths before editing. Omitted/empty check_ids keep defaults for code; use only available_check_ids. Include root test_*.py files for a bootstrap runner without tests. Invalid plans receive native no-change rejection feedback."""
             return {"success": True, **record.plan(paths, criteria, check_ids)}
 
         @agent.tool(capabilities=["task.manage"])

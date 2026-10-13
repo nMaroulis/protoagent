@@ -124,6 +124,36 @@ class TaskWorkflowTests(NativeRuntimeCase):
         self.assertFalse(acceptance.completion["satisfied"])
         self.assertFalse(acceptance.repairable)
 
+    async def test_manual_verification_keeps_failures_and_stale_or_uncertain_precedence(self):
+        record = self.configure_check("raise SystemExit(1)")
+        target = self.root / "sample.py"
+        written = await self.tool(
+            self.coder, "create_file", {"path": str(target), "content": "value = 42\n"}
+        )
+        checked = await self.tool(self.verifier, "run_check", {"check_id": "regression"})
+        record.verification_handoff = {
+            "request_id": "validated-answer",
+            "question": "Verification failed. Retry tests?",
+            "answer": "Skip tests; I'll do it",
+        }
+        accepted = await self.accept(written, checked)
+        self.assertEqual(accepted.completion["outcome"], "unverified")
+        self.assertFalse(accepted.completion["satisfied"])
+        self.assertFalse(accepted.completion["verified"])
+        self.assertFalse(accepted.repairable)
+        self.assertEqual(accepted.verification["status"], "deferred")
+        self.assertEqual(accepted.verification["last_attempt_status"], "failed")
+        self.assertEqual(accepted.verification["results"][0]["exit_code"], 1)
+        target.write_text("changed outside the run\n")
+        stale = await self.accept(written, checked)
+        self.assertNotEqual(stale.completion["outcome"], "unverified")
+        self.assertEqual(stale.verification["status"], "stale")
+        self.assertFalse(stale.repairable)
+        self.attempt.external_uncertain = True
+        uncertain = await self.accept(written, checked)
+        self.assertEqual(uncertain.completion["outcome"], "uncertain")
+        self.assertFalse(uncertain.repairable)
+
     async def test_partial_check_plan_is_not_verified(self):
         record = self.configure_check()
         record.checks["second"] = CheckSpec(

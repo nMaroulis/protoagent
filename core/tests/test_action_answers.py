@@ -48,7 +48,8 @@ class ActionAnswerTests(NativeRuntimeCase):
                 if native:
                     tools = {tool["function"]["name"] for tool in requests[0]["tools"]}
                     self.assertIn("read_file", tools)
-                    self.assertIn("run_check", tools)
+                    self.assertNotIn("run_check", tools)
+                    self.assertNotIn("coder", tools)
                     self.assertNotIn("worker_packet", tools)
                     self.assertEqual(
                         result["context_admission"]["architect"]["schema_tokens"],
@@ -63,7 +64,7 @@ class ActionAnswerTests(NativeRuntimeCase):
                     )
                 )
 
-    async def run_replies(self, messages, *, native=False):
+    async def run_replies(self, messages, *, native=False, prompt="What's this project about?"):
         requests = []
         replies = iter(messages)
 
@@ -88,7 +89,7 @@ class ActionAnswerTests(NativeRuntimeCase):
             )
             with patch("protoagent_core.agents.architect.create_selected_llm", return_value=llm):
                 result = await _run_agent_deck(
-                    "What's this project about?",
+                    prompt,
                     "ollama",
                     "small",
                     str(self.root),
@@ -159,15 +160,19 @@ class ActionAnswerTests(NativeRuntimeCase):
 
         result, requests = await self.run_replies(
             [
-                plan({"paths": ["sample.py"], "criteria": ["Value is 42"], "check_ids": []}),
+                plan(
+                    {"paths": ["sample.py"], "criteria": ["Value is 42"], "check_ids": ["invented"]}
+                ),
                 plan({"paths": ["sample.py", "test_sample.py"], "criteria": ["Value is 42"]}),
                 {"content": "Plan includes the runner and a regression test."},
             ],
             native=True,
+            prompt="Run the tests",
         )
-        self.assertEqual(result["status"], "completed", result["answer"])
+        # A corrected plan alone cannot complete a verification request.
+        self.assertEqual(result["status"], "incomplete", result["answer"])
         self.assertEqual(len(requests), 3)
-        self.assertIn("check_required", json.dumps(requests[1]["messages"]))
+        self.assertIn("unknown_check_ids", json.dumps(requests[1]["messages"]))
         self.assertIn("python-tests", json.dumps(requests[1]["messages"]))
         self.assertEqual((self.root / "sample.py").read_text(), "value = 0\n")
         self.assertTrue(any(event["type"] == "action.rejected" for event in result["run_events"]))
@@ -207,12 +212,21 @@ class ActionAnswerTests(NativeRuntimeCase):
                 {"content": "A task management service."},
             ],
             native=True,
+            prompt="Run the tests",
         )
-        self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(result["status"], "incomplete", result["answer"])
         self.assertEqual(len(requests), 3)
         self.assertIn("unsupported_inference", json.dumps(requests[1]["messages"]))
         self.assertIn("A task management service", json.dumps(requests[2]["messages"]))
         self.assertFalse(any(event["type"] == "action.failed" for event in result["run_events"]))
+
+    async def test_native_greeting_has_no_tool_schemas_or_coding_packet(self):
+        result, requests = await self.run_replies([{"content": "Hi!"}], native=True, prompt="hi")
+        self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(len(requests), 1)
+        self.assertFalse(requests[0].get("tools"))
+        self.assertNotIn("acceptance_criteria", json.dumps(requests[0]["messages"]))
+        self.assertEqual(result["context_admission"]["architect"]["schema_tokens"], 0)
 
     async def test_native_delegation_reads_readme_and_returns_project_explanation(self):
         (self.root / "README.md").write_text("# TaskFlow\nA small task management service.\n")

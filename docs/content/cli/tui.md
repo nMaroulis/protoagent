@@ -301,7 +301,11 @@ When a user submits a task:
 3. A temp progress JSONL file is created.
 4. Python is called through `call_process_prompt_with_progress`.
 5. The TUI tails progress events and handles navigation every 32 ms.
-6. Native approval and user-question requests are displayed as modals.
+6. Native approval and user-question requests are displayed as modals. Approval
+   titles distinguish commands/checks from file changes. V views details/diff;
+   Y approves execution and N/Esc denies. Inside a review, Enter/Esc returns
+   without deciding and Y/N can decide directly. Reviews close when the native
+   wait ends, including cancellation and runtime expiry.
 7. Esc or Ctrl-C writes a cancellation request.
 8. The final JSON response is parsed into `CoreResponse`.
 9. The response finalizes the existing message and is recorded in `sessions.json`.

@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-BINARY = ROOT / "cli/target/release/proto-cli"
+BINARY = Path(os.environ.get("PROTOAGENT_TEST_CLI", str(ROOT / "cli/target/release/proto-cli")))
 CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 MOCK = """
 import asyncio, logging, os, sys
@@ -45,6 +45,61 @@ class SlowMock(MockLLM):
             await asyncio.sleep(0.04)
             yield response[offset:offset + 8]
 factory.create_llm = lambda *args, **kwargs: SlowMock(default_response='Fixture answer complete.')
+"""
+
+APPROVAL_MOCK = """
+import os
+from pathlib import Path
+import protoagent_core.models as models
+import protoagent_core.agent_engine as engine
+import protolink.llms.factory as factory
+from protolink.llms.mock_client import MockLLM
+models.model_startup_problem = lambda: None
+engine.model_startup_problem = lambda: None
+project = Path(os.environ['PROTOAGENT_TUI_FIXTURE_PROJECT'])
+counts = {}
+def respond(history, prompt):
+    role = 'coder' if 'Your registered name is coder.' in history.to_list()[0]['content'] else 'architect'
+    step = counts.get(role, 0)
+    counts[role] = step + 1
+    if step:
+        return {'type':'final', 'content':'Fixture action finished.'}
+    if role == 'coder':
+        return {'type':'tool_call','tool':'replace_file','args':{'path':str(project/'sample.py'),'content':'value = 42\\n'}}
+    if os.environ.get('PROTOAGENT_TUI_FIXTURE_DIFF') == '1':
+        return {'type':'tool_call','tool':'coder','args':{'task':'Change sample.py value to 42.'}}
+    return {'type':'tool_call','tool':'run_check','args':{'check_id':'python-tests','phase':'baseline'}}
+factory.create_llm = lambda *args, **kwargs: MockLLM(response_callback=respond)
+"""
+
+HANDOFF_MOCK = r"""
+import json, os
+from pathlib import Path
+import protoagent_core.models as models
+import protoagent_core.agent_engine as engine
+import protolink.llms.factory as factory
+from protolink.llms.mock_client import MockLLM
+models.model_startup_problem = lambda: None
+engine.model_startup_problem = lambda: None
+project = Path(os.environ['PROTOAGENT_TUI_FIXTURE_PROJECT'])
+counts = {}
+def respond(history, prompt):
+    role = 'coder' if 'Your registered name is coder.' in history.to_list()[0]['content'] else 'architect'
+    step = counts.get(role, 0)
+    counts[role] = step + 1
+    Path(os.environ['PROTOAGENT_CONFIG_DIR'], 'model-calls.json').write_text(json.dumps(counts))
+    if role == 'coder':
+        if step == 0:
+            return {'type':'tool_call','tool':'replace_file','args':{'path':str(project/'sample.py'),'content':'value = 42\n'}}
+        return {'type':'final','content':'Updated sample.py.'}
+    if step == 0:
+        return {'type':'tool_call','tool':'coder','args':{'task':'Change sample.py value to 42.'}}
+    if step == 1:
+        return {'type':'tool_call','tool':'run_check','args':{'check_id':'regression','phase':'verify'}}
+    if step == 2:
+        return {'type':'tool_call','tool':'ask_user','args':{'question':'Verification failed: fastapi is missing. Install it or retry tests?','options':['Install', 'Retry']}}
+    raise RuntimeError('Manual handoff incorrectly continued model inference')
+factory.create_llm = lambda *args, **kwargs: MockLLM(response_callback=respond)
 """
 
 
@@ -103,7 +158,10 @@ class Screen:
 class Terminal:
     def __init__(self, fixture="offline"):
         self.temp = tempfile.TemporaryDirectory(prefix="protoagent-tui-test-")
-        self.directory = Path(self.temp.name)
+        self.directory = Path(self.temp.name) / "state"
+        self.directory.mkdir()
+        self.project = (Path(self.temp.name) / "workspace").resolve()
+        self.project.mkdir()
         (self.directory / "config.json").write_text(
             json.dumps(
                 {
@@ -118,7 +176,7 @@ class Terminal:
             )
         )
         (self.directory / "project.json").write_text(
-            json.dumps({"active_project": str(self.directory)})
+            json.dumps({"active_project": str(self.project)})
         )
         if fixture == "mock":
             (self.directory / "sitecustomize.py").write_text(MOCK)
@@ -135,6 +193,38 @@ class Terminal:
             (self.directory / "sitecustomize.py").write_text(
                 "import protoagent_core.agent_engine as engine\nengine.answer_help_question = lambda *args: '{invalid JSON}'\n"
             )
+        elif fixture.startswith("approval"):
+            (self.directory / "sitecustomize.py").write_text(APPROVAL_MOCK)
+            if fixture == "approval-diff-expired":
+                (self.project / "sample.py").write_text("value = 0\n")
+            else:
+                (self.project / "test_sample.py").write_text(
+                    "import unittest\nfrom pathlib import Path\nclass Regression(unittest.TestCase):\n"
+                    "    def test_command(self):\n        Path(__file__).with_name('check-executed').write_text('ran')\n"
+                    "        self.assertTrue(True)\n"
+                )
+        elif fixture == "handoff":
+            (self.directory / "sitecustomize.py").write_text(HANDOFF_MOCK)
+            (self.project / "sample.py").write_text("value = 0\n")
+            (self.project / ".protoagent").mkdir()
+            (self.project / ".protoagent/project.json").write_text(
+                json.dumps(
+                    {
+                        "checks": [
+                            {
+                                "id": "regression",
+                                "argv": [
+                                    str(ROOT / ".venv/bin/python"),
+                                    "-c",
+                                    "raise ModuleNotFoundError(\"No module named 'fastapi'\")",
+                                ],
+                                "env": {},
+                                "paths": ["sample.py"],
+                            }
+                        ]
+                    }
+                )
+            )
         environment = os.environ.copy()
         environment.update(
             {
@@ -147,8 +237,12 @@ class Terminal:
                     ]
                 ),
                 "TERM": "xterm-256color",
+                "PROTOAGENT_TUI_FIXTURE_PROJECT": str(self.project),
+                "PROTOAGENT_TUI_FIXTURE_DIFF": "1" if fixture == "approval-diff-expired" else "0",
             }
         )
+        if fixture.endswith("expired"):
+            environment["PROTOAGENT_RUN_MAX_SECONDS"] = "1.5"
         self.master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         self.screen = Screen()
@@ -197,9 +291,7 @@ class Terminal:
     def resize(self, width, height):
         self.screen.resize(width, height)
         offset = len(self.data)
-        fcntl.ioctl(
-            self.master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0)
-        )
+        fcntl.ioctl(self.master, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
         os.kill(self.child.pid, signal.SIGWINCH)
         return offset
 
@@ -216,6 +308,61 @@ class Terminal:
 
 @unittest.skipUnless(BINARY.is_file(), "Build the release CLI first")
 class TuiSmokeTests(unittest.TestCase):
+    def test_free_text_manual_verification_finishes_with_applied_diff_and_failed_evidence(self):
+        terminal = self.terminal("handoff")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Apply file change?", after=start)
+        offset = terminal.send("v")
+        terminal.wait_for("File change", after=offset)
+        offset = terminal.send("y")
+        terminal.wait_for("Run verification check?", after=offset)
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
+        offset = terminal.send("y")
+        terminal.wait_for("Architect has a question", after=offset)
+        offset = terminal.send("do not run it its ok Ill do it\r")
+        terminal.wait_for("Verification: deferred to you.", after=offset)
+        terminal.wait_for("Ask anything", after=offset)
+        terminal.wait_for("Changes applied: sample.py.", after=offset)
+        counts = json.loads((terminal.directory / "model-calls.json").read_text())
+        self.assertEqual(counts, {"architect": 3, "coder": 2})
+        self.assert_intact(terminal)
+
+    def test_command_details_require_an_explicit_decision(self):
+        terminal = self.terminal("approval-command")
+        start = terminal.send("Explain this project and run its baseline\r")
+        terminal.wait_for("Run baseline check?", after=start)
+        offset = terminal.send("v")
+        terminal.wait_for("Command details", after=offset)
+        terminal.wait_for("Viewing details has not approved", after=offset)
+        self.assertFalse((terminal.project / "check-executed").exists())
+        offset = terminal.send("\r")
+        terminal.wait_for("Run baseline check?", after=offset)
+        self.assertFalse((terminal.project / "check-executed").exists())
+        offset = terminal.send("v")
+        terminal.wait_for("Command details", after=offset)
+        offset = terminal.send("y")
+        terminal.wait_for("Ask anything", after=offset)
+        self.assertTrue((terminal.project / "check-executed").exists())
+
+    def test_command_details_close_when_native_approval_wait_expires(self):
+        terminal = self.terminal("approval-command-expired")
+        start = terminal.send("Explain this project and run its baseline\r")
+        terminal.wait_for("Run baseline check?", after=start)
+        offset = terminal.send("v")
+        terminal.wait_for("Command details", after=offset)
+        terminal.wait_for("waiting for your approval", after=offset)
+        terminal.wait_for("Ask anything", after=offset)
+        self.assertFalse((terminal.project / "check-executed").exists())
+
+    def test_file_diff_closes_when_native_approval_wait_expires(self):
+        terminal = self.terminal("approval-diff-expired")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Apply file change?", after=start)
+        offset = terminal.send("v")
+        terminal.wait_for("File change", after=offset)
+        terminal.wait_for("Ask anything", after=offset)
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 0\n")
+
     def terminal(self, fixture="offline"):
         terminal = Terminal(fixture)
         self.addCleanup(terminal.close)
@@ -238,9 +385,9 @@ class TuiSmokeTests(unittest.TestCase):
         self.assert_intact(terminal)
         terminal.command("/agents tester off", "tester: off")
         self.assertFalse(
-            json.loads((terminal.directory / "config.json").read_text())[
-                "optional_agents"
-            ]["tester"]["enabled"]
+            json.loads((terminal.directory / "config.json").read_text())["optional_agents"][
+                "tester"
+            ]["enabled"]
         )
         terminal.command("/mcp remove missing", "Unknown MCP server: missing")
         self.assert_intact(terminal)
@@ -272,10 +419,7 @@ class TuiSmokeTests(unittest.TestCase):
         terminal.command("/agents", "Agents panel pinned.")
         terminal.send("/help fixture question\r")
         deadline = time.monotonic() + 3
-        while (
-            not (terminal.directory / "model-started").exists()
-            and time.monotonic() < deadline
-        ):
+        while not (terminal.directory / "model-started").exists() and time.monotonic() < deadline:
             terminal.pump()
         offset = terminal.send("\x1b[5~")  # PageUp
         terminal.wait_for("CHAT SCROLLED", after=offset)

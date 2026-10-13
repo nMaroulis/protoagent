@@ -533,6 +533,7 @@ mod streaming_tests {
             "uncertain",
             "blocked",
             "incomplete",
+            "unverified",
         ] {
             let mut app = TerminalApp::empty();
             app.push(Role::System, "Working", "trace");

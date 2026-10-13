@@ -49,6 +49,47 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ### Changed
 
+- Resolve bare command programs and project-relative working directories before
+  native approval, preserving explicit environments and interpreter identity.
+  Default output limits fit the configured ceiling. Small local calls return
+  native no-change correction feedback for invalid preparation before dispatch.
+- Preserve root unittest discovery when tests move into packages; capture moved
+  tests and package markers as current check dependencies without changing the
+  frozen runner. Agent/Guide prompts explain layout preparation and discovery.
+
+- Honor explicit manual verification answers immediately through native
+  cancellation, without another model call or repair. Report applied files as
+  unverified with verification deferred to the user, preserving failed checks
+  and native transport status. Uncertain effects and stale/denied work still stop.
+- Prefer the embedded CLI's injected virtual environment over bare framework
+  Python when a project has no local environment. Embedded regression coverage
+  requires subprocess and coding-oracle imports to see ProtoLink dependencies.
+- Clarify the 120-message live trace preview cap and continue delivering later
+  decisions and execution outcomes. Full stored native traces remain complete.
+
+- Return stale/non-unique exact-edit selections through read-only validation
+  feedback so ProtoLink's native correction loop can recover before a write is
+  prepared. Valid edits retain native write approval and recovery; ordinary
+  failures, denial and uncertain effects still stop. Coder copies short observed
+  source spans and paginates truncated reads.
+- Preserve default checks for an empty code plan selection and reject narrowed
+  bootstrap scopes that omit the required regression test files before mutation.
+- Size each turn's worker roster, tools, prompts and native permission ceilings
+  to its original request. Conversation skips project/check discovery and uses
+  Architect alone; repository questions cannot invoke Coder or commands;
+  explicit verification enables Verifier without editing authority. Recognize
+  verification clauses attached to questions and keep skipped clarification
+  from becoming an invented implementation requirement.
+- Distinguish command/check approvals from file-change approvals in the TUI.
+  V views details/diffs without approving; Y runs/applies, including from reviews.
+  Native expiry/cancellation closes both views and stale decisions are dropped.
+  Approval wait expiry reports a clear reason instead of missing-evidence jargon.
+- Expose available baseline IDs and avoid empty bootstrap baseline approvals
+  during coding tasks. Source inspection, changes and focused regressions precede
+  final checking when a project has no tests yet.
+- Expand Coder's project-relative create/replace paths before native preparation,
+  preserving native traversal, symlink, root, preimage, diff and approval checks.
+
 - Simplify the small-profile local worker interface with typed Explorer reads,
   Coder/Tester assignments and Verifier calls. Fixed prepared routes use native
   owned-child supervision and retain each worker's policies, approvals, budgets,

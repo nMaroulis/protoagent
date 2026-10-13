@@ -247,6 +247,12 @@ impl TerminalSurface {
         let mut cursor_visible = true;
         loop {
             if editor.is_empty() && !poll(next_blink.saturating_duration_since(Instant::now()))? {
+                // A resize can arrive before the event reader registers its
+                // signal handler during startup. Reconcile dimensions at the
+                // idle tick without repainting unchanged frames.
+                if self.dimensions != Some(size()) {
+                    self.render_frame(app, Some(&editor), true)?;
+                }
                 // Blink only the hardware cursor; idle frames and model state
                 // do not need to be repainted for the placeholder animation.
                 cursor_visible = !cursor_visible;

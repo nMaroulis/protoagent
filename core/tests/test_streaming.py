@@ -10,12 +10,35 @@ from protolink.llms.server.ollama_client import OllamaLLM
 from runtime_support import NativeRuntimeCase
 
 from protoagent_core.help_agent import _answer_help_question
-from protoagent_core.runtime import _run_agent_deck
+from protoagent_core.runtime import _append_event, _run_agent_deck
 from protoagent_core.runtime_storage import output_redaction
 from protoagent_core.streaming import LiveOutput, _final_content_prefix
 
 
 class StreamingTests(NativeRuntimeCase):
+    def test_trace_preview_cap_keeps_late_decisions_and_terminal_events_live(self):
+        events = []
+        with patch.dict("os.environ", {"PROTOAGENT_STREAM_TRACE_LIMIT": "20"}):
+            for number in range(30):
+                _append_event(
+                    events, f"Model step {number}", self.bridge, run_event={"type": "llm.started"}
+                )
+            for event_type in ("user_input.answered", "verification.deferred", "task.status"):
+                _append_event(
+                    events,
+                    event_type,
+                    self.bridge,
+                    run_event={"type": event_type, "final": event_type == "task.status"},
+                )
+        self.assertEqual(len(events), 21)
+        self.assertIn("The run continues", events[-1])
+        self.assertIn("/trace", events[-1])
+        live = [json.loads(line) for line in self.bridge.progress_path.read_text().splitlines()]
+        self.assertEqual(len(live), 24)
+        self.assertEqual(live[-1]["run_event"]["type"], "task.status")
+        self.assertTrue(live[-1]["run_event"]["final"])
+        self.assertIn("verification.deferred", json.dumps(live))
+
     async def exercise_stream(self, *, native=True, cancel=False, enabled=True, guide=False):
         release, delivered, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
         calls = []

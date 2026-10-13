@@ -29,9 +29,13 @@ approve or **N/Esc** to deny. The one-shot CLI prints the same preview.
 ```
 
 Arguments receive no implicit shell expansion. `env: {}` means an **empty
-environment**, not inherited credentials or PATH. Use an absolute executable
-or explicitly supply the PATH needed by the command. ProtoLink resolves and
-freezes the execution specification before approval. Registration runs nothing.
+environment**, not inherited credentials or PATH. Relative `cwd` resolves from
+the selected project. Bare program names resolve through explicit `env.PATH`
+or a fixed application system search path; `python`/`python3` without PATH use
+project/runtime interpreter selection. This resolves only the executable and
+does not add PATH to the child. Supply any environment required by the program.
+The exact absolute executable, directory, environment and limits enter native
+preparation and approval. Registration runs nothing.
 
 The local backend executes on the host, with the user's permissions. It can
 write outside the project or use the network, including with Scout disabled.
@@ -41,6 +45,18 @@ stdout/stderr**. Architect is instructed to pass all limits explicitly, usually
 120 seconds; ProtoLink's tool default is 60 seconds. Native runtime budgets may
 stop execution sooner. Truncation, timeout, cancellation and duration remain in
 the structured result.
+
+ProtoAgent's command adapter defaults to 60 seconds and 8192 output bytes, below
+its native ceilings. Unknown executables, invalid limits or nonexistent working
+directories receive no-change feedback before dispatch in the small local
+interface, allowing bounded input correction. Denied approvals and failures
+after dispatch remain stops.
+
+Moving root unittest tests into a folder requires an `__init__.py` package marker
+for the existing root runner to recurse into it. Approved `mkdir`/`mv` commands
+prepare the layout; Coder applies any package/import edits with their own diffs.
+These host commands have no automatic recovery or file diff. Final verification
+must still execute the selected check and find real tests.
 
 Esc/Ctrl-C goes through `RunHandle.cancel()`. ProtoLink cleans up POSIX process
 groups on cancellation, timeout and normal parent exit. Deliberately detached
@@ -60,6 +76,7 @@ complete with `applied=true` and `verified=false`.
 | `failed` | A recorded command failed or its execution evidence cannot be accepted. |
 | `stale` | A resource referenced by a check changed. |
 | `unverified` | No qualifying final repository check was executed. |
+| `deferred` | You explicitly chose to handle verification. Any previous failure remains recorded in `last_attempt_status` and command receipts. |
 
 Checks reference native revisions of changed files, worker-read sources and
 configured dependencies, bounded to 512 files and captured at preparation.
@@ -67,6 +84,16 @@ An external edit to those files also invalidates
 the check. This does not track every repository input, dependency or file a
 command can modify. A passing exit status is evidence for that command, not a
 proof that all behavior is correct. A write can be applied but remain unverified.
+
+If a verification question offers dependency installation or a retry, you may
+answer **"don't run it, I'll do it"** or **"I'll verify it myself; stop here"**.
+After edits or final checking have begun, this stops immediately with no further
+commands, model calls or repairs. The application status is `unverified`, and
+the response lists applied files separately from the last check's result.
+Checks are neither deleted from the frozen plan nor relabeled as passed;
+`satisfied=false` and `verified=false`. Uncertain effects, denial and stale
+revisions still require inspection. Esc skips the question without creating a
+manual verification decision.
 
 For Python projects with no checks, a predefined `python-tests` runner can execute
 new root `test_*.py` unittest regressions. Architect includes test creation in

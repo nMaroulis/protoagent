@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from protolink import RunAction
+from protolink import RunAction, ToolRejectedError
 from protolink.agents.subagents import current_subagent_supervisor
 from protolink.llms.delegation import validate_delegation_request
 from protolink.tools.prepared import PreparedTool
@@ -56,6 +56,25 @@ def install_worker_interface(agent) -> None:
             if supervisor is None or supervisor.agent is not agent:
                 raise RuntimeError("Worker calls require this Architect's active native supervisor")
             prepared = execution.authorization.action
+            if worker.card.name == "verifier" and target_tool in {"execute_command", "run_check"}:
+                # These native builders only inspect/resolve a command. Validate
+                # before child dispatch so preparation mistakes reach the
+                # controller's native correction loop, rather than becoming a
+                # failed delegated execution. The child still prepares and
+                # authorizes its exact command; no process runs here.
+                try:
+                    worker.tools[target_tool].action_builder(
+                        prepared.payload["args"], execution.context
+                    )
+                except ToolRejectedError:
+                    raise
+                except (ValueError, OSError) as error:
+                    raise ToolRejectedError(
+                        str(error),
+                        code="invalid_command_preparation",
+                        details={"tool": target_tool, "cwd_base": "project root"},
+                        suggestion="No child or command was executed. Use an existing project-relative cwd, an installed executable (or explicit env.PATH), timeout_seconds <= 600 and max_output_bytes <= 32768. Use run_check with a selected ID for final verification.",
+                    ) from error
             return await supervisor.call(
                 worker.card.name, action, prepared.payload, prepared.action_id
             )
@@ -97,4 +116,4 @@ def install_worker_interface(agent) -> None:
             if tool_name in worker.tools:
                 register(worker, tool_name, worker.tools[tool_name].func, "tool_call", tool_name)
     agent.protoagent_worker_interface = routes
-    agent.execution_version += ":protoagent-worker-interface-1"
+    agent.execution_version += ":protoagent-worker-interface-2"

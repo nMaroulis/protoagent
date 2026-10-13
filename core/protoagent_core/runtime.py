@@ -144,7 +144,7 @@ async def _run_agent_deck(
     context = RunContext(
         session_id=session_id,
         workspace_uri=Path(project).as_uri(),
-        permissions={scope: "allow" for scope in RUNTIME_SCOPES},
+        permissions=contract.permissions(RUNTIME_SCOPES),
         budget=_run_budget(provider, model, RunBudget),
         metadata={
             "application": "protoagent",
@@ -245,7 +245,7 @@ async def _run_agent_deck(
                 "approval_decisions": [],
             }
         checkpoints = checkpoint_store(project)
-        record = TaskRecord.create(project, user_prompt or prompt)
+        record = TaskRecord.create(project, user_prompt or prompt, contract=contract)
         attempt = AttemptState(project, checkpoints, authorization, record=record)
         urls = _runtime_urls()
         transport = _agent_transport()
@@ -285,8 +285,9 @@ async def _run_agent_deck(
             checkpoints=checkpoints,
             authorization=authorization,
             attempt=attempt,
+            run_contract=contract,
         )
-        if architecture == "single":
+        if architecture == "single" and contract.requires_write:
             from .task_record import add_task_tools
 
             single = deck["coder"]
@@ -300,7 +301,7 @@ async def _run_agent_deck(
 
             add_user_input_tool(single, bridge.ask_user, record)
             deck = {"architect": single}
-        elif architecture != "deck":
+        elif architecture not in {"deck", "single"}:
             raise ValueError("Unknown evaluation architecture")
         for agent in deck.values():
             agent.run_store = store
@@ -310,6 +311,7 @@ async def _run_agent_deck(
                     record,
                     fallback_window=8192 if prompt_profile["resolved"] == "small" else None,
                     compact_protocol=prompt_profile["resolved"] == "small",
+                    run_contract=contract,
                     cards=[worker.card for name, worker in deck.items() if name != "architect"]
                     if agent.card.name == "architect" and architecture != "single"
                     else (),
@@ -389,12 +391,25 @@ async def _run_agent_deck(
                 status = result.status
                 if workflow.uncertain or acceptance.completion["outcome"] == "uncertain":
                     status = "uncertain"
+                elif acceptance.completion["outcome"] == "unverified":
+                    status = "unverified"
                 elif status == "completed" and not acceptance.completion["satisfied"]:
                     status = acceptance.completion["outcome"]
                 if result.error and status == "completed":
                     status = "failed"
                 answer = _content_to_text(result.output) or workflow.answer
-                if status != "completed":
+                if status == "unverified":
+                    paths = [
+                        str(Path(path).relative_to(project))
+                        for path in acceptance.completion["applied_paths"]
+                    ]
+                    answer = (
+                        "Changes applied: " + ", ".join(paths) + "."
+                        if paths
+                        else "No file changes were applied."
+                    )
+                    answer += "\nStopped as requested; no further commands or repairs were run."
+                elif status != "completed":
                     detail = str(
                         result.error
                         or (
@@ -669,13 +684,38 @@ def _append_event(
         events.append(message)
         if bridge is not None:
             bridge.emit(message, run_event=run_event)
-    elif not events[-1].startswith("Stream trace limit reached"):
-        limit_message = (
-            f"Stream trace limit reached ({limit}); suppressing further event summaries."
-        )
-        events.append(limit_message)
-        if bridge is not None:
-            bridge.emit(limit_message)
+    else:
+        if not events[-1].startswith("Live trace preview limit"):
+            limit_message = (
+                f"Live trace preview limit ({limit}) reached. The run continues; "
+                "full events remain available in /trace."
+            )
+            events.append(limit_message)
+            if bridge is not None:
+                bridge.emit(limit_message)
+        # Keep decisions and outcomes visible after suppressing repetitive model
+        # summaries. The complete native report is stored independently.
+        event_type = str((run_event or {}).get("type", ""))
+        if bridge is not None and (
+            event_type.startswith(("approval.", "user_input."))
+            or (event_type == "task.status" and bool((run_event or {}).get("final")))
+            or event_type
+            in {
+                "action.completed",
+                "action.failed",
+                "action.denied",
+                "workflow.blocked",
+                "task.blocked",
+                "task.error",
+                "budget.exceeded",
+                "tool.correction.exhausted",
+                "verification.deferred",
+                "run.completed",
+                "run.failed",
+                "run.canceled",
+            }
+        ):
+            bridge.emit(message, run_event=run_event)
 
 
 def _run_event_summary(event: dict[str, Any]) -> str:

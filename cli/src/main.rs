@@ -3526,7 +3526,7 @@ mod embedded_python_tests {
                 let oracle = py
                     .import("protoagent_core.coding_eval")?
                     .getattr("oracle_result")?
-                    .call1((cwd.clone(), "assert 2 + 2 == 4\n"))?;
+                    .call1((cwd.clone(), "import protolink\nassert 2 + 2 == 4\n"))?;
                 assert!(oracle.get_item("passed")?.extract::<bool>()?);
                 Ok((
                     argv[0].clone(),
@@ -3542,7 +3542,7 @@ mod embedded_python_tests {
         );
         assert_eq!(&args[..2], &["-m", "unittest"]);
         let output = Command::new(python)
-            .args(["-c", "print('external-python-ok')"])
+            .args(["-c", "import protolink; print('external-python-ok')"])
             .current_dir(cwd)
             .env_clear()
             .envs(

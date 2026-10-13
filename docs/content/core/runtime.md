@@ -18,6 +18,13 @@ the project's checkpoint namespace, and constructs its agents. Each LLM-capable
 role gets its own configured LLM instance. Verifier and optional Scout/MCP have no
 LLM. Architect retains its conversation state; workers remain task-local.
 
+The original RunContract selects the roster before agent construction and sets
+native `RunContext.permissions`. Conversation builds only Architect and skips
+repository/check discovery. Questions keep read-only workers and omit coding
+planning tools; explicit verification adds Verifier and approved command access.
+File writes/restores remain denied unless the original request asks for editing.
+No model-produced plan or clarification response can raise those ceilings.
+
 | Native object | Application configuration |
 | --- | --- |
 | `AgentGroup` | Owns enabled agents; explicit transport mode also owns its Registry. Readiness, partial-start rollback and shutdown are native. |
@@ -47,7 +54,7 @@ flowchart LR
   R --> A
 ```
 
-Architect receives repository context. Small owned-local runs use fixed typed
+For repository work, Architect receives repository context. Small owned-local runs use fixed typed
 worker calls prepared with `PreparedTool` and executed by ProtoLink's child
 supervisor; other profiles/transports use normal `agent_call` execution.
 Both retain native child policies, approvals and receipts.
@@ -152,6 +159,18 @@ requirements. It consumes the validated native result and does not alter its
 execution receipt. Required clarification state that cannot fit still fails
 context admission explicitly rather than being silently truncated.
 
+A thin prepared-tool adapter observes the validated native answer before model
+continuation. After editing or final checking begins, an explicit verification
+stop, such as "don't run it, I'll do it" or "I'll verify it myself; stop here",
+records `verification.deferred` and cancels through ProtoLink's execution token.
+The application returns a deterministic `unverified` handoff with verification
+`deferred`; it needs no final model round and cannot route into repair. Native
+cancellation and failed command receipts remain intact, with the last measured
+verification status retained separately. Uncertain effects, denials and stale
+resources remain unresolved rather than being hidden by a handoff. A declined
+or expired question is not a handoff, and instructions to continue other work
+still use the ordinary native continuation path.
+
 This is continuation inside the current live run. ProtoLink also supports
 checkpointed questions with `Agent.resume(..., answer=...)`, but restartable
 coding execution requires preservation of application Graph state and remains
@@ -220,7 +239,11 @@ capability: native-tool text, including genuine JSON answers, passes through.
 Unrecognized envelopes wait for native `llm_final`. This projection never
 validates or dispatches actions; ProtoLink retains all execution authority.
 
-`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) limits summaries, not live text.
+`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) bounds the live summary preview,
+not execution steps, model text or the complete stored report. Reaching it
+displays a notice that the run continues and full events remain in `/trace`.
+Later approval/question outcomes, execution receipts and terminal events still
+reach the live UI. This preview cap is independent of the run's time budget.
 `PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native
 handles still consume execution once. Peer capabilities determine whether
 delegated output arrives live or with the final snapshot. Even an HTTP worker
@@ -252,6 +275,9 @@ reported as potentially effected work, never as an action that was not submitted
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
 
 Input and output token budgets are optional totals across model calls in a run.
+The runtime clock includes waiting for approvals and user answers. An explicit
+verification handoff finishes without spending the remaining time on another
+model reply; it does not extend or reset the native budget.
 They are unset unless explicitly configured. A model's context window applies to
 individual requests and does not set the aggregate run budget. Command execution
 is also bounded by its explicit limits and the remaining native runtime budget.

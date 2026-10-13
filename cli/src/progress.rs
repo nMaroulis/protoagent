@@ -128,6 +128,9 @@ pub(crate) struct RuntimeApproval {
     pub(crate) target: String,
     pub(crate) diff: String,
     pub(crate) preview: String,
+    pub(crate) check_id: String,
+    pub(crate) check_phase: String,
+    control_stamp: Option<(std::time::SystemTime, u64)>,
     request: Value,
 }
 
@@ -287,9 +290,16 @@ impl ProgressFile {
     }
 
     pub(crate) fn take_approval_request(&mut self) -> Option<RuntimeApproval> {
+        let before_stamp = control_stamp(&self.approval_request_path());
         let text = fs::read_to_string(self.approval_request_path()).ok()?;
         let request = serde_json::from_str::<Value>(&text).ok()?;
-        let approval = RuntimeApproval::from_value(request)?;
+        let mut approval = RuntimeApproval::from_value(request)?;
+        let after_stamp = control_stamp(&self.approval_request_path());
+        approval.control_stamp = if before_stamp == after_stamp {
+            after_stamp
+        } else {
+            None
+        };
         let presentation = format!(
             "{}:{}",
             approval.request_id,
@@ -304,7 +314,14 @@ impl ProgressFile {
         Some(approval)
     }
 
-    pub(crate) fn decide(&self, approval: &RuntimeApproval, approved: bool) -> std::io::Result<()> {
+    pub(crate) fn decide(
+        &self,
+        approval: &RuntimeApproval,
+        approved: bool,
+    ) -> std::io::Result<bool> {
+        if !self.approval_pending(approval) {
+            return Ok(false);
+        }
         let decision = serde_json::json!({
             "approved": approved,
             "request_id": approval.request_id,
@@ -313,7 +330,31 @@ impl ProgressFile {
             "decided_by": "protoagent-user",
             "metadata": {"interface": "rust-cli"}
         });
-        write_json_atomic(&self.approval_decision_path(), &decision)
+        write_json_atomic(&self.approval_decision_path(), &decision)?;
+        Ok(true)
+    }
+
+    pub(crate) fn approval_pending(&self, approval: &RuntimeApproval) -> bool {
+        // Native control files are replaced atomically. Avoid reparsing a large
+        // diff on every input poll while the exact presentation is unchanged.
+        let current_stamp = control_stamp(&self.approval_request_path());
+        if current_stamp.is_none() {
+            return false;
+        }
+        if approval.control_stamp.is_some() && current_stamp == approval.control_stamp {
+            return true;
+        }
+        fs::read_to_string(self.approval_request_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(RuntimeApproval::from_value)
+            .is_some_and(|current| {
+                current.request_id == approval.request_id
+                    && current.run_id == approval.run_id
+                    && current.fingerprint == approval.fingerprint
+                    && current.request.get("presentation_id")
+                        == approval.request.get("presentation_id")
+            })
     }
 
     pub(crate) fn request_cancel(&self, reason: &str) -> std::io::Result<()> {
@@ -528,6 +569,9 @@ impl RuntimeApproval {
             target,
             diff,
             preview,
+            check_id: value_string(metadata, &["check_id"]),
+            check_phase: value_string(metadata, &["check_phase"]),
+            control_stamp: None,
             request,
         })
     }
@@ -546,6 +590,45 @@ impl RuntimeApproval {
             })
             .unwrap_or_default()
     }
+
+    pub(crate) fn is_command(&self) -> bool {
+        self.action_name == "execute_command"
+    }
+
+    pub(crate) fn approval_title(&self) -> &str {
+        match self.check_phase.as_str() {
+            "baseline" => "Run baseline check?",
+            "verify" => "Run verification check?",
+            _ if self.is_command() => "Run command?",
+            _ if !self.diff.is_empty() => "Apply file change?",
+            _ => "Allow action?",
+        }
+    }
+
+    pub(crate) fn purpose(&self) -> &str {
+        match self.check_phase.as_str() {
+            "baseline" => "Measure existing tests before edits; file changes come separately.",
+            "verify" => "Run a check against the current files after editing.",
+            _ if self.is_command() => "Execute the shown command in the project folder.",
+            _ if !self.diff.is_empty() => "Apply the proposed file change shown in the diff.",
+            _ => "Execute the shown action after approval.",
+        }
+    }
+
+    pub(crate) fn approve_label(&self) -> &str {
+        if self.is_command() {
+            "[Y] RUN"
+        } else if !self.diff.is_empty() {
+            "[Y] APPLY"
+        } else {
+            "[Y] ALLOW"
+        }
+    }
+}
+
+fn control_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 trait EmptyString {
@@ -1587,6 +1670,47 @@ mod tests {
             .answer_question(&question, Some("late answer"))
             .unwrap();
         assert!(!progress.input_response_path().exists());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn approval_lifetime_tracks_the_exact_presentation_and_drops_late_decisions() {
+        let mut progress = ProgressFile::new("approval-lifetime");
+        let mut request = json!({
+            "request_id": "approval", "run_id": "run", "fingerprint": "fingerprint",
+            "presentation_id": 0,
+            "action": {"name": "execute_command", "capabilities": ["process.execute"],
+                "metadata": {"check_id": "python-tests", "check_phase": "baseline"},
+                "payload": {"arguments": {"argv": ["/python", "-m", "unittest"], "cwd": "/project"}},
+                "artifacts": [{"kind": "preview", "parts": [{"type": "json", "content": {"argv": ["/python", "-m", "unittest"]}}]}]
+            }
+        });
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        let approval = progress.take_approval_request().unwrap();
+        assert!(progress.approval_pending(&approval));
+        assert!(approval.is_command());
+        assert_eq!(approval.approval_title(), "Run baseline check?");
+        assert_eq!(approval.approve_label(), "[Y] RUN");
+        assert_eq!(approval.check_id, "python-tests");
+        assert!(approval.diff.is_empty());
+        assert!(!approval.preview.is_empty());
+        assert!(
+            !progress.approval_decision_path().exists(),
+            "Reading details must not approve"
+        );
+        request["fingerprint"] = json!("different-fingerprint-longer");
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        assert!(!progress.approval_pending(&approval));
+        assert!(!progress.decide(&approval, true).unwrap());
+        assert!(!progress.approval_decision_path().exists());
+        let current = super::RuntimeApproval::from_value(request.clone()).unwrap();
+        assert!(progress.approval_pending(&current));
+        request["presentation_id"] = json!(123);
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        assert!(!progress.approval_pending(&current));
+        fs::remove_file(progress.approval_request_path()).unwrap();
+        assert!(!progress.approval_pending(&approval));
+        assert!(!progress.decide(&approval, false).unwrap());
         progress.cleanup();
     }
 

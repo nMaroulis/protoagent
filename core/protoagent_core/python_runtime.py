@@ -27,7 +27,24 @@ def python_executable(workspace: str | Path | None = None) -> str:
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     names = (f"python{version}", "python3", "python.exe")
     # A regular Python process should retain its active environment.
-    candidates = [sys.executable, getattr(sys, "_base_executable", "")]
+    candidates = [sys.executable]
+    active = os.getenv("VIRTUAL_ENV")
+    if active:
+        candidates.extend(str(Path(active) / name) for name in ("bin/python", "Scripts/python.exe"))
+    if sys.prefix != sys.base_prefix:
+        candidates.extend(str(Path(sys.prefix) / "bin" / name) for name in names)
+    # The embedded CLI adds its dependency environment to sys.path without
+    # changing CPython's base prefix. Retain that environment for subprocesses,
+    # instead of selecting the bare framework Python which lacks its packages.
+    for entry in sys.path:
+        path = Path(entry)
+        if path.name != "site-packages":
+            continue
+        for root in path.parents:
+            if (root / "pyvenv.cfg").is_file():
+                candidates.extend(str(root / name) for name in ("bin/python", "Scripts/python.exe"))
+                break
+    candidates.append(getattr(sys, "_base_executable", ""))
     bindir = sysconfig.get_config_var("BINDIR")
     for directory in (Path(sys.prefix) / "bin", bindir, Path(sys.base_prefix) / "bin"):
         if directory:

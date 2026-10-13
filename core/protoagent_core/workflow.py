@@ -32,7 +32,10 @@ class CodingWorkflow:
             async def execute(self, task):
                 workflow.attempt.begin()
                 instruction = workflow.prompt
-                if workflow.attempt.record:
+                if workflow.attempt.record and (
+                    workflow.contract.requires_write
+                    or workflow.contract.task_kind == "workspace-verification"
+                ):
                     packet = workflow.attempt.record.snapshot()
                     packet.pop("available_checks", None)
                     instruction += "\n\nRuntime task packet:\n" + json.dumps(packet)

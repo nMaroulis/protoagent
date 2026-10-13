@@ -43,7 +43,7 @@ class EngineContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Current request", seen[0])
         self.assertIs(agent.llm.call_action.__func__, sync)
         self.assertIs(agent.llm.call_action_stream.__func__, stream)
-        self.assertTrue(agent.execution_version.endswith(":protoagent-context-3"))
+        self.assertTrue(agent.execution_version.endswith(":protoagent-context-5"))
         self.assertEqual(agent.llm.protoagent_context_admission["request_count"], 1)
 
     async def test_tool_offload_is_retrievable_and_keeps_full_receipt(self):

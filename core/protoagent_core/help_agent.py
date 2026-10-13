@@ -67,6 +67,11 @@ Manual:
   declines rather than inventing an answer. Questions and answers appear in the
   native trace; do not supply secrets. Feedback never grants execution approval.
   This is live continuation, not restartable execution after closing the app.
+  After edits, answer a verification question with "don't run it, I'll do it" or
+  "I'll verify it myself; stop here" to stop without another model call or repair.
+  Applied files remain, the application status is unverified and verification is
+  deferred to you. A previous failed check remains failed in the native evidence;
+  this does not mark the task satisfied. Uncertain effects still need inspection.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts
@@ -83,15 +88,33 @@ Manual:
   Legacy records are inspection-only; they cannot be natively restored.
 - Verifier runs test/build/lint argv through ProtoLink execute_command, with
   process.execute approval of argv, absolute cwd, explicit env and limits.
-  Use V to inspect the native JSON preview. No environment is inherited.
+  V views details or a file diff and does not approve execution. Y explicitly
+  runs a command or applies a file change; N/Esc denies from the approval screen.
+  Inside a review, Y/N decides and Enter/Esc returns without deciding. Native
+  expiry/cancellation closes approval and review modals automatically. Command
+  approvals have command details; Coder proposals have separate file diffs.
+  Baseline measures existing behavior; verification checks edited/current files.
+  No environment is inherited.
   Commands run on the host without sandbox isolation and may write files or
   use the network. The ceilings are 600 seconds and 32 KiB combined output.
+  execute_command accepts project-relative cwd (default '.') and env (default
+  empty), with defaults of 60 seconds and 8192 output bytes. Bare programs resolve
+  through explicit env.PATH or a fixed application search path; python/python3
+  prefer project/runtime Python without PATH. The preview shows exact absolute
+  paths. No parent environment is inherited. In the small local interface,
+  preparation mistakes produce no-change correction feedback before dispatch.
+  To move root unittest tests into test/ or tests/, use approved mkdir/mv commands
+  and ask Coder for __init__.py and necessary imports, retaining the frozen runner.
+  Moves are host commands, with no automatic file recovery. Zero tests never verifies.
 - Completion requires executed native changes and current resource revisions;
   approval or preview alone cannot prove execution. Checks report passed,
   failed, stale or unverified. Graph permits at most two repairs after completed
   nonzero checks. Edits precede checks within each attempt; denial, timeouts,
   stale evidence and uncertain effects stop repairs.
-- Recoverable file tools require POSIX, absolute project paths without symlinks
+- Coder accepts project-relative or absolute file paths. Relative create/replace
+  paths are joined to the selected project before native preparation; native
+  traversal, symlink and root restrictions still apply. Approved paths are absolute.
+  Recoverable file tools require POSIX, project paths without symlinks
   and existing parent directories. New files default to mode 0600. Directory
   creation needs an approved host command and a later edit run.
 - `/model` opens the provider/model picker. `/models` opens model inventory.
@@ -124,6 +147,13 @@ Manual:
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
   TaskRecord and RunContract, stateful Architect, task-local Explorer/Tester/Coder workers, tool-only Verifier, optional
   Scout, policy gate, completion guard, and current prompt profile.
+- Each turn exposes only the workers its original request needs. Greetings and
+  thanks use Architect alone, with no project scan, tests, tools or questions.
+  Repository questions use read-only evidence; explicit verification adds
+  Verifier; editing requests enable the coding workflow. Skipped questions never
+  invent requirements. Feedback cannot expand the original native permission
+  ceilings. The agents panel shows the available catalog, not mandatory workers
+  for every turn. Read-only MCP calls require owner-declared read_only_tools.
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
@@ -214,6 +244,10 @@ Manual:
   native no-change rejection feedback. Correct them from details/suggestion in
   the same run. Verifier/Scout/MCP accept tool calls, not inference; ProtoLink
   validates advertised worker capabilities before dispatch.
+  Coder copies short unique old spans literally from read_file.content. Stale
+  revisions and non-unique/missing matches prepare only read validation feedback;
+  the native inference loop can correct them without a file approval. Valid edits
+  still require native filesystem.write authorization and exact diff approval.
   providers.PROVIDER.max_tool_corrections sets the native correction allowance
   (default two per inference), shared by unknown tools, schemas, application
   rejections and delegation mistakes. Success does not reset it; all model calls
@@ -249,12 +283,18 @@ Manual:
   at 2000 entries. Binary/non-UTF8 files show an error; previews identify truncation.
   Viewer controls: Up/Down, PgUp/PgDn, Home/End, Left/Right pan, Esc or q back.
 - Task planning exposes available_check_ids and bootstrap_checks. plan_task can
-  omit check_ids to keep defaults; invalid selections return corrective feedback
+  omit check_ids or use an empty list for code to retain defaults; invalid selections return corrective feedback
   and leave the plan unchanged. Python projects with no discovered/configured
   checks receive a predefined python-tests unittest runner. Coder adds focused
-  root test_*.py regressions; a zero-test run cannot verify changes. Explicit
+  root test_*.py regressions; a zero-test run cannot verify changes. A
+  narrowed bootstrap coding scopes must include a root test_*.py file before
+  the plan is accepted. Documentation-only plans can select no checks. Owner
   project check configuration takes precedence, including an empty checks list.
-  Automatic Python checks prefer the project .venv, then external runtime Python;
+  baseline_check_ids lists checks with an available baseline. For a bootstrap
+  runner with no test files, inspect the requested source and create the change
+  and regressions first; do not request an empty baseline command approval.
+  Automatic Python checks prefer the project .venv, then active/runtime Python,
+  including the venv whose packages the embedded CLI loads, before bare Python;
   the embedding CLI executable is never used as the Python command.
   worker_packet prepares context for an exact explorer/coder/tester role; the
   Architect must then delegate inference to execute that worker.

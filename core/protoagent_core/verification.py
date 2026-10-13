@@ -185,9 +185,29 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     missing = [
         f"{result.name}: {result.code or result.status}" for result in results if not result.passed
     ]
+    stop_reason = ""
     if stopped:
-        missing.append("A native denial, blocker or failed action requires a new instruction.")
+        runtime_expired = any(
+            event.type == "workflow.blocked"
+            and event.payload.get("blocker", {}).get("code") == "budget_exceeded"
+            and event.payload.get("blocker", {}).get("limit") == "max_runtime_seconds"
+            for event in report.events
+        )
+        unanswered = any(
+            record.decision is None and record.status in {"pending", "expired", "canceled"}
+            for record in broker.records(attempt.authorization.scope)
+        )
+        if runtime_expired and unanswered:
+            stop_reason = (
+                "Run time limit reached while waiting for your approval. "
+                "Viewing details does not approve execution. Start a new run to continue."
+            )
+        missing.append(
+            stop_reason or "A native denial, blocker or failed action requires a new instruction."
+        )
     if uncertain_changes:
+        # Keep inspection guidance visible even if a later approval timed out.
+        stop_reason = ""
         missing.append(
             "A file or external effect is uncertain; inspect it before requesting new work."
         )
@@ -208,6 +228,29 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             else "failed"
         )
     )
+    last_attempt_status = verification_status
+    handoff = record.verification_handoff if record else None
+    # The validated user answer lowers execution authority. Preserve measured
+    # failures and native cancellation, but do not label an intentional handoff
+    # as a successful verification or an ordinary workflow failure. Uncertain
+    # effects, denied actions and stale resource evidence still take precedence.
+    deferred = (
+        bool(handoff)
+        and not uncertain_changes
+        and not attempt.denied
+        and not any(status == "stale" for status in statuses)
+        and all(item.status == "approved" for item in broker.records(attempt.authorization.scope))
+        and not any(event.type in {"action.denied", "action.failed"} for event in report.events)
+    )
+    if deferred:
+        outcome = "unverified"
+        verification_status = "deferred"
+        stop_reason = "Verification deferred to you; no further execution will be requested."
+        missing = [
+            f"{result.name}: {result.code or result.status}"
+            for result in results
+            if not result.passed
+        ]
     repairable = (
         contract.requires_write
         and not (record and any(worker["status"] != "done" for worker in record.reports.values()))
@@ -230,6 +273,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "outcome": outcome,
             "satisfied": outcome == "satisfied",
             "applied": bool(latest_writes),
+            "applied_paths": sorted(latest_writes),
             "verified": verification_status == "passed",
             "criteria_supported": outcome == "satisfied"
             and (not needs_checks or verification_status == "passed"),
@@ -239,7 +283,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "checks": validations,
             "message": "Execution evidence satisfies the application checks."
             if outcome == "satisfied"
-            else " ".join(missing) or f"Run is {outcome}.",
+            else stop_reason or " ".join(missing) or f"Run is {outcome}.",
             "missing": missing,
         },
         {
@@ -247,6 +291,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "results": commands,
             "latest": current_results,
             "attempts": attempt.attempt,
+            **({"last_attempt_status": last_attempt_status, "handoff": handoff} if handoff else {}),
         },
         repairable,
     )
@@ -254,9 +299,21 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
 
 def verification_summary(report: dict[str, Any]) -> str:
     """Render native exit statuses and resource-dependent acceptance results."""
-    lines = [f"Verification: {report['status']}."]
+    deferred = report["status"] == "deferred"
+    lines = ["Verification: deferred to you." if deferred else f"Verification: {report['status']}."]
     if not report["results"]:
         return lines[0] + " No test/build command was executed."
+    if deferred:
+        lines.append(f"Last attempt: {report['last_attempt_status']}.")
+        output = "\n".join(
+            str(item.get("stdout", "")) + str(item.get("stderr", ""))
+            for item in report.get("latest") or report["results"]
+        )
+        missing_module = re.search(
+            r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", output
+        )
+        if missing_module:
+            lines.append(f"The selected environment could not import {missing_module.group(1)}.")
     for item in report.get("latest") or report["results"]:
         outcome = (
             "zero tests ran; verification is missing"
@@ -267,5 +324,6 @@ def verification_summary(report: dict[str, Any]) -> str:
         )
         phase = item.get("phase", "prepare")
         stale = " (resource changed since this check)" if item.get("stale") else ""
-        lines.append(f"- [{phase}] {item['command']}: {outcome}{stale}")
+        label = "previous " + phase if deferred else phase
+        lines.append(f"- [{label}] {item['command']}: {outcome}{stale}")
     return "\n".join(lines)

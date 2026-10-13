@@ -55,6 +55,33 @@ class PythonRuntimeTests(unittest.TestCase):
             result = oracle_result(self.root, "assert 2 + 2 == 4\n")
         self.assertTrue(result["passed"], result)
 
+    def test_embedded_host_retains_injected_dependency_environment(self):
+        host = self.executable("host/proto-cli")
+        bare = self.executable("base/bin/python3.14")
+        python = self.executable("sdk/.venv/bin/python")
+        (python.parent.parent / "pyvenv.cfg").write_text("home = base\n")
+        site = python.parent.parent / "lib/python3.14/site-packages"
+        site.mkdir(parents=True)
+        with (
+            patch.dict(os.environ, {"VIRTUAL_ENV": ""}),
+            patch("protoagent_core.python_runtime.sys.executable", str(host)),
+            patch("protoagent_core.python_runtime.sys._base_executable", str(bare), create=True),
+            patch("protoagent_core.python_runtime.sys.prefix", str(bare.parent.parent)),
+            patch("protoagent_core.python_runtime.sys.base_prefix", str(bare.parent.parent)),
+            patch("protoagent_core.python_runtime.sys.path", [str(site)]),
+        ):
+            self.assertEqual(python_executable(self.root), str(python))
+            project = self.executable(".venv/bin/python")
+            self.assertEqual(python_executable(self.root), str(project))
+
+    def test_embedded_host_prefers_explicit_active_environment(self):
+        python = self.executable("active/bin/python")
+        with (
+            patch.dict(os.environ, {"VIRTUAL_ENV": str(python.parent.parent)}),
+            patch("protoagent_core.python_runtime.sys.executable", "/path/to/proto-cli"),
+        ):
+            self.assertEqual(python_executable(self.root), str(python))
+
     def test_javascript_and_explicit_checks_do_not_need_python_resolution(self):
         with patch("protoagent_core.task_record.python_executable", side_effect=AssertionError):
             (self.root / "package.json").write_text('{"scripts":{}}')

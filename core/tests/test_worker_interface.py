@@ -20,6 +20,60 @@ from protoagent_core.worker_interface import install_worker_interface
 
 
 class WorkerInterfaceTests(NativeRuntimeCase):
+    async def test_bootstrap_coding_hint_does_not_apply_to_questions_or_docs(self):
+        (self.root / "sample.py").write_text("value = 0\n")
+        record = self.attempt.record
+        record.checks = discover_checks(str(self.root))
+        record.selected = tuple(record.checks)
+        for goal, should_code in (
+            ("Fix sample.py", True),
+            ("Explain this project", False),
+            ("Update README.md", False),
+        ):
+            record.objective = goal
+            seen = []
+            parent = self.parent([{"type": "final", "content": "Fixture outcome"}], seen=seen)
+            result = await self.start(parent, goal).result()
+            self.assertEqual(result.status, "completed", result.error)
+            self.assertEqual(
+                "No existing baseline tests are available." in seen[0][0]["content"], should_code
+            )
+
+    async def test_budget_expiry_while_approval_is_pending_has_a_clear_reason(self):
+        from protoagent_core.runtime import _run_agent_deck
+
+        (self.root / "test_sample.py").write_text("import unittest\n")
+        response = {
+            "type": "tool_call",
+            "tool": "run_check",
+            "args": {"check_id": "python-tests", "phase": "baseline"},
+        }
+        with (
+            patch(
+                "protoagent_core.agents.common.create_llm_from_config",
+                side_effect=lambda *args: create_llm("mock", sequential_responses=[response]),
+            ),
+            patch.dict(
+                "os.environ",
+                {"PROTOAGENT_RUN_MAX_SECONDS": "0.5", "PROTOAGENT_AGENT_TRANSPORT": "local"},
+            ),
+        ):
+            result = await _run_agent_deck(
+                "Run the baseline",
+                "mock",
+                "offline",
+                str(self.root),
+                None,
+                self.bridge,
+                {"resolved": "small"},
+                tester_enabled=False,
+            )
+        self.assertEqual(result["status"], "blocked", result)
+        self.assertIn("waiting for your approval", result["answer"])
+        self.assertIn("Viewing details does not approve", result["answer"])
+        self.assertFalse(any(e["type"] == "process.started" for e in result["run_events"]))
+        self.assertFalse(result["completion_validation"]["applied"])
+
     def test_small_owned_decks_install_only_enabled_worker_routes(self):
         with patch(
             "protoagent_core.agents.common.create_llm_from_config",
@@ -198,6 +252,7 @@ class WorkerInterfaceTests(NativeRuntimeCase):
         )
         result = await handle.result()
         self.assertEqual(result.status, "completed", result.error)
+
         self.assertEqual(len(self.broker.records(self.authorization.scope)), 1)
         self.assertFalse(self.attempt.checking)
         self.assertTrue(
@@ -206,6 +261,151 @@ class WorkerInterfaceTests(NativeRuntimeCase):
                 for e in result.report.events
             )
         )
+
+    async def test_invalid_command_preparation_is_corrected_before_child_or_approval(self):
+        (self.root / "README.md").write_text("Use the test folder.\n")
+        seen = []
+        parent = self.parent(
+            [
+                {
+                    "type": "tool_call",
+                    "tool": "execute_command",
+                    "args": {"argv": ["protoagent-missing-fixture-program"]},
+                },
+                {"type": "tool_call", "tool": "read_file", "args": {"path": "README.md"}},
+                {
+                    "type": "tool_call",
+                    "tool": "execute_command",
+                    "args": {"argv": ["mkdir", "test"], "cwd": ".", "env": {}},
+                },
+                {"type": "final", "content": "Directory created."},
+            ],
+            seen=seen,
+        )
+        handle = self.start(parent, "Create a test folder")
+        (approval,) = await self.pending()
+        self.assertFalse((self.root / "test").exists())
+        self.assertEqual(approval.request.action.payload["arguments"]["cwd"], str(self.root))
+        self.broker.resolve(
+            ApprovalDecision(True, approval.request.request_id),
+            scope=self.authorization.scope,
+            fingerprint=approval.fingerprint,
+        )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertTrue((self.root / "test").is_dir())
+        self.assertIn("invalid_command_preparation", json.dumps(seen[1]))
+        self.assertEqual(len(result.task.metadata["subagent_runs"]), 2)
+        self.assertEqual(len(self.broker.records(self.authorization.scope)), 1)
+        self.assertTrue(any(event.type == "action.rejected" for event in result.report.events))
+        self.assertFalse(any(event.type == "action.failed" for event in result.report.events))
+
+    async def test_move_tests_to_package_keeps_frozen_runner_and_current_dependencies(self):
+        source = self.root / "test_value.py"
+        content = (
+            "import unittest\nclass Regression(unittest.TestCase):\n"
+            "    def test_value(self):\n        self.assertEqual(42, 42)\n"
+        )
+        source.write_text(content)
+        record = self.attempt.record
+        record.objective = "Move the tests into a test folder"
+        record.checks = discover_checks(str(self.root))
+        record.selected = tuple(record.checks)
+        original_argv = record.checks["python-tests"].argv
+        model = create_llm(
+            "mock",
+            sequential_responses=[
+                {
+                    "type": "tool_call",
+                    "tool": "create_file",
+                    "args": {"path": "test/__init__.py", "content": '"""Regression tests."""\n'},
+                },
+                {"type": "final", "content": "Added the unittest package marker."},
+            ],
+        )
+        with patch("protoagent_core.agents.coder.create_selected_llm", return_value=model):
+            coder = create_coder_agent(
+                workspace=str(self.root),
+                transport=None,
+                approval_handler=self.broker,
+                authorization=self.authorization,
+                attempt=self.attempt,
+                checkpoints=self.checkpoints,
+                prompt_profile="small",
+            )
+        configure_agent_context(coder, record, compact_protocol=True)
+        parent = self.parent(
+            [
+                {
+                    "type": "tool_call",
+                    "tool": "execute_command",
+                    "args": {"argv": ["mkdir", "test"], "cwd": ".", "env": {}},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "execute_command",
+                    "args": {
+                        "argv": ["mv", "-n", "test_value.py", "test/test_value.py"],
+                        "cwd": ".",
+                        "env": {},
+                    },
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "coder",
+                    "args": {
+                        "task": "Add test/__init__.py to retain recursive unittest discovery."
+                    },
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "verify"},
+                },
+                {
+                    "type": "final",
+                    "content": "Moved the tests and ran the frozen repository check.",
+                },
+            ],
+            children=[coder, self.verifier],
+        )
+        handle = self.start(parent, record.objective)
+        for expected in ("execute_command", "execute_command", "create_file", "execute_command"):
+            (approval,) = await self.pending()
+            self.assertEqual(approval.request.action.name, expected)
+            self.broker.resolve(
+                ApprovalDecision(True, approval.request.request_id),
+                scope=self.authorization.scope,
+                fingerprint=approval.fingerprint,
+            )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        moved = self.root / "test/test_value.py"
+        self.assertFalse(source.exists())
+        self.assertEqual(moved.read_text(), content)
+        self.assertEqual(record.checks["python-tests"].argv, original_argv)
+        accepted = await validate_completion(
+            infer_run_contract(record.objective),
+            result.task,
+            result.report,
+            self.attempt,
+            self.broker,
+        )
+        self.assertTrue(accepted.completion["satisfied"], accepted.completion)
+        self.assertEqual(accepted.verification["status"], "passed")
+        self.assertIn("Ran 1 test", accepted.verification["latest"][0]["stderr"])
+        final_id = accepted.verification["latest"][0]["action_id"]
+        self.assertIn(str(moved), {r.resource_id for r in self.attempt.command_revisions[final_id]})
+        moved.write_text(content + "# Changed after verification\n")
+        stale = await validate_completion(
+            infer_run_contract(record.objective),
+            result.task,
+            result.report,
+            self.attempt,
+            self.broker,
+        )
+        self.assertEqual(stale.verification["status"], "stale")
+        self.assertFalse(stale.completion["satisfied"])
 
     async def test_coder_call_runs_worker_then_final_check_verifies_actual_write(self):
         sample = self.root / "sample.py"

@@ -37,9 +37,27 @@ def _tool_metadata(tool):
 
 
 def compact_protocol_prompt(
-    *, instructions, tools, cards, name, native, flow="", check_id=None, worker_interface=None
+    *,
+    instructions,
+    tools,
+    cards,
+    name,
+    native,
+    flow="",
+    check_id=None,
+    worker_interface=None,
+    bootstrap_only=False,
+    answer_only=False,
+    writing=True,
 ) -> str:
     """Short model-facing protocol; native validators and schemas remain authoritative."""
+    if answer_only:
+        protocol = (
+            "Return a brief final answer in ordinary text."
+            if native
+            else 'Return only {"type":"final","content":"YOUR BRIEF REPLY"}, without fences.'
+        )
+        return f"{protocol}\nYour registered name is {name}.\n{instructions}"
     tool_data = json.loads(tools or "[]")
     card_data: list[dict[str, Any]] = []
     decoder = json.JSONDecoder()
@@ -94,6 +112,12 @@ def compact_protocol_prompt(
         pieces.append(
             "The direct worker calls have fixed routes. Use their normal arguments; no worker/action fields or encoded argument strings are needed."
         )
+        if bootstrap_only:
+            pieces.append(
+                "No existing baseline tests are available. Read the requested source and call coder(task) "
+                "to apply the change and add focused root test_*.py regressions. Do not run an empty baseline. "
+                "Then use run_check with phase=verify for every required check."
+            )
         pieces.append(
             "Enabled worker descriptions: "
             + json.dumps(
@@ -107,6 +131,10 @@ def compact_protocol_prompt(
                 + json.dumps({"check_id": check_id, "phase": "baseline"})
                 + ". Then call coder(task) to apply the edit. After applied changes call run_check "
                 "with phase=verify for every required check."
+                if writing
+                else "For this verification request, call run_check with "
+                + json.dumps({"check_id": check_id, "phase": "verify"})
+                + ". Report measured results without editing files."
             )
         pieces.append(
             "For a project overview, read README.md if supplied evidence is insufficient, then explain the project. "
@@ -146,7 +174,7 @@ def compact_protocol_prompt(
             and any(tool["name"] == "run_check" for tool in card["tools"])
             for card in card_data
         ):
-            args = {"check_id": check_id, "phase": "baseline"}
+            args = {"check_id": check_id, "phase": "baseline" if writing else "verify"}
             example = (
                 "Invoke protolink_call_agent_tool with "
                 + json.dumps(
@@ -172,6 +200,10 @@ def compact_protocol_prompt(
                 + ". Delegate the edit to coder; worker_packet alone does not run coder. "
                 "After applied edits, use the same worker route with phase=verify for every required check. "
                 "run_check is verifier's tool, not a local Architect function."
+                if writing
+                else "Run the requested check through Verifier with phase=verify. "
+                + example
+                + ". Report measured results without editing files."
             )
         if any(
             card["name"] == "explorer"
@@ -197,7 +229,13 @@ def compact_protocol_prompt(
 
 
 def configure_agent_context(
-    agent, record=None, *, fallback_window: int | None = None, compact_protocol=False, cards=()
+    agent,
+    record=None,
+    *,
+    fallback_window: int | None = None,
+    compact_protocol=False,
+    cards=(),
+    run_contract=None,
 ) -> None:
     """Configure native preparation without wrapping provider acquisition methods.
 
@@ -209,6 +247,7 @@ def configure_agent_context(
     llm = agent.llm
     if llm is None:
         return
+    conversational = run_contract is not None and run_contract.task_kind == "direct-answer"
     window = getattr(getattr(llm, "metrics_profile", None), "context_window", None)
     window = window or fallback_window or 32_000
     reserve = min(2048, max(512, window // 8))
@@ -224,12 +263,12 @@ def configure_agent_context(
     # in its native scoped inventory, never in an application shadow store.
     from protolink.llms.context_policy import context_artifact_tool
 
-    if "read_context_artifact" not in agent.tools:
+    if not conversational and "read_context_artifact" not in agent.tools:
         agent.add_tool(context_artifact_tool())
     agent.context_policy = policy
     instructions = agent.to_dict().get("system_prompt") or ""
     worker_interface = getattr(agent, "protoagent_worker_interface", None)
-    if worker_interface is not None:
+    if worker_interface is not None and (run_contract is None or run_contract.requires_write):
         from .agents.architect import SMALL_WORKER_INTERFACE_PROMPT
 
         instructions = SMALL_WORKER_INTERFACE_PROMPT
@@ -239,6 +278,11 @@ def configure_agent_context(
         history = request.history
         native = llm.resolve_tool_calling() == "native"
         state = record.snapshot() if record else {}
+        from .run_contracts import infer_run_contract
+
+        contract = run_contract or infer_run_contract(state.get("objective", ""))
+        if conversational:
+            request.tools.clear()
         if worker_interface is not None:
             # Keep the low-level packet API available to external callers, but
             # remove its redundant planning step from this inference roster.
@@ -267,14 +311,32 @@ def configure_agent_context(
                     cards=card_text,
                     name=agent.card.name,
                     native=native,
-                    check_id=next(iter(state.get("required_checks", [])), None),
+                    check_id=next(
+                        iter(
+                            state.get("required_checks", [])
+                            if contract.task_kind == "workspace-verification"
+                            else state.get("baseline_check_ids", state.get("required_checks", []))
+                        ),
+                        None,
+                    ),
                     worker_interface=worker_interface,
+                    answer_only=conversational,
+                    writing=contract.requires_write,
+                    bootstrap_only=bool(state.get("required_checks"))
+                    and state.get("baseline_check_ids") == []
+                    and contract.requires_write
+                    and not contract.allows_unverified_docs,
                 )
             )
-        if record:
+        if record and not conversational:
             state.pop("available_checks", None)
+            if run_contract is not None and run_contract.task_kind == "repository-question":
+                state = {
+                    key: state[key]
+                    for key in ("objective", "worker_reports", "user_clarifications")
+                }
             first = history.messages_raw()[0]
-            first.content += "\n\nRuntime task record:\n" + json.dumps(state)
+            first.content += "\n\nCurrent request state:\n" + json.dumps(state)
 
         # agent_call observations are portable JSON messages, unlike native
         # tool observations. Prepare those copies through the same public policy.
@@ -309,7 +371,7 @@ def configure_agent_context(
             estimate_token_count(
                 chat_completion_tools(request.tools, include_agent_tools=bool(cards))
             )
-            if native_schemas
+            if native_schemas and (request.tools or cards)
             else 0
         )
         if window - overhead <= reserve:
@@ -356,6 +418,6 @@ def configure_agent_context(
         *agent.hooks,
         AgentHooks(before_model=prepare),
     )
-    suffix = ":protoagent-context-3"
+    suffix = ":protoagent-context-5"
     if not agent.execution_version.endswith(suffix):
         agent.execution_version += suffix

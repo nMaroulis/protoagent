@@ -42,6 +42,7 @@ def create_agent_deck(
     single_agent: bool = False,
     local_children: bool = False,
     max_children: int = 32,
+    run_contract=None,
 ) -> dict[str, Any]:
     """Create the ProtoLink agent deck using the selected LLM config.
 
@@ -50,40 +51,53 @@ def create_agent_deck(
     Coder are task-local workers. Verifier is a tool-only command worker.
     Tester, Scout and the tool-only MCP broker are constructed only when
     their optional-agent settings are enabled. MCP connects only on approved calls.
+    When run_contract is supplied, conversation constructs only Architect;
+    questions omit coding/check workers and explicit verification omits Coder.
     """
     provider = normalize_provider(provider)
     urls = urls or {}
     auth = auth or create_runtime_auth()
     record = attempt.record if attempt is not None else None
-    explorer = create_explorer_agent(
-        registry=registry,
-        provider=provider,
-        model=model,
-        workspace=workspace,
-        url=urls.get("explorer"),
-        record=record,
-        transport=transport,
-        telemetry=telemetry,
-        prompt_profile=prompt_profile,
-        authenticator=auth.authenticator,
-        credentials=auth.credentials,
+    conversational = run_contract is not None and run_contract.task_kind == "direct-answer"
+    writing = run_contract is None or run_contract.requires_write
+    verifying = writing or (run_contract and run_contract.task_kind == "workspace-verification")
+    explorer = (
+        None
+        if conversational
+        else create_explorer_agent(
+            registry=registry,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            url=urls.get("explorer"),
+            record=record if verifying else None,
+            transport=transport,
+            telemetry=telemetry,
+            prompt_profile=prompt_profile,
+            authenticator=auth.authenticator,
+            credentials=auth.credentials,
+        )
     )
-    coder = create_coder_agent(
-        single_agent=single_agent,
-        checkpoints=checkpoints,
-        authorization=authorization,
-        attempt=attempt,
-        registry=registry,
-        provider=provider,
-        model=model,
-        workspace=workspace,
-        url=urls.get("coder"),
-        transport=transport,
-        approval_handler=approval_handler,
-        telemetry=telemetry,
-        prompt_profile=prompt_profile,
-        authenticator=auth.authenticator,
-        credentials=auth.credentials,
+    coder = (
+        create_coder_agent(
+            single_agent=single_agent,
+            checkpoints=checkpoints,
+            authorization=authorization,
+            attempt=attempt,
+            registry=registry,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            url=urls.get("coder"),
+            transport=transport,
+            approval_handler=approval_handler,
+            telemetry=telemetry,
+            prompt_profile=prompt_profile,
+            authenticator=auth.authenticator,
+            credentials=auth.credentials,
+        )
+        if writing
+        else None
     )
     scout = (
         create_scout_agent(
@@ -97,12 +111,12 @@ def create_agent_deck(
             authenticator=auth.authenticator,
             credentials=auth.credentials,
         )
-        if scout_enabled
+        if scout_enabled and not conversational
         else None
     )
     deck = {
-        "explorer": explorer,
-        "coder": coder,
+        **({"explorer": explorer} if explorer is not None else {}),
+        **({"coder": coder} if coder is not None else {}),
         **(
             {
                 "tester": create_tester_agent(
@@ -119,25 +133,31 @@ def create_agent_deck(
                     record=record,
                 )
             }
-            if tester_enabled
+            if tester_enabled and writing
             else {}
         ),
-        "verifier": create_verifier_agent(
-            registry=registry,
-            workspace=workspace,
-            url=urls.get("verifier"),
-            transport=transport,
-            approval_handler=approval_handler,
-            telemetry=telemetry,
-            authenticator=auth.authenticator,
-            credentials=auth.credentials,
-            authorization=authorization,
-            attempt=attempt,
+        **(
+            {
+                "verifier": create_verifier_agent(
+                    registry=registry,
+                    workspace=workspace,
+                    url=urls.get("verifier"),
+                    transport=transport,
+                    approval_handler=approval_handler,
+                    telemetry=telemetry,
+                    authenticator=auth.authenticator,
+                    credentials=auth.credentials,
+                    authorization=authorization,
+                    attempt=attempt,
+                )
+            }
+            if verifying
+            else {}
         ),
     }
     if scout is not None:
         deck["scout"] = scout
-    if mcp_enabled:
+    if mcp_enabled and not conversational:
         deck["mcp"] = create_mcp_agent(
             servers=mcp_servers or {},
             registry=registry,
@@ -170,11 +190,12 @@ def create_agent_deck(
             max_children=max_children, max_concurrency=1, max_depth=1, background=False
         ),
         user_input_handler=user_input_handler,
+        run_contract=run_contract,
     )
     resolved_profile = prompt_profile_status(
         {"agent_prompt_profile": prompt_profile}, provider=provider, model=model
     )["resolved"]
-    if local_children and not single_agent and resolved_profile == "small":
+    if local_children and not single_agent and resolved_profile == "small" and len(deck) > 1:
         from ..worker_interface import install_worker_interface
 
         install_worker_interface(deck["architect"])
@@ -219,13 +240,14 @@ def agent_manifest(
             ],
             "optional": ["tester", "scout", "mcp"],
             "contract": (
-                "RunContract classifies each request and marks write tasks "
-                "incomplete unless native execution receipts satisfy the application checks."
+                "RunContract selects each turn's workers, tools, context and native permission ceilings. "
+                "Write tasks require native execution receipts and application checks."
             ),
             "flow": [
-                "Context Loom evidence",
                 "RunContract",
-                "TaskRecord criteria and repository check plan",
+                "Conversation, repository question, verification or editing route",
+                "Context Loom evidence for repository work",
+                "TaskRecord criteria and checks for editing/verification",
                 "ProtoLink API-key auth",
                 "Architect controller",
                 "Native ask_user questions and same-run continuation",

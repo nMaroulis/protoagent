@@ -405,14 +405,20 @@ def process_prompt(
             return _json({**problem, "elapsed_ms": round((time.time() - started) * 1000)})
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
     _emit_progress(progress_path, f"CLI accepted task for workspace {workspace}.")
-    _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
-    tagged_context = _tagged_file_context(prompt, workspace)
-    for event in _tag_events(tagged_context):
-        _emit_progress(progress_path, event)
-    _emit_progress(progress_path, "Weaving Context Loom pack from the active workspace.")
-    loom_context = _context_pack_for_prompt(prompt, workspace, tagged_context)
-    for event in _context_events(loom_context):
-        _emit_progress(progress_path, event)
+    from .run_contracts import infer_run_contract
+
+    conversational = infer_run_contract(prompt).task_kind == "direct-answer"
+    tagged_context = {"items": [], "errors": []}
+    loom_context = None
+    if not conversational:
+        _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
+        tagged_context = _tagged_file_context(prompt, workspace)
+        for event in _tag_events(tagged_context):
+            _emit_progress(progress_path, event)
+        _emit_progress(progress_path, "Weaving Context Loom pack from the active workspace.")
+        loom_context = _context_pack_for_prompt(prompt, workspace, tagged_context)
+        for event in _context_events(loom_context):
+            _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
         _emit_progress(
@@ -555,11 +561,13 @@ def _model_response(
         user_prompt=prompt,
     )
     runtime_status = str(result.get("status") or "completed")
-    if runtime_status == "canceled":
+    from .run_contracts import infer_run_contract
+
+    if runtime_status == "completed":
+        remember_valid_provider(result["provider"], result["model"])
+    if runtime_status == "canceled" or infer_run_contract(prompt).task_kind == "direct-answer":
         targets = []
     else:
-        if runtime_status == "completed":
-            remember_valid_provider(result["provider"], result["model"])
         context = build_context_map(workspace)
         targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
@@ -597,7 +605,15 @@ def _model_response(
     return {
         "status": runtime_status
         if runtime_status
-        in {"blocked", "canceled", "incomplete", "failed", "uncertain", "input_required"}
+        in {
+            "blocked",
+            "canceled",
+            "incomplete",
+            "failed",
+            "uncertain",
+            "input_required",
+            "unverified",
+        }
         else "answered",
         "headline": (
             "Architect completed the ProtoLink run."
