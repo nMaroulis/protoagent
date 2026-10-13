@@ -57,6 +57,14 @@ explain @src/auth.rs and suggest a safer JWT flow
 
 ## Compose, Verify, Recover
 
+Use `/ls [PATH]` to list a directory, `/browse [PATH]` (`/files`) to navigate,
+`/open FILE` for a scrollable source viewer, or `/cat FILE` for a transcript
+preview. Quote paths containing spaces. Viewing needs no model and does not add
+source to a task; `@file` tagging does that. `/project` selects the workspace.
+Shell equivalents are `proto-cli ls`, `browse`, `open` and `cat`.
+See [file inspection](../docs/content/cli/projects-and-sessions.md#browse-and-view-files)
+for controls and preview limits.
+
 Enter submits the complete prompt; Ctrl-J inserts a newline. Bracketed paste
 retains multiline text without submitting. Tab opens slash-command completion
 and Ctrl-R searches recent input. Ctrl-P/Ctrl-N browse history from any row.

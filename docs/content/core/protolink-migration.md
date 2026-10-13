@@ -17,11 +17,12 @@ cancellation, observations and execution receipts.
 | `SubagentLimits` | One active child, depth one, 32 children per attempt by default; no background supervision tools in the model prompt. |
 | Shared root budgets and inherited policies | Children consume the Graph's shared budget and must satisfy both the Architect's capability ceiling and their own role policy. |
 | `ContextPolicy` | Reserve output space, prune complete old turns, clear older observations and offload large tool results to scoped artifacts. |
-| `AgentHooks.before_model` | Refresh the application TaskRecord, compact small-profile declarations, prepare delegated observations and account for native schemas. Provider acquisition methods are not wrapped. |
+| `AgentHooks.before_model` | Refresh the application TaskRecord, compact small-profile declarations, filter redundant worker tools, prepare delegated observations and account for native schemas. Provider acquisition methods are not wrapped. |
+| `PreparedTool` and native owned child supervision | Fixed typed worker calls for small local runs; preparation binds a worker operation and the native supervisor executes it under the original child's policies and receipts. No custom dispatcher, parser or retries. |
 | Shared action parser and native normalization | Correct recognizable malformed requests inside the current run in JSON/native modes; preserve completed observations and legitimate explicit final data. |
 | `tool_calling`, `resolve_tool_calling()`, `refresh_capabilities()` | Ollama defaults to engine-owned automatic discovery; authenticated exact-tag metadata, five-minute cache, JSON for unknown support and explicit mode overrides. |
 | `ToolRejectedError`, `max_tool_corrections` | Invalid plans, exact-edit preconditions and check selection return explicit no-change feedback. Native correction is bounded, retains receipts and emits distinct rejection events/artifacts. |
-| `AgentCapabilities.supports_inference` | Native cards distinguish reasoning workers from tool-only Verifier/Scout/MCP. The compact roster retains this field; the engine validates targets, tools and schemas before dispatch. |
+| `AgentCapabilities.supports_inference` | Native cards distinguish reasoning workers from tool-only Verifier/Scout/MCP. The prepared local facade and generic delegation validate targets, tools and schemas against these original cards before dispatch. |
 | `read_context_artifact` | Progressive retrieval of offloaded results. Offloading changes model observations; existing execution receipts retain their authority. |
 | `RoutedLLM` | Optional, explicit same-provider `fallback_models`; no extra model orchestrates selection. Each candidate request consumes the shared budget. |
 | `ask_user_tool`, `UserInputRequest` | Architect-only live clarification; the CLI/TUI returns an answer through a correlated callback and the native loop continues. |

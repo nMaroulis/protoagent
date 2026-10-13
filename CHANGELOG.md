@@ -6,6 +6,13 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ### Added
 
+- Model-free project inspection in shell/TUI: ls, browse/files, open and cat.
+  Folder browsing supports filtering, parent navigation and Enter to view text;
+  the read-only viewer has line numbers, paging and horizontal panning. Listings,
+  source loading and transcript previews are bounded; paths remain in the active
+  project, and terminal control characters are displayed inertly. `/open` now
+  views files; `/project` selects a workspace. Guide and completion share the catalog.
+
 - Runtime-owned TaskRecord with criteria, check selection, scoped worker packets
   and explicit done/needs_context/blocked worker reports.
 - Stateless, read-only Tester for regression planning and failure analysis.
@@ -41,6 +48,24 @@ This file records user-visible changes to the active ProtoAgent components.
   cancellation, correlated replies, native deadlines and no implicit approval.
 
 ### Changed
+
+- Simplify the small-profile local worker interface with typed Explorer reads,
+  Coder/Tester assignments and Verifier calls. Fixed prepared routes use native
+  owned-child supervision and retain each worker's policies, approvals, budgets,
+  cancellation and receipts. Optional Scout/MCP routes follow enabled settings.
+  Hide redundant packet preparation and repeated child schemas from this profile;
+  narrow Coder's tool list and make its return-after-edit boundary explicit.
+  Other profiles and transport meshes retain native delegation.
+
+- Clarify worker routing for small models after user questions: worker tools
+  require separate worker/tool fields rather than invented combined names.
+  Compact prompts include the selected check's exact baseline call and distinguish
+  preparing a worker packet from executing Coder. Native correction limits remain.
+- Restrict worker-packet roles to explicit schema choices, return an unexecuted
+  status and dispatch reminder, and show an exact Coder inference example.
+- Resolve external Python for discovered checks and coding evals when CPython is
+  embedded in the Rust CLI. Preserve project venv identity and exclude the CLI
+  host executable; embedded-runtime tests cover discovery and oracle execution.
 
 - ProtoLink 0.8.1 owns action normalization/correction, Ollama automatic capability
   discovery and task-local protocol selection. Remove the application metadata

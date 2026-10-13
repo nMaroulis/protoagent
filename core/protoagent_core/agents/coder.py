@@ -24,6 +24,12 @@ from .common import (
 
 CODER_SYSTEM_PROMPT = """You are the ProtoAgent Coder, a stateless file worker.
 
+Your job ends after the requested edits are applied. Return a concise final
+outcome to Architect then. Architect owns baseline and final verification;
+run_check and execute_command are not your tools. Check IDs in the task record
+describe required regression coverage, not commands you should run. Do not keep
+exploring after the requested edits or promise to run checks yourself.
+
 Read the assigned source using read_file(path, start_line, end_line). Use edit_file
 with one exact old/new replacement and the returned revision. Prefer it over
 regenerating a file. Use create_file for new files and replace_file only for

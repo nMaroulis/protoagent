@@ -7,7 +7,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -19,6 +18,7 @@ from protolink import ApprovalDecision
 from . import config
 from ._version import __version__
 from .prompt_profiles import prompt_profile_status
+from .python_runtime import python_executable
 from .runtime_bridge import RuntimeBridge
 
 
@@ -97,7 +97,7 @@ def oracle_result(root: Path, oracle: str) -> dict:
         script.write_text(oracle)
         with tempfile.TemporaryFile() as output:
             process = subprocess.Popen(
-                [sys.executable, str(script)],
+                [python_executable(root), str(script)],
                 cwd=root,
                 env={"PYTHONPATH": str(root)},
                 stdout=output,
@@ -196,7 +196,7 @@ def run_coding_eval(*, profiles=None, task_ids=None, mode="plan", limit=None) ->
                         )
                     )
                     argv = [
-                        str(Path(sys.executable).absolute()),
+                        python_executable(root),
                         "-m",
                         "unittest",
                         "discover",

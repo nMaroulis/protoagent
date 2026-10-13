@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from protolink import ToolRejectedError
 
+from .python_runtime import python_executable
 from .tools import read_file, safe_path
 
 PYTHON_BOOTSTRAP_SOURCE = "Python unittest bootstrap"
@@ -51,7 +51,6 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
         "PATH": os.pathsep.join(
             dict.fromkeys(
                 [
-                    str(Path(sys.executable).parent),
                     "/opt/homebrew/bin",
                     "/usr/local/bin",
                     os.defpath,
@@ -106,8 +105,16 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
                 ".protoagent/project.json",
             )
         return checks
-    python = root / ".venv" / "bin" / "python"
-    executable = str(python.absolute()) if python.exists() else sys.executable
+    python_project = (
+        any((root / directory).is_dir() for directory in ("tests", "core/tests"))
+        or any(root.glob("*.py"))
+        or any(
+            (root / name).is_file() for name in ("pyproject.toml", "requirements.txt", "setup.cfg")
+        )
+    )
+    executable = python_executable(root) if python_project else ""
+    if executable:
+        path_env["PATH"] = os.pathsep.join([str(Path(executable).parent), path_env["PATH"]])
     for directory in ("tests", "core/tests"):
         if (root / directory).is_dir():
             env = dict(path_env)
@@ -160,12 +167,7 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
                     dict(path_env),
                     (str(package),),
                 )
-    if not checks and (
-        any(root.glob("*.py"))
-        or any(
-            (root / name).is_file() for name in ("pyproject.toml", "requirements.txt", "setup.cfg")
-        )
-    ):
+    if not checks and python_project:
         # Capture a fixed runner before inference when a Python project has no
         # checks. No project code is imported by discovery. An empty suite cannot
         # satisfy completion; only an approved execution provides evidence.
@@ -317,6 +319,8 @@ class TaskRecord:
             sources.append(source)
         return {
             "role": role,
+            "executed": False,
+            "next_step": f"Delegate inference to {role} with this packet. Preparing it did not run the worker.",
             "objective": objective[:1000],
             "sources": sources,
             "acceptance_criteria": list(self.criteria),
@@ -389,8 +393,10 @@ def add_task_tools(agent, record: TaskRecord | None, role: str) -> None:
             return {"success": True, **record.plan(paths, criteria, check_ids)}
 
         @agent.tool(capabilities=["task.manage"])
-        def worker_packet(role: str, objective: str, paths: list[str]) -> dict[str, Any]:
-            """Resolve bounded source references into a worker task packet without inventing source."""
+        def worker_packet(
+            role: Literal["explorer", "coder", "tester"], objective: str, paths: list[str]
+        ) -> dict[str, Any]:
+            """Prepare context only for explorer, coder or tester; then delegate inference to that worker with the packet. This tool does not run a worker or edit files."""
             return record.packet(role, objective, paths)
     else:
 

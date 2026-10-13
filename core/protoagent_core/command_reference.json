@@ -13,6 +13,22 @@
       "Clear the active workspace"
     ],
     [
+      "/ls",
+      "List one project folder, including hidden files, without a model. Usage: /ls [PATH]."
+    ],
+    [
+      "/browse",
+      "Browse project folders and open files with Enter. Type to filter, Backspace to go up, Esc to close. Usage: /browse [PATH]."
+    ],
+    [
+      "/files",
+      "Alias for /browse."
+    ],
+    [
+      "/cat",
+      "Print a bounded text preview in the transcript without a model. Usage: /cat FILE. Quote paths with spaces; @file paths also work."
+    ],
+    [
       "/model",
       "Choose provider and model"
     ],
@@ -194,7 +210,7 @@
     ],
     [
       "/open",
-      "Alias for /project."
+      "Open a project text file in the read-only scrollable viewer. Usage: /open [FILE]. Without a path, browse project files. Use /project to select a workspace."
     ],
     [
       "/menu",
@@ -317,6 +333,22 @@
     [
       "project choose",
       "Prompt for a project folder."
+    ],
+    [
+      "ls [PATH]",
+      "List one folder in the active project without a model."
+    ],
+    [
+      "browse, files [PATH]",
+      "Navigate project folders, filter entries and open read-only text files. Requires an interactive terminal."
+    ],
+    [
+      "open [FILE]",
+      "Open the scrollable project file viewer, or browse when no path is given. Requires an interactive terminal."
+    ],
+    [
+      "cat FILE",
+      "Print a bounded UTF-8 text preview from the active project. Quote paths with spaces."
     ],
     [
       "check",

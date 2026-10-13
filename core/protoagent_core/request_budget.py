@@ -36,7 +36,9 @@ def _tool_metadata(tool):
     }
 
 
-def compact_protocol_prompt(*, instructions, tools, cards, name, native, flow="") -> str:
+def compact_protocol_prompt(
+    *, instructions, tools, cards, name, native, flow="", check_id=None, worker_interface=None
+) -> str:
     """Short model-facing protocol; native validators and schemas remain authoritative."""
     tool_data = json.loads(tools or "[]")
     card_data: list[dict[str, Any]] = []
@@ -53,6 +55,7 @@ def compact_protocol_prompt(*, instructions, tools, cards, name, native, flow=""
                 "tools": [_tool_metadata(tool) for tool in card.get("tools", [])],
             }
         )
+    simple_workers = worker_interface is not None
     protocol = (
         "Use the provider's supplied tools for actions; never print a tool request as your answer. "
         "Return a concise final answer when finished. Saying you requested a tool does not call it."
@@ -64,6 +67,13 @@ def compact_protocol_prompt(*, instructions, tools, cards, name, native, flow=""
         'Answer: {"type":"final","content":"ANSWER"}'
         "\nAlways include the top-level type. Never wrap an action inside a tool_call or agent_call object."
     )
+    if simple_workers and not native:
+        protocol = (
+            "Return one JSON action without fences.\n"
+            'Call: {"type":"tool_call","tool":"NAME","args":{}}\n'
+            'Answer: {"type":"final","content":"ANSWER"}\n'
+            "Use the direct worker calls in your tool list."
+        )
     pieces = [
         protocol,
         f"Your registered name is {name}. Never delegate to yourself.",
@@ -78,11 +88,90 @@ def compact_protocol_prompt(*, instructions, tools, cards, name, native, flow=""
             "Your tools: "
             + json.dumps([_tool_metadata(tool) for tool in tool_data], separators=(",", ":"))
         )
-    if card_data:
+    elif tool_data:
+        pieces.append("Local tool names: " + ", ".join(tool["name"] for tool in tool_data))
+    if simple_workers:
+        pieces.append(
+            "The direct worker calls have fixed routes. Use their normal arguments; no worker/action fields or encoded argument strings are needed."
+        )
+        pieces.append(
+            "Enabled worker descriptions: "
+            + json.dumps(
+                [{"name": card["name"], "description": card["description"]} for card in card_data],
+                separators=(",", ":"),
+            )
+        )
+        if check_id and "run_check" in worker_interface:
+            pieces.append(
+                "Before editing call run_check with "
+                + json.dumps({"check_id": check_id, "phase": "baseline"})
+                + ". Then call coder(task) to apply the edit. After applied changes call run_check "
+                "with phase=verify for every required check."
+            )
+        pieces.append(
+            "For a project overview, read README.md if supplied evidence is insufficient, then explain the project. "
+            "Use read_file(path), not a prefixed worker name."
+        )
+    elif card_data:
         if native:
             pieces.append(
-                "Use protolink_call_agent_tool for a worker's tool, and "
-                "protolink_delegate_agent for a worker's inference."
+                "Worker tools are reached through protolink_call_agent_tool(agent, tool, args_json). "
+                "Worker inference uses protolink_delegate_agent(agent, prompt). "
+                "Worker tool names are not local function names; do not combine a worker name with its tool name."
+            )
+        else:
+            pieces.append(
+                "A worker tool requires type=agent_call, action=tool_call and separate agent/tool fields. "
+                "Local type=tool_call cannot call a worker's tool; do not combine a worker name with its tool name."
+            )
+        if any(
+            card["name"] == "coder" and card["supports_inference"] is not False
+            for card in card_data
+        ):
+            pieces.append(
+                "To apply edits, "
+                + (
+                    'invoke protolink_delegate_agent with agent="coder", '
+                    'prompt="Apply the requested change in the planned paths and add the required regression tests."'
+                    if native
+                    else 'return {"type":"agent_call","agent":"coder","action":"infer",'
+                    '"prompt":"Apply the requested change in the planned paths and add the required regression tests."}'
+                )
+                + " Include the concrete objective and paths in that prompt, or pass the prepared worker packet. "
+                "worker_packet only reads context; it never runs Coder or applies edits. "
+                "If you prepare one, your next action is worker inference, not another packet or final verification."
+            )
+        if check_id and any(
+            card["name"] == "verifier"
+            and any(tool["name"] == "run_check" for tool in card["tools"])
+            for card in card_data
+        ):
+            args = {"check_id": check_id, "phase": "baseline"}
+            example = (
+                "Invoke protolink_call_agent_tool with "
+                + json.dumps(
+                    {"agent": "verifier", "tool": "run_check", "args_json": json.dumps(args)},
+                    separators=(",", ":"),
+                )
+                if native
+                else "Return "
+                + json.dumps(
+                    {
+                        "type": "agent_call",
+                        "agent": "verifier",
+                        "action": "tool_call",
+                        "tool": "run_check",
+                        "args": args,
+                    },
+                    separators=(",", ":"),
+                )
+            )
+            pieces.append(
+                "Before editing, measure a baseline through verifier. "
+                + example
+                + ". Delegate the edit to coder; worker_packet alone does not run coder. "
+                "After applied edits, use the same worker route with phase=verify for every required check. "
+                "run_check is verifier's tool, not a local Architect function."
             )
         if any(
             card["name"] == "explorer"
@@ -139,11 +228,26 @@ def configure_agent_context(
         agent.add_tool(context_artifact_tool())
     agent.context_policy = policy
     instructions = agent.to_dict().get("system_prompt") or ""
+    worker_interface = getattr(agent, "protoagent_worker_interface", None)
+    if worker_interface is not None:
+        from .agents.architect import SMALL_WORKER_INTERFACE_PROMPT
+
+        instructions = SMALL_WORKER_INTERFACE_PROMPT
     card_text = "\n".join(card.get_prompt_format() for card in cards)
 
     def prepare(request):
         history = request.history
         native = llm.resolve_tool_calling() == "native"
+        state = record.snapshot() if record else {}
+        if worker_interface is not None:
+            # Keep the low-level packet API available to external callers, but
+            # remove its redundant planning step from this inference roster.
+            request.tools.pop("worker_packet", None)
+        if compact_protocol and agent.card.name == "coder":
+            # Current state is already injected; repository discovery belongs
+            # to Explorer. Keep this worker focused on the assigned sources.
+            request.tools.pop("task_status", None)
+            request.tools.pop("list_files", None)
         # The engine rebuilds its system prompt before each step. Compact only
         # model-facing declarations; native tools/cards retain exact schemas.
         if compact_protocol:
@@ -163,10 +267,11 @@ def configure_agent_context(
                     cards=card_text,
                     name=agent.card.name,
                     native=native,
+                    check_id=next(iter(state.get("required_checks", [])), None),
+                    worker_interface=worker_interface,
                 )
             )
         if record:
-            state = record.snapshot()
             state.pop("available_checks", None)
             first = history.messages_raw()[0]
             first.content += "\n\nRuntime task record:\n" + json.dumps(state)

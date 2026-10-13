@@ -17,6 +17,7 @@ use crate::{
 mod approval;
 mod commands;
 mod diff_view;
+mod files;
 pub(crate) mod input;
 mod markdown;
 mod modal;
@@ -71,6 +72,15 @@ pub(crate) async fn interactive() -> Result<()> {
     terminal.leave()?;
     println!("Session restored to your shell.");
     Ok(())
+}
+
+pub(crate) fn browse_project_files(argument: &str) -> Result<()> {
+    crate::require_project_dir_string()?;
+    let mut terminal = TerminalSurface::enter()?;
+    let app = TerminalApp::new();
+    let result = files::open(&mut terminal, &app, argument);
+    terminal.leave()?;
+    result
 }
 
 async fn handle_command(
@@ -189,9 +199,44 @@ async fn handle_command(
             }
             Ok(true)
         }
-        "/project" | "/open" => {
+        "/project" => {
             let arg = parts.collect::<Vec<_>>().join(" ");
             handle_project_command(app, terminal, command, arg.trim())?;
+            Ok(true)
+        }
+        "/ls" | "/cat" => {
+            let argument = input.strip_prefix(command).unwrap_or("").trim();
+            let result = (|| -> Result<String> {
+                let root = std::path::PathBuf::from(crate::require_project_dir_string()?);
+                let path = crate::project_files::path_argument(argument)?;
+                if command == "/ls" {
+                    crate::project_files::directory_text(
+                        &root,
+                        if path.is_empty() { "." } else { &path },
+                    )
+                } else {
+                    if path.is_empty() {
+                        return Err(anyhow!("Usage: /cat FILE"));
+                    }
+                    let file = crate::project_files::read_text(&root, &path)?;
+                    Ok(format!(
+                        "{}\n\n{}",
+                        crate::project_files::display_text(&file.path.to_string_lossy()),
+                        crate::project_files::cat_text(&file)
+                    ))
+                }
+            })();
+            match result {
+                Ok(text) => app.push(Role::Command, command, &text),
+                Err(error) => app.push(Role::Error, command, &error.to_string()),
+            }
+            Ok(true)
+        }
+        "/browse" | "/files" | "/open" => {
+            let argument = input.strip_prefix(command).unwrap_or("").trim();
+            if let Err(error) = files::open(terminal, app, argument) {
+                app.push(Role::Error, command, &error.to_string());
+            }
             Ok(true)
         }
         "/help" | "/menu" => {

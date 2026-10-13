@@ -171,6 +171,13 @@ def create_agent_deck(
         ),
         user_input_handler=user_input_handler,
     )
+    resolved_profile = prompt_profile_status(
+        {"agent_prompt_profile": prompt_profile}, provider=provider, model=model
+    )["resolved"]
+    if local_children and not single_agent and resolved_profile == "small":
+        from ..worker_interface import install_worker_interface
+
+        install_worker_interface(deck["architect"])
     return deck
 
 
@@ -191,6 +198,11 @@ def agent_manifest(
         "architecture": {
             "kernel": "ProtoLink runtime kernel",
             "controller": "architect",
+            "worker_interface": (
+                "Direct typed worker calls for small local runs; native delegation for other profiles/transports"
+                if profile.get("resolved") == "small"
+                else "Native ProtoLink worker delegation"
+            ),
             "stateful": [
                 "architect conversation memory",
                 "Context Loom workspace index",
@@ -234,7 +246,29 @@ def agent_manifest(
                 "persistence": "durable conversation memory",
                 "state": "stateful",
                 "contract": "routes by RunContract; manages bounded source packets and task state, never writes",
-                "tools": ["task_status", "plan_task", "worker_packet", "ask_user"],
+                "tools": (
+                    [
+                        "task_status",
+                        "plan_task",
+                        "ask_user",
+                        "read_context_artifact",
+                        "read_file",
+                        "list_directory",
+                        "search_regex",
+                        "coder",
+                        "run_check",
+                        "execute_command",
+                        *(["tester"] if tester_enabled else []),
+                        *(["web_search", "fetch_url"] if scout_enabled else []),
+                        *(
+                            ["list_mcp_tools", "mcp_tool_schema", "call_mcp_tool"]
+                            if mcp_enabled
+                            else []
+                        ),
+                    ]
+                    if profile.get("resolved") == "small"
+                    else ["task_status", "plan_task", "worker_packet", "ask_user"]
+                ),
                 "enabled": True,
                 "optional": False,
                 **profile_fields,

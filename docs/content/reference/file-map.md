@@ -16,6 +16,7 @@ pages that should usually move with them.
 | `cli/src/terminal_ui.rs` | `CLI / Commands`, `CLI / Fullscreen TUI`, `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/terminal_ui/render.rs` | `CLI / Fullscreen TUI` |
 | `cli/src/terminal_ui/project.rs` | `CLI / Projects And Sessions`, `CLI / Fullscreen TUI` |
+| `cli/src/project_files.rs`, `cli/src/terminal_ui/files.rs` | `CLI / Projects And Sessions`, `CLI / Command Reference`, `CLI / Fullscreen TUI` |
 | `cli/src/terminal_ui/model_picker.rs` | `CLI / Models And Config`, `Getting Started / Provider Setup` |
 | `cli/src/terminal_ui/approval.rs` | `CLI / Safety, Tracing, And Cancellation` |
 | `cli/src/question.rs`, `cli/src/terminal_ui/question.rs` | `CLI / Fullscreen TUI`, `CLI / Safety, Tracing, And Cancellation` |
@@ -87,6 +88,8 @@ pages that should usually move with them.
 | File | Documentation |
 | --- | --- |
 | `core/protoagent_core/task_record.py` | `Core / Task Workflow` |
+| `core/protoagent_core/worker_interface.py` | `Core / Task Workflow`, `Core / ProtoLink Migration` |
+| `core/protoagent_core/python_runtime.py` | `Core / Task Workflow` |
 | `core/protoagent_core/editing.py` | `Core / Task Workflow`, `Core / Safety And Tools` |
 | `core/protoagent_core/harness_eval.py` | `Core / Quality Evals`, `Core / ProtoLink Engine Integration` |
 | `core/protoagent_core/request_budget.py` | `Core / Task Workflow`, `Core / Context Loom` |

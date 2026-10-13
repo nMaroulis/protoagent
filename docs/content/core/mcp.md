@@ -84,7 +84,11 @@ complete remote catalog is never copied into every worker's initial prompt.
 | `mcp_tool_schema(server, tool)` | Return one original input schema and allowlist status. |
 | `call_mcp_tool(server, tool, arguments)` | Validate a JSON argument object using ProtoLink's original MCP schema, then invoke exactly once. |
 
-Architect uses `agent_call` with `agent="mcp"`, `action="tool_call"`,
+Small-profile owned-local runs expose these three calls directly on Architect's
+typed worker interface. They still reach the model-free MCP agent through native
+child supervision, with the same broker policy and approvals.
+
+Other profiles/transports use `agent_call` with `agent="mcp"`, `action="tool_call"`,
 `tool="call_mcp_tool"` and `args={"server":"docs","tool":"lookup_docs",
 "arguments":{"query":"…"}}`. It reads the actual schema before choosing
 arguments. The broker never runs an inference step. Identical tool names on

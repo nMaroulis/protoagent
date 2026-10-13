@@ -2,17 +2,230 @@
 
 import hashlib
 import json
+from unittest.mock import patch
 
 from protolink import Agent, ApprovalDecision, CapabilityPolicy, RunHandle, SubagentLimits, Task
 from protolink.llms.factory import create_llm
 from runtime_support import NativeRuntimeCase
 
+from protoagent_core.agents.architect import create_architect_agent
+from protoagent_core.agents.coder import create_coder_agent
 from protoagent_core.agents.explorer import create_explorer_agent
 from protoagent_core.request_budget import configure_agent_context
+from protoagent_core.run_contracts import infer_run_contract
 from protoagent_core.task_record import add_task_tools, discover_checks
+from protoagent_core.verification import validate_completion
 
 
 class EngineCorrectionTests(NativeRuntimeCase):
+    async def test_prepared_packet_then_coder_dispatch_applies_and_verifies(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        record = self.attempt.record
+        record.checks = discover_checks(str(self.root))
+        record.selected = tuple(record.checks)
+        record.plan(["sample.py", "test_sample.py"], ["Value is 42"])
+        worker = create_llm(
+            "mock",
+            sequential_responses=[
+                {
+                    "type": "tool_call",
+                    "tool": "replace_file",
+                    "args": {"path": str(sample), "content": "value = 42\n"},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "create_file",
+                    "args": {
+                        "path": str(self.root / "test_sample.py"),
+                        "content": "import unittest\nfrom sample import value\nclass Regression(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(value, 42)\n",
+                    },
+                },
+                {"type": "final", "content": "Applied value fix and its regression."},
+            ],
+        )
+        with patch("protoagent_core.agents.coder.create_selected_llm", return_value=worker):
+            coder = create_coder_agent(
+                workspace=str(self.root),
+                provider="mock",
+                model="offline",
+                transport=None,
+                approval_handler=self.broker,
+                authorization=self.authorization,
+                attempt=self.attempt,
+                checkpoints=self.checkpoints,
+            )
+        prepared = []
+        model = create_llm(
+            "mock",
+            sequential_responses=[
+                {
+                    "type": "agent_call",
+                    "agent": "verifier",
+                    "action": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "baseline"},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "worker_packet",
+                    "args": {
+                        "role": "coder",
+                        "objective": "Set value to 42 and add a regression",
+                        "paths": ["sample.py"],
+                    },
+                },
+                {
+                    "type": "agent_call",
+                    "agent": "coder",
+                    "action": "infer",
+                    "prompt": "Set value in sample.py to 42 and create test_sample.py regression. Use the planned scope.",
+                },
+                {
+                    "type": "agent_call",
+                    "agent": "verifier",
+                    "action": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "verify"},
+                },
+                {"type": "final", "content": "Applied and verified the value fix."},
+            ],
+        )
+        acquire = model.call
+
+        def observe(history):
+            if len(prepared) == 0 and '"executed": false' in json.dumps(history.to_list()).replace(
+                '\\"', '"'
+            ):
+                prepared.append(sample.read_text())
+            return acquire(history)
+
+        model.call = observe
+        with patch("protoagent_core.agents.architect.create_selected_llm", return_value=model):
+            agent = create_architect_agent(
+                workspace=str(self.root),
+                provider="mock",
+                model="offline",
+                transport=None,
+                record=record,
+                subagents=[coder, self.verifier],
+                tester_enabled=False,
+            )
+        self.assertEqual(
+            agent.tools["worker_packet"].input_schema["properties"]["role"]["enum"],
+            ["explorer", "coder", "tester"],
+        )
+        configure_agent_context(
+            agent, record, compact_protocol=True, cards=[coder.card, self.verifier.card]
+        )
+        configure_agent_context(coder, record, compact_protocol=True)
+        task = Task.create_infer("Fix sample.py so value is 42, with a regression")
+        self.context.attach_to_task(task)
+        handle = RunHandle.start(agent, task)
+        self.handles.append(handle)
+        for expected in ("execute_command", "replace_file", "create_file", "execute_command"):
+            (approval,) = await self.pending()
+            self.assertEqual(approval.request.action.name, expected)
+            self.broker.resolve(
+                ApprovalDecision(True, approval.request.request_id),
+                scope=self.authorization.scope,
+                fingerprint=approval.fingerprint,
+            )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(prepared, ["value = 0\n"], "Preparing context must not apply edits")
+        accepted = await validate_completion(
+            infer_run_contract("Fix sample.py"),
+            result.task,
+            result.report,
+            self.attempt,
+            self.broker,
+        )
+        self.assertTrue(accepted.completion["applied"], accepted.completion)
+        self.assertTrue(accepted.completion["verified"], accepted.completion)
+        self.assertIn("Ran 1 test", accepted.verification["latest"][0]["stderr"])
+
+    async def test_question_then_check_routing_uses_the_advertised_worker_protocol(self):
+        (self.root / "test_sample.py").write_text(
+            "import unittest\nclass Regression(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(42, 42)\n"
+        )
+        record = self.attempt.record
+        record.checks = discover_checks(str(self.root))
+        record.selected = tuple(record.checks)
+        seen = []
+        model = create_llm(
+            "mock",
+            sequential_responses=[
+                {
+                    "type": "tool_call",
+                    "tool": "ask_user",
+                    "args": {"question": "Change server.py instead of client.py?"},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "verifier_run_check",
+                    "args": {"check_id": "python-tests", "phase": "baseline"},
+                },
+                {
+                    "type": "agent_call",
+                    "agent": "verifier",
+                    "action": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "baseline"},
+                },
+                {"type": "final", "content": "Baseline ran one test."},
+            ],
+        )
+        acquire = model.call
+
+        def observe(history):
+            seen.append(history.to_list())
+            return acquire(history)
+
+        model.call = observe
+
+        async def answer(request):
+            return "Change server.py from Starlette to FastAPI"
+
+        with patch("protoagent_core.agents.architect.create_selected_llm", return_value=model):
+            agent = create_architect_agent(
+                workspace=str(self.root),
+                provider="mock",
+                model="offline",
+                transport=None,
+                record=record,
+                subagents=[self.verifier],
+                tester_enabled=False,
+                user_input_handler=answer,
+            )
+        configure_agent_context(
+            agent, record, fallback_window=8192, compact_protocol=True, cards=[self.verifier.card]
+        )
+        task = Task.create_infer("Change client.py from Starlette to FastAPI")
+        self.context.attach_to_task(task)
+        handle = RunHandle.start(agent, task)
+        self.handles.append(handle)
+        (approval,) = await self.pending()
+        self.broker.resolve(
+            ApprovalDecision(True, approval.request.request_id),
+            scope=self.authorization.scope,
+            fingerprint=approval.fingerprint,
+        )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertIn(
+            '"agent":"verifier","action":"tool_call","tool":"run_check"', seen[0][0]["content"]
+        )
+        self.assertIn("Change server.py from Starlette to FastAPI", json.dumps(seen[2]))
+        self.assertEqual(len(self.broker.records(self.authorization.scope)), 1)
+        self.assertEqual(
+            sum(
+                event.payload.get("llm_event_type") == "tool_rejected"
+                for event in result.report.events
+            ),
+            1,
+        )
+
     def planner(self, responses, policy=None, **settings):
         record = self.attempt.record
         record.checks = discover_checks(str(self.root))

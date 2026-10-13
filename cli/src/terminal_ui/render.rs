@@ -617,8 +617,18 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                 cyan(),
                 true,
             ));
-            rows.push(row("set", "/project or /project PATH", yellow(), false));
-            rows.push(row("clear", "/project clear", muted(), false));
+            rows.push(row(
+                "set",
+                "/project PATH | /project clear",
+                yellow(),
+                false,
+            ));
+            rows.push(row(
+                "files",
+                "/ls | /browse | /open FILE | /cat FILE",
+                yellow(),
+                false,
+            ));
             rows.push(row(
                 "tags",
                 "type @ in the prompt to choose a file from the active project",

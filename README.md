@@ -125,6 +125,11 @@ Registry server or loopback transport startup. Explicit transport meshes remain
 available. Native context policies and lifecycle hooks keep task state current
 and make large results retrievable in small pages.
 
+Small-profile local runs expose direct typed worker calls such as `read_file`,
+`coder(task)` and `run_check`. The model chooses the operation; ProtoLink runs the
+original worker with its existing policies, approvals and shared budget. This
+removes nested routing fields and a separate packet step from common tasks.
+
 `proto-cli eval harness --json` checks these engine contracts offline, without
 a running model. See the [engine integration guide](docs/content/core/protolink-migration.md)
 for adopted capabilities, optional model fallback and recovery boundaries.
@@ -147,6 +152,10 @@ Start the TUI from the repository root:
 cargo run --locked --manifest-path cli/Cargo.toml -- project set /path/to/project
 cargo run --locked --manifest-path cli/Cargo.toml -- start
 ```
+
+Browse files without a model using `/ls`, `/browse`, `/open FILE` and `/cat FILE`
+in the TUI, or `proto-cli ls` and `proto-cli cat FILE` in the shell. See
+[project file inspection](docs/content/cli/projects-and-sessions.md#browse-and-view-files).
 
 Or run one task:
 

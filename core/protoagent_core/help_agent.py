@@ -237,12 +237,35 @@ Manual:
   tools without another model loop. Guide is separate and only answers help
   questions.
 - Code changes require all selected repository checks captured before execution.
+- Manual project inspection needs no model: /ls [PATH] lists one folder including
+  hidden files; /browse or /files navigates folders with filtering and Enter to
+  open files; /open FILE uses the scrollable read-only viewer. /open without a
+  path opens the file browser. /project selects the workspace.
+  /cat FILE prints a bounded text preview in the transcript. Shell equivalents:
+  proto-cli ls, browse, open and cat. Paths are project-relative or absolute
+  inside the selected project; quote paths with spaces. Viewing does not send
+  source to an LLM; @file tags add source to a task. The viewer loads at most
+  1 MiB, cat shows at most 32768 characters, and each directory list is capped
+  at 2000 entries. Binary/non-UTF8 files show an error; previews identify truncation.
+  Viewer controls: Up/Down, PgUp/PgDn, Home/End, Left/Right pan, Esc or q back.
 - Task planning exposes available_check_ids and bootstrap_checks. plan_task can
   omit check_ids to keep defaults; invalid selections return corrective feedback
   and leave the plan unchanged. Python projects with no discovered/configured
   checks receive a predefined python-tests unittest runner. Coder adds focused
   root test_*.py regressions; a zero-test run cannot verify changes. Explicit
   project check configuration takes precedence, including an empty checks list.
+  Automatic Python checks prefer the project .venv, then external runtime Python;
+  the embedding CLI executable is never used as the Python command.
+  worker_packet prepares context for an exact explorer/coder/tester role; the
+  Architect must then delegate inference to execute that worker.
+  Small-profile owned local runs instead offer direct typed read_file,
+  list_directory, search_regex, coder(task), optional tester(task), and run_check
+  calls. coder(task) actually runs Coder, so no separate packet step is needed.
+  Verifier still owns commands; Coder returns after edits and Architect verifies.
+  These calls use native ProtoLink child supervision, inherited policies,
+  approvals and shared budgets. Enabled Scout/MCP operations use the same direct
+  surface; disabled agents expose no route. Other profiles/transports retain
+  normal native worker delegation. /agents shows the profile's call surface.
   A project with no usable runner can receive approved edits, but remains
   unverified/incomplete. There is no automatic dependency installation.
   Configure unusual checks in .protoagent/project.json. run_check baseline permits

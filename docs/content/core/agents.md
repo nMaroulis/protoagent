@@ -65,15 +65,19 @@ The default CLI runtime constructs the deck with `local_children=True` and
 `transport=None`. Architect receives the enabled workers as its native
 `subagents` roster. Each call gets an independent conversation; repeated jobs for
 one worker do not share its previous assignment. Child actions must satisfy the
-Architect's delegation ceiling and the worker's own policy. Architect still has
-no mutation or process tools. `SubagentLimits` caps depth at one, concurrency at
+Architect's delegation ceiling and the worker's own policy. Architect has no
+direct mutation or process executor. In the small profile it exposes typed
+worker calls such as `coder(task)` and `run_check`, backed by the native child
+supervisor; the original workers keep their policies and receipts.
+`SubagentLimits` caps depth at one, concurrency at
 one and children at 32 per attempt. Shared Graph budgets also cover child work.
 Explicit transport mode uses authenticated Registry discovery instead.
 
 Native cards derive `supports_inference` from the request handler independently
 of connection health. Architect, Explorer, Coder and enabled Tester accept
 inference; Verifier, Scout and MCP accept tool calls only. Small-profile worker
-metadata retains this field and exact tool schemas. ProtoLink rejects unsupported
+metadata retains this field. The small local interface advertises exact facade
+schemas without repeating the whole child tool inventory. ProtoLink rejects unsupported
 inference, invented worker tools and invalid arguments before dispatch and
 returns bounded correction guidance to the coordinator. Legacy external cards
 with unknown inference support retain the engine's compatibility behavior.
@@ -166,8 +170,11 @@ Capabilities:
 | `state.reset` | allow |
 | default | deny |
 
-Architect has task-status, planning and bounded source-packet tools, with no write
-tools. It delegates broader exploration to Explorer and file changes to Coder. Because workers are
+Architect has task-status and planning tools, with no direct write tool. Small
+owned-local runs also offer typed Explorer reads, `coder(task)`, optional
+`tester(task)`, Verifier operations and enabled Scout/MCP operations. Other
+profiles and explicit transport meshes use native delegation and bounded
+source packets. It delegates broader exploration to Explorer and file changes to Coder. Because workers are
 stateless, Architect handoffs must include the objective, relevant paths,
 evidence, and acceptance criteria for the current task.
 
@@ -203,7 +210,10 @@ Source: `core/protoagent_core/agents/coder.py`
 Coder is the stateless worker that can prepare file modifications. It does not
 get Explorer's broad search tools. It has bounded `read_file` access and can
 request missing context through `report_task`. Architect can pass real source
-packets using `worker_packet`. The preferred edit is an exact replacement with a
+packets using `worker_packet` outside the simplified local interface. Coder
+returns after applying its assignment; Architect owns the verification step.
+Small-profile inference omits redundant `task_status` and `list_files` tools.
+The preferred edit is an exact replacement with a
 full-file revision, avoiding reproduction of unaffected source.
 
 Tools registered directly from `protolink.tools.builtins.filesystem_tools()`:

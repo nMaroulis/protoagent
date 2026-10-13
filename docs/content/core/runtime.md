@@ -47,8 +47,11 @@ flowchart LR
   R --> A
 ```
 
-Architect receives repository context and delegates through normal ProtoLink
-`agent_call` execution. A runtime-owned TaskRecord holds criteria, scope, discovered
+Architect receives repository context. Small owned-local runs use fixed typed
+worker calls prepared with `PreparedTool` and executed by ProtoLink's child
+supervisor; other profiles/transports use normal `agent_call` execution.
+Both retain native child policies, approvals and receipts.
+A runtime-owned TaskRecord holds criteria, scope, discovered
 check IDs and worker reports. Baseline and preparation commands allow later edits;
 final verification closes the edit phase. The check plan freezes at the first
 write or final check. See [Task Workflow](task-workflow.md).

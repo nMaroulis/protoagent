@@ -46,6 +46,10 @@ Installed examples use `proto-cli <command>`.
 | `project set PATH` | Set the active project folder. |
 | `project clear` | Clear the active project folder. |
 | `project choose` | Prompt for a project folder. |
+| `ls [PATH]` | List a project directory, including hidden entries; no model. |
+| `browse [PATH]`, `files [PATH]` | Interactive folder navigation and read-only file viewing. |
+| `open [FILE]` | Scrollable text viewer; no path opens the browser. |
+| `cat FILE` | Print a bounded project text preview; works without a model. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
 | `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Tester/Scout/MCP state, and tool isolation. |
 | `agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
@@ -75,6 +79,10 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | --- | --- |
 | `/quit`, `/exit` | Leave the TUI. |
 | `/clear` | Clear the visible transcript. |
+| `/ls [PATH]` | List one project directory, including hidden files. |
+| `/browse [PATH]`, `/files [PATH]` | Navigate folders, filter entries and open text files. |
+| `/open [FILE]` | Open the read-only viewer; no path opens the browser. Use `/project` to choose a workspace. |
+| `/cat FILE` | Display a bounded text preview directly in the transcript. Quote paths with spaces. |
 | `/dashboard`, `/dash`, `/status` | Pin the dashboard panel. |
 | `/models` | Pin the model inventory panel and refresh model status. |
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
@@ -104,7 +112,7 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/config` | Pin provider config panel. |
 | `/debug [on\|off]` | Show the current debug display mode, reveal response metadata with a `/trace` hint, or hide it. Defaults off for each TUI session. |
 | `/version`, `/versions` | Show CLI, Python core, and planned ACP component versions. |
-| `/project`, `/open` | Choose the active project. |
+| `/project` | Choose the active project. |
 | `/project PATH` | Open a project directly. |
 | `/project clear` | Clear the active project. |
 | `/help`, `/menu` | Show help panel and Guide availability. |

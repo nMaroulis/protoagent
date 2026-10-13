@@ -10,6 +10,38 @@ survives conversation compaction and request-level observation eviction.
 
 ## Worker responsibilities
 
+The small profile's owned local runs offer direct typed worker calls:
+
+| Call | Executing worker |
+| --- | --- |
+| `read_file(path, start_line, end_line)`, `list_directory(path)`, `search_regex(pattern, path, file_filter)` | Explorer; no inference needed for these reads. |
+| `coder(task)` | Coder inference; runs the edit assignment immediately. |
+| `tester(task)` | Optional Tester inference; focused read-only test design. |
+| `run_check(check_id, phase)`, `execute_command(argv, cwd, env, ...)` | Verifier; native command approval and execution. |
+| `web_search(...)`, `fetch_url(...)` | Enabled Scout; public-web evidence. |
+| `list_mcp_tools(...)`, `mcp_tool_schema(...)`, `call_mcp_tool(...)` | Enabled MCP broker; external evidence and native approvals. |
+
+JSON mode uses an ordinary local action, for example
+`{"type":"tool_call","tool":"run_check","args":{"check_id":"python-tests","phase":"baseline"}}`.
+Native mode exposes `run_check` with those normal arguments. No worker/action
+selection or `args_json` string is needed for these calls. These are fixed
+registered routes, not guessed aliases: invented names are still rejected.
+The prepared operation reaches the original worker through ProtoLink's native
+owned child supervisor. The worker keeps its policy, inherited constraints,
+approvals, cancellation, budgets and execution receipts.
+
+Other profiles and explicit transport meshes retain native `agent_call` routing:
+JSON actions use separate `agent`, `action`, `tool` and `args` fields; native
+providers use `protolink_call_agent_tool` or `protolink_delegate_agent`.
+The low-level protocol remains valid for compatibility. Small-profile prompts
+omit repeated child tool schemas and the separate packet preparation step.
+
+Baseline precedes editing; Coder returns after applying its assignment;
+Architect runs final verification through Verifier. Small-profile Coder requests
+omit redundant `task_status` and `list_files` tools: state is already injected,
+and source discovery belongs to Explorer. Coder can still read assigned files,
+apply scoped edits and report missing context.
+
 | Role | Responsibility |
 | --- | --- |
 | Architect | Choose focused tasks and explain the final outcome. |
@@ -40,11 +72,19 @@ full command specifications are omitted to save context.
 Once a write or final check is proposed the plan is frozen for the run, including
 repairs. A plan cannot remove checks after observing a failure.
 
-`worker_packet(role, objective, paths)` resolves up to eight real source references
+The low-level `worker_packet(role, objective, paths)` remains available to
+application callers and other profiles; small owned-local inference hides it
+in favor of `coder(task)` and `tester(task)`. It accepts the exact roles `explorer`, `coder`
+and `tester`, not descriptive job titles. Its schema advertises those choices.
+It resolves up to eight real source references
 into bounded source spans (6000 source characters shared across references),
 criteria and check IDs. Source reads may include supporting files outside the
 write scope; writes remain restricted. Architect supplies this packet
-through normal ProtoLink delegation. Workers can reread source directly and use
+through normal ProtoLink delegation. The packet returns `executed: false` and a
+dispatch reminder: preparing it does not execute a worker or apply changes.
+After preparing a packet, delegate inference to its worker with that context;
+do not repeatedly prepare it or start final verification before Coder applies edits.
+Workers can reread source directly and use
 `report_task(status, summary, missing_paths)` with `done`, `needs_context` or
 `blocked`. The runtime record is exposed in run output and refreshed in admitted
 model requests. Reports never replace executed receipts. An unresolved `needs_context` or `blocked`
@@ -98,6 +138,14 @@ native process approval. A baseline may report zero tests; final verification
 cannot pass until actual tests run successfully. Other discovered checks and
 explicit configuration take precedence; the model cannot replace this command.
 Discovery does not import application code or install dependencies.
+
+Automatic Python checks prefer the project's `.venv` interpreter, then an
+external interpreter belonging to the running Python installation, with PATH
+lookup as a final fallback. The Rust CLI embeds CPython, so `sys.executable`
+can name `proto-cli`; that host binary is excluded. Interpreter symlink spelling
+is retained to preserve virtual environments. Check argv and the explicit
+environment are still captured before inference and reviewed through native
+process approval. Coding evaluation scripts use the same interpreter selection.
 
 If no check can be configured, an empty plan may still scope approved edits.
 Such code changes remain `unverified` and `incomplete` at completion. An explicit

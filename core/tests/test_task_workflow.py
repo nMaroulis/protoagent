@@ -381,6 +381,30 @@ class CodingEvaluationTests(unittest.TestCase):
 
 
 class CompactProtocolTests(unittest.TestCase):
+    def test_coder_dispatch_is_explicit_for_both_protocols(self):
+        from protoagent_core.request_budget import compact_protocol_prompt
+
+        cards = json.dumps(
+            {"name": "coder", "capabilities": {"supports_inference": True}, "tools": []}
+        )
+        for native in (True, False):
+            with self.subTest(native=native):
+                prompt = compact_protocol_prompt(
+                    instructions="Apply the edit.",
+                    tools="[]",
+                    cards=cards,
+                    name="architect",
+                    native=native,
+                )
+                self.assertIn("next action is worker inference", prompt)
+                self.assertIn("never runs Coder", prompt)
+                self.assertIn(
+                    'protolink_delegate_agent with agent="coder"'
+                    if native
+                    else '"agent":"coder","action":"infer"',
+                    prompt,
+                )
+
     def test_compact_prompt_preserves_input_schemas_and_drops_large_output_metadata(self):
         from protoagent_core.request_budget import compact_protocol_prompt
 

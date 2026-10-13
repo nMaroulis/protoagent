@@ -175,6 +175,16 @@ retaining previous observations. A custom deterministic prompt handler may
 support inference without containing a model; model presence alone is not the
 request contract.
 
+The model-facing call surface can be simpler than the execution topology. A
+small coordinator should choose a typed operation, such as reading source,
+assigning an edit or running a captured check, without reconstructing a worker
+name, request type, remote tool name and encoded argument object on every call.
+Software can bind each operation to its existing worker boundary. This removes
+syntactic routing decisions while preserving specialization, authorization and
+execution evidence. Registered routes must be explicit: interpreting invented
+names or silently converting a failed tool call into inference would introduce
+ambiguity into the execution contract.
+
 The Architect is the routing authority. Workers have task-local contexts and do
 not create their own delegation trees. This bounds coordination depth and makes
 handoffs visible, although it also makes the controller a potential bottleneck.
@@ -442,18 +452,26 @@ run scope; a UI display alone cannot certify execution or completion. Another
 frontend would need to implement the approval, live question and cancellation contracts before
 it could operate the same harness.
 
+Operator inspection can also remain outside inference. The CLI provides shallow
+directory listing, folder navigation and a read-only file viewer with bounded
+previews. `/ls`, `/browse`, `/open` and `/cat` make repository inspection available
+without spending model tokens. Viewing does not add source to a model request;
+explicit file tags control task input. These views are presentation tools and
+do not create execution or verification evidence.
+
 ### 11.2 Implemented mechanisms and their bounds
 
 | Mechanism | Practical behavior |
 | --- | --- |
 | Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
+| Worker handoff | Small-profile local runs expose fixed typed reads, `coder(task)`, optional `tester(task)`, Verifier checks and enabled external operations. Prepared calls reach original workers through native ProtoLink child supervision. Other profiles/transports retain native delegation. Low-level packet preparation remains an unexecuted context operation. |
 | Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique old span and a matching revision before preparing a native recoverable write. |
 | Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
 | Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
 | Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
 | User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
 | Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
-| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection provides conventional fallbacks without executing discovery commands. |
+| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection provides conventional fallbacks without executing discovery commands. Python commands select an external interpreter, preferring the project's virtual environment, rather than the embedding CLI host executable. |
 | Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
 | Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |
 | MCP access | Three fixed broker tools provide name discovery, one exact schema and an allowlisted invocation. Pages contain at most 12 descriptors; schemas over 12,000 characters are rejected and results over 6,000 characters are marked truncated. |

@@ -14,6 +14,55 @@ UNFINISHED = {"tool_call": {"name": "explorer", "args": {"tool": "read_file", "p
 
 
 class ActionAnswerTests(NativeRuntimeCase):
+    async def test_flat_worker_read_executes_in_native_and_json_modes(self):
+        (self.root / "README.md").write_text("A small task management service.\n")
+        for native in (False, True):
+            with self.subTest(native=native):
+                call = {"name": "read_file", "arguments": {"path": "README.md"}}
+                result, requests = await self.run_replies(
+                    [
+                        {"tool_calls": [{"function": call}]}
+                        if native
+                        else {
+                            "content": json.dumps(
+                                {
+                                    "type": "tool_call",
+                                    "tool": "read_file",
+                                    "args": {"path": "README.md"},
+                                }
+                            )
+                        },
+                        {"content": "A task service."}
+                        if native
+                        else {
+                            "content": json.dumps({"type": "final", "content": "A task service."})
+                        },
+                    ],
+                    native=native,
+                )
+                self.assertEqual(result["status"], "completed", result["answer"])
+                self.assertEqual(len(requests), 2)
+                self.assertIn(
+                    "A small task management service", json.dumps(requests[1]["messages"])
+                )
+                if native:
+                    tools = {tool["function"]["name"] for tool in requests[0]["tools"]}
+                    self.assertIn("read_file", tools)
+                    self.assertIn("run_check", tools)
+                    self.assertNotIn("worker_packet", tools)
+                    self.assertEqual(
+                        result["context_admission"]["architect"]["schema_tokens"],
+                        estimate_token_count(requests[0]["tools"]),
+                    )
+                self.assertTrue(
+                    any(
+                        e["type"] == "action.completed"
+                        and e.get("agent_name") == "explorer"
+                        and e["payload"].get("action", {}).get("name") == "read_file"
+                        for e in result["run_events"]
+                    )
+                )
+
     async def run_replies(self, messages, *, native=False):
         requests = []
         replies = iter(messages)

@@ -60,7 +60,7 @@ pub(super) fn handle_project_command(
                 Role::Command,
                 command,
                 &format!(
-                    "Opened project: {}\nFuture starts reopen this folder. Type @ in the prompt to tag files.",
+                    "Opened project: {}\nBrowse with /browse, list with /ls, or view /cat FILE. Type @ to tag files into a prompt. Future starts reopen this folder.",
                     path.to_string_lossy()
                 ),
             );

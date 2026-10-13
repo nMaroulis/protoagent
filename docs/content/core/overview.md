@@ -41,6 +41,7 @@ The core is responsible for:
 | `models.py` | Local/API model discovery and API key validation. |
 | `config.py` | Provider config, API keys, context window, prompt profile, and optional-agent settings. |
 | `tools.py` | Workspace-safe deterministic tools. |
+| `worker_interface.py` | Typed small-profile worker calls backed by native ProtoLink child supervision. |
 | `mcp.py` | Lazy MCP configuration, bounded discovery/calls, native policy and model-free setup/probes. |
 | `help_agent.py` | Isolated Guide agent for `/help QUESTION`. |
 | `context/` | Context Loom indexer, SQLite store, packer, schemas. |

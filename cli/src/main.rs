@@ -14,6 +14,7 @@ use std::{env, fs};
 mod diff;
 mod inline_style;
 mod progress;
+mod project_files;
 mod question;
 mod sessions;
 mod terminal_ui;
@@ -253,6 +254,8 @@ struct ArchitectureManifest {
     #[serde(default)]
     controller: String,
     #[serde(default)]
+    worker_interface: String,
+    #[serde(default)]
     stateful: Vec<String>,
     #[serde(default)]
     stateless: Vec<String>,
@@ -337,6 +340,28 @@ async fn main() -> Result<()> {
         None | Some("start") | Some("cli") | Some("tui") | Some("terminal") | Some("ui") => {
             terminal_ui::interactive().await
         }
+        Some("ls") => {
+            let root = PathBuf::from(require_project_dir_string()?);
+            let path = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+            println!(
+                "{}",
+                project_files::directory_text(&root, if path.is_empty() { "." } else { &path })?
+            );
+            Ok(())
+        }
+        Some("cat") => {
+            let root = PathBuf::from(require_project_dir_string()?);
+            let path = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+            if path.is_empty() {
+                return Err(anyhow!("Usage: proto-cli cat FILE"));
+            }
+            let file = project_files::read_text(&root, &path)?;
+            print!("{}", project_files::cat_text(&file));
+            Ok(())
+        }
+        Some("browse") | Some("files") | Some("open") => terminal_ui::browse_project_files(
+            &args.iter().skip(1).cloned().collect::<Vec<_>>().join(" "),
+        ),
         Some("run") => {
             let query = args.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
             if query.trim().is_empty() {
@@ -366,7 +391,7 @@ async fn main() -> Result<()> {
             print_header()?;
             show_versions()
         }
-        Some("project") | Some("projects") | Some("open") => {
+        Some("project") | Some("projects") => {
             print_header()?;
             handle_project_command(&args[1..])
         }
@@ -460,6 +485,10 @@ fn print_cli_help() {
     println!("  proto-cli project            Show or choose active project folder");
     println!("  proto-cli project set PATH   Set active project folder");
     println!("  proto-cli project clear      Clear active project folder");
+    println!("  proto-cli ls [PATH]          List project files without a model");
+    println!("  proto-cli browse [PATH]      Navigate project folders and view files");
+    println!("  proto-cli open [FILE]        Open the read-only viewer or file browser");
+    println!("  proto-cli cat FILE           Print a bounded text preview");
     println!("  proto-cli check              Check Python/protolink/providers");
     println!("  proto-cli agents             Show runtime kernel, contract, and workers");
     println!(
@@ -1870,6 +1899,9 @@ fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<Stri
             empty_as_unknown(&architecture.controller)
         ),
     ];
+    if !architecture.worker_interface.is_empty() {
+        rows.push(format!("Calls      : {}", architecture.worker_interface));
+    }
     if !architecture.stateful.is_empty() {
         rows.push(format!(
             "Stateful   : {}",
@@ -3463,6 +3495,74 @@ fn prepare_python_path(py: Python<'_>) -> PyResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod embedded_python_tests {
+    use super::prepare_python_path;
+    use pyo3::prelude::*;
+    use serde_json::Value;
+    use std::process::Command;
+
+    #[test]
+    fn discovered_checks_and_eval_oracle_use_external_python() {
+        // This must run inside PyO3: standalone core tests have a valid
+        // sys.executable and previously missed the CLI host-binary bug.
+        let (python, args, cwd, env): (String, Vec<String>, String, Value) =
+            Python::attach(|py| -> PyResult<_> {
+                prepare_python_path(py)?;
+                let module = py.import("protoagent_core.task_record")?;
+                let checks = module
+                    .getattr("discover_checks")?
+                    .call1((concat!(env!("CARGO_MANIFEST_DIR"), "/../core"),))?;
+                let check = checks.get_item("python-tests")?;
+                let argv: Vec<String> = check.getattr("argv")?.extract()?;
+                let cwd: String = check.getattr("cwd")?.extract()?;
+                let env_json: String = py
+                    .import("json")?
+                    .getattr("dumps")?
+                    .call1((check.getattr("env")?,))?
+                    .extract()?;
+                let oracle = py
+                    .import("protoagent_core.coding_eval")?
+                    .getattr("oracle_result")?
+                    .call1((cwd.clone(), "assert 2 + 2 == 4\n"))?;
+                assert!(oracle.get_item("passed")?.extract::<bool>()?);
+                Ok((
+                    argv[0].clone(),
+                    argv[1..].to_vec(),
+                    cwd,
+                    serde_json::from_str(&env_json).unwrap(),
+                ))
+            })
+            .unwrap();
+        assert_ne!(
+            std::path::PathBuf::from(&python),
+            std::env::current_exe().unwrap()
+        );
+        assert_eq!(&args[..2], &["-m", "unittest"]);
+        let output = Command::new(python)
+            .args(["-c", "print('external-python-ok')"])
+            .current_dir(cwd)
+            .env_clear()
+            .envs(
+                env.as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| (k, v.as_str().unwrap())),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "external-python-ok"
+        );
+    }
 }
 
 fn python_path_candidates() -> Vec<PathBuf> {

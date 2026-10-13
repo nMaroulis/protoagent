@@ -100,6 +100,22 @@ prompt nor opens a picker. Control bytes are removed; tabs become two spaces.
 Input history is stored in memory for the current TUI process and capped by
 `INPUT_HISTORY_CAPACITY`.
 
+## File browser and viewer
+
+`/ls [PATH]` lists a project folder. `/browse [PATH]` or `/files` opens a
+directory browser with typing to filter, arrow/page navigation, Enter to open
+and Backspace to go up when the filter is empty. Esc closes the browser.
+`/open FILE` opens the read-only source viewer directly; without a path it
+opens the browser. `/cat FILE` displays a text preview in the transcript.
+
+The viewer supports vertical scrolling, Home/End and horizontal panning with
+Left/Right. Esc or q returns. Files are read once and cached while viewing;
+resizing does not reload them. Preview/list limits keep memory bounded. None
+of these commands invokes a model or adds viewed text to model context.
+See [project file inspection](projects-and-sessions.md#browse-and-view-files)
+for quoted paths, limits and shell equivalents. `/project` selects a workspace;
+`/open` is now a file-view command.
+
 ## File Tag Picker
 
 Typing `@` opens a searchable modal backed by
