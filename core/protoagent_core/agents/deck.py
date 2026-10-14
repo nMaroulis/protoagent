@@ -171,6 +171,7 @@ def create_agent_deck(
             attempt=attempt,
         )
     deck["architect"] = create_architect_agent(
+        attempt=attempt,
         registry=registry,
         provider=provider,
         model=model,

@@ -204,6 +204,14 @@ Documentation-only changes may finish with verification explicitly unverified.
 
 Coder writes and restoration explicitly require native broker approval. Rust
 displays the prepared diff and returns its exact request ID and fingerprint.
+Choose `/approvals` in the TUI, or `proto-cli approvals MODE`: `ask` reviews each
+edit and command (default), `edits` auto-accepts file edits while asking about
+commands, and `auto` also accepts commands with normal host permissions.
+Preferences are saved per project for subsequent runs. MCP and restoration still
+ask; native policies, source checks and recovery remain in force. Auto-accept
+does not disable verification. Write runs finish with an applied-file summary;
+`/diff` shows combined actual edits, and `/diff proposed` shows proposal previews
+separately. See the [approval and review guide](docs/content/cli/safety-tracing.md).
 Esc or Ctrl-C requests `RunHandle` cancellation. Approval never counts as an
 executed change; uncertain effects are not automatically replayed.
 

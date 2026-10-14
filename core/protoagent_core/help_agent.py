@@ -49,7 +49,13 @@ Manual:
   steady mint cursor on the text background and animated thinking dots. Bold,
   italic, headings and highlighted inline/fenced code render while streaming;
   saved answers retain their original Markdown. JSON-action wrappers stay hidden.
-  Runtime activity appears only in the bottom status area; /trace shows
+  This includes native-capable models sending tool calls as JSON text. Actual
+  calls appear as muted activity; /trace keeps their full arguments. Requested
+  JSON answer data is preserved. A tool selection clears provisional narration.
+  Before answer text arrives, one muted line in the response shows current work
+  such as file reads, coding, approvals or checks. New activity replaces it;
+  streaming, completion and failure remove it. It is not saved in the answer.
+  Runtime activity also appears in the bottom status area; /trace shows
   detailed events and worker output. Empty input has a dim keyboard-hint
   placeholder and a slow-blinking cursor. Two muted horizontal borders frame the
   input, which expands upward for up to three visible lines. Slash-command
@@ -86,6 +92,23 @@ Manual:
   Recovery needs no model, preserves original bytes/mode, and refuses changed
   native revisions. Older checkpoints can conflict after a later restoration.
   Legacy records are inspection-only; they cannot be natively restored.
+- `/approvals` opens the project approval picker. `/approvals ask` asks for each
+  file edit and command (default); `/approvals edits` auto-accepts file edits but
+  asks before commands; `/approvals auto` auto-accepts both edits and commands.
+  Auto commands use normal host permissions. `/approvals status` reports the
+  mode; shell equivalents are `proto-cli approvals [ask|edits|auto|status]`.
+  Preferences are saved per canonical project path, apply to subsequent runs,
+  and appear in the TUI status/config. MCP connections/calls and file restoration
+  always ask. Native policies, revisions, budgets and recovery still apply.
+  Auto-accept does not disable verification or mark failed checks passed.
+- Write runs end with a deterministic applied-file summary and line counts.
+  `/diff` reviews the combined applied diff; `/diff raw` prints it. Incremental
+  edits to one file combine from this run's first preimage to last applied
+  snapshot, excluding denied/unexecuted proposals and pre-existing changes.
+  `/diff proposed` separately shows approval previews, possibly unapplied.
+  Partial changes remain reviewable after failure or manual verification handoff.
+  External changes and uncertain effects are marked. Binary/oversized files get
+  a summary; process/MCP effects outside native file tools are not included.
 - Verifier runs test/build/lint argv through ProtoLink execute_command, with
   process.execute approval of argv, absolute cwd, explicit env and limits.
   V views details or a file diff and does not approve execution. Y explicitly
@@ -237,17 +260,63 @@ Manual:
   ProtoLink owns authenticated metadata discovery, its five-minute cache and
   task-local mode selection. Other providers retain adapter defaults unless
   providers.PROVIDER.tool_calling is explicitly configured.
+  For small-profile Gemma 4, auto selects ProtoLink's JSON action protocol because
+  advertised native support can return narration/channel/action text without a
+  structured call. Explicit native/json settings win. The same engine validates
+  and dispatches actions; no new agent or executor is added.
+  Small-profile Ollama requests bound generation to 4096 tokens by default;
+  small Gemma 4 variants default to think=false. Explicit model_params settings
+  win, including max_tokens/num_predict and think; model sampling is preserved.
+  Ollama's token-repeat abort is a generation failure, separate from worker
+  turn limits. Incomplete streamed tool proposals are discarded, never executed.
   Recognizable malformed action envelopes receive native parse correction;
   explanatory prose and explicit final.content remain application data.
   /trace shows actual execution receipts, rejections and correction exhaustion.
+- If a model stops before executing edits, the final answer says no files changed.
+  Required checks that were never executed are labeled not run, not failed tests.
+  A completed command failing to import pytest or a dependency is reported as
+  an environment/setup problem, with its original exit status kept in the trace.
+- Python create/replace/exact edits reject introduced syntax errors before write
+  approval via native no-change feedback. This catches literal double-escaped
+  newline code without silently unescaping anything or running/importing source.
+  Pre-existing malformed Python can still be repaired incrementally. Syntax
+  validation does not prove correct imports, names or behavior; checks still matter.
 - Invalid plans, stale/ambiguous edit proposals and invalid check requests use
   native no-change rejection feedback. Correct them from details/suggestion in
   the same run. Verifier/Scout/MCP accept tool calls, not inference; ProtoLink
   validates advertised worker capabilities before dispatch.
   Coder copies short unique old spans literally from read_file.content. Stale
-  revisions and non-unique/missing matches prepare only read validation feedback;
+  revisions, non-unique/missing matches and identical old/new text prepare only read validation feedback;
   the native inference loop can correct them without a file approval. Valid edits
   still require native filesystem.write authorization and exact diff approval.
+  Successful exact edits return source_revision for the next edit of known
+  source. Native resource.version is a different recovery identity, not the
+  expected_revision for edit_file. Reread missing source or a rejected selection.
+  Each native inference has a ten-turn limit separate from the shared run budget.
+  The harness stops Coder before the tenth provider call in each work window.
+  Fresh native writes with current revisions permit up to three windows within
+  the same assignment, scope, history and aggregate budget (at most 27 calls).
+  /trace records worker.continuing; approvals and applied edits are not replayed.
+  PROTOAGENT_CODER_MAX_WINDOWS lowers this bound, clamped to 1-3, default three.
+  Without new writes in the current window, earlier edits cannot justify another.
+  Exhaustion reports needs_context/worker_turn_limit for progressing partial work;
+  a stalled window reports blocked/worker_no_progress, retaining earlier edits.
+  An exhausted partial assignment returns directly to the native Graph before
+  another Architect model request; it does not ask whether to continue an already
+  requested task. Up to two qualifying Graph continuations preserve the frozen
+  plan/edit phase/shared budget. /trace records workflow.work_yielded.
+  No-progress handoffs, stale evidence, native failures/denials/uncertainty and
+  manual verification stops do not qualify. /trace records workflow.continuing.
+  A completed failing final check yields before another Architect model request.
+  The native Graph alone can open a new edit phase, with at most two repairs;
+  /trace records workflow.repair.requested. Missing dependencies can still be
+  deferred to manual verification through ask_user in that repair attempt.
+  An unresolved handoff prevents completion. Native failures retain their stop behavior and show applied
+  paths; inspect /diff, current files and /trace before continuing.
+  Check discovery selects pytest for function-style/mixed Python suites and
+  unittest for unittest-only suites through bounded static reads, not imports.
+  Missing pytest is an environment error; it is never silently replaced with an
+  empty unittest run or installed automatically. Project check configuration wins.
   providers.PROVIDER.max_tool_corrections sets the native correction allowance
   (default two per inference), shared by unknown tools, schemas, application
   rejections and delegation mistakes. Success does not reset it; all model calls

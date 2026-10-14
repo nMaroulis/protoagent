@@ -64,6 +64,12 @@ Third, completion must be grounded in effects. A proposed patch, an approval, a
 worker's confidence and a successful check are different kinds of evidence.
 The harness must preserve those distinctions when reporting the result.
 
+The operator may select automatic acceptance of prepared edits, or of edits
+and commands, without delegating that preference to a model. Acceptance remains
+an exact, scoped runtime decision: policies and preimage checks still apply,
+and authorization alone does not establish execution or successful verification.
+This separates control over interaction frequency from evidence of correctness.
+
 A useful conceptual context budget is:
 
 ```text
@@ -145,6 +151,43 @@ context or a blocker. Missing information should be made explicit rather than
 filled with invented source. A reported blocker must remain visible until it is
 resolved; it should not disappear merely because the next message sounds
 confident.
+
+Bounded assignments also need a return path before their local inference budget
+is exhausted. An enforced return boundary can construct a partial handoff from
+recorded effects without asking the model for another response. It should
+distinguish applied edits from an assignment that made no changes, so a controller
+can narrow the remaining work or seek specific missing context without repeating
+an unproductive sequence of reads. The remaining assignment stays within the
+shared run budget. This is distinct from retrying a failed action: committed
+effects remain in place, native stop conditions still apply, and an unresolved
+handoff prevents completion. Returning the approved afterimage's source digest
+also reduces repeated reads between focused edits without weakening the next
+edit's live revision guard.
+
+A local inference limit also need not force a controller round trip while a
+worker is making measurable progress. The harness can admit another bounded work
+window in the same assignment when that window produced fresh committed changes
+and the latest revisions remain current. This preserves the small worker's
+context and original scope while reducing repeated discovery, rereads and
+controller decisions. Earlier progress cannot justify a later stalled window.
+The number of windows and aggregate budget stay bounded; native failures and
+explicit missing-context reports remain stop conditions. Applied changes justify
+continued work, not a claim of correctness.
+
+The controller's return is also a proposal. When stable applied effects and an
+explicit partial-work record show that editing remains unfinished, a bounded
+workflow can supply another focused continuation instead of depending on the
+controller to keep itself running. Such continuation must preserve the plan and
+shared budget, stop on unresolved or uncertain effects and remain distinct from
+repair after a completed check failure. Exhausting that allowance is an
+incomplete result, not success or permission to replay mutations.
+
+A completed check failure is another explicit boundary. The runtime should
+return control to its bounded workflow before the controller can propose an
+edit in the closed checking phase. The workflow can evaluate measured evidence
+and open a new repair phase when eligible. This keeps phase transitions in the
+harness and lets small models concentrate on the concrete failure rather than
+maintaining the execution state machine themselves.
 
 The implementation retains these obligations in a runtime-owned task record.
 For editing and verification, it initializes a conservative plan before inference and freezes the selected
@@ -270,6 +313,24 @@ schemas while retaining exact input contracts. Prompt profiles can adjust
 verbosity and coordination style; they do not change permissions. Capability
 inference from a model name remains an approximation that a user can override.
 
+Advertised tool support also differs from reliable action acquisition. A provider
+may expose native tools while a small model emits narration and action text in
+its answer channel. Protocol selection should account for observed behavior:
+an engine-owned JSON action protocol can be preferable to an unreliable native
+channel, while retaining the same typed validation, policies and receipts. This
+does not require another reasoning agent or an application dispatcher. A plan
+that never executes remains uncompleted work, and an unexecuted check must be
+reported as missing evidence rather than a failed test.
+
+Cheap validation can also prevent predictable representation errors before
+effects. Parsing a proposed Python afterimage, without importing or executing
+it, can reject newly introduced syntax errors such as double-escaped newline
+text. Such a guard should return explicit no-change feedback through the native
+correction path rather than silently repairing the bytes. It must also preserve
+incremental repair of already malformed sources. Syntax acceptance is weaker
+evidence than executable behavior: unresolved names, missing dependencies and
+incorrect routes still require measured verification.
+
 The action channel should remain distinct from the answer channel. Where a
 provider advertises native tool support, structured declarations reduce the
 need for a small model to invent a transport envelope. A JSON fallback still
@@ -280,6 +341,15 @@ must produce a visible terminal failure. Ordinary answers, explanatory examples
 and data explicitly supplied as final content remain application data. There
 should be one authoritative action parser and dispatcher. Advertised capability
 alone does not establish reliable tool use.
+
+The display boundary must also tolerate mixed provider behavior. A model that
+advertises native tools may still emit a fallback control envelope as text.
+Capability metadata alone cannot decide that every text delta is an answer.
+The interface can buffer leading structured text for display classification,
+reuse the kernel's normalizer and keep control payloads out of the answer
+stream. Typed final content remains authoritative, including genuine JSON data
+and protocol examples. Native tool selection clears provisional narration;
+the UI presents current activity while execution remains kernel-owned.
 
 These mechanisms introduce their own costs. Retrieval can miss important
 context, truncation can hide an edge case, and evicted observations may need to
@@ -498,12 +568,38 @@ run scope; a UI display alone cannot certify execution or completion. Another
 frontend would need to implement the approval, live question and cancellation contracts before
 it could operate the same harness.
 
+Before answer text arrives, the terminal interface projects native work events
+into one transient, muted status line in the response area. Each meaningful
+phase replaces the previous one; streaming or a terminal result removes it.
+The line does not enter the saved answer, require another model call or imply
+execution before approval. Immutable message caches limit repainting to the
+active response while preserving earlier conversation layouts.
+
 Review and authorization are distinct operator actions. Approval screens name
 the operation and its phase: baseline measurement, final checking, preparation
 or a file change. Viewing command details or a diff leaves execution paused;
 an explicit decision authorizes or denies the native request. The interface
 tracks that request's lifetime and closes both approval and review views when
 the native wait ends, without sending a late decision to another operation.
+
+Project approval preferences provide three interaction modes: ask for each edit
+and command, accept file edits automatically while asking about commands, or
+accept both automatically. The interface exposes these through `/approvals` and
+the equivalent shell command, with a visible mode indicator. Preferences are
+stored by canonical project path and frozen at run start; MCP access and
+restoration retain explicit approval. Automatic decisions use the same native
+broker, trusted scope and exact fingerprint as interactive decisions, preserving
+capability restrictions, source guards, cancellation and recovery records.
+
+The terminal result includes a deterministic review derived from this run's
+native resource snapshots. Repeated edits combine from the first preimage to the
+last committed afterimage, preserving pre-existing work and excluding denied
+proposals. Applied diffs remain available for partial failures and unverified
+handoffs; proposal previews are labeled separately. A broken snapshot chain or
+changed live revision is disclosed rather than presented as solely agent work.
+Review is bounded and requires no model inference or Git baseline. It covers
+recoverable file-tool effects; arbitrary process and external-tool effects need
+their own receipts and inspection.
 
 Operator inspection can also remain outside inference. The CLI provides shallow
 directory listing, folder navigation and a read-only file viewer with bounded
@@ -519,14 +615,18 @@ do not create execution or verification evidence.
 | Request routing | RunContract selects the per-turn workers, tools, prompt and native RunContext permission ceilings. Recognized conversation uses Architect without tools or project/check discovery. Repository questions omit Coder, Tester and Verifier; explicit verification adds Verifier. |
 | Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
 | Worker handoff | Small-profile local runs expose fixed typed reads, `coder(task)`, optional `tester(task)`, Verifier checks and enabled external operations. Prepared calls reach original workers through native ProtoLink child supervision. Other profiles/transports retain native delegation. Low-level packet preparation remains an unexecuted context operation. |
-| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique observed span and matching revision. Invalid selections execute only read validation feedback through native bounded correction; valid proposals prepare native recoverable writes with exact approval. Project-relative create/replace inputs preserve native path and symlink guards. |
+| Bounded Coder assignments | A hook stops before the tenth provider call in each native window. Fresh committed writes with current revisions can admit up to three windows in the same assignment, history and shared budget (at most 27 model calls). `PROTOAGENT_CODER_MAX_WINDOWS` can lower that bound. Earlier progress cannot justify a stalled window. Exhaustion returns partial `needs_context`/`worker_turn_limit`; stalled work returns `blocked`/`worker_no_progress` while retaining earlier edits. Native failures, denials, cancellation, uncertainty and explicit missing-context reports prevent continuation. |
+| Partial-work continuation | An exhausted partial Coder assignment returns Architect directly to the native Graph before another model request. The Graph allows at most two qualifying focused continuations in the same open edit phase, frozen plan and shared budget. Stable native write evidence is required. No-progress handoffs, stale or uncertain evidence, native stops and final checking exclude continuation. Exhaustion remains incomplete. |
+| Failed-check handoff | A completed failing final check yields before another Architect model request. Only the native Graph can open a new edit phase, with at most two repairs. Denied, interrupted or uncertain execution cannot use this path. Remaining failures finish incomplete. |
+| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique observed span, matching revision and different old/new text. Invalid selections execute only read validation feedback through native bounded correction; valid proposals prepare native recoverable writes with exact approval. Successful exact edits return the approved afterimage's source digest for another focused edit without rereading known source. Native recovery identities remain distinct. Project-relative create/replace inputs preserve native path and symlink guards. |
 | Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
+| Generation controls | Small-profile Ollama requests default to a 4,096-token output limit. Small Gemma 4 variants disable optional thinking and use the engine's JSON action protocol in automatic mode to avoid native-channel narration/action confusion. Explicit protocol and generation settings win, model sampling remains unchanged and provider aborts never authorize partial tool proposals. These defaults are heuristics, not a guarantee of model quality. |
 | Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
 | Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
 | User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
 | Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
 | Manual verification | A prepared-tool adapter consumes the validated native answer and uses ProtoLink cancellation to honor an explicit verification stop without another model call. Applied changes remain `unverified`, verification is `deferred`, failed receipts remain intact and no repair is started. Uncertain effects, denial and stale evidence take precedence. |
-| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded manifest inspection supplies fallbacks without executing discovery commands. Omitted/empty code check selections retain defaults. Narrowed bootstrap scopes must include regression files. A runner without existing tests supplies no coding baseline; changes and regressions precede final checking. |
+| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded static inspection chooses pytest for function-style/mixed suites and unittest for unittest-only suites, without importing code or installing dependencies. Owner-declared checks remain authoritative. Omitted/empty code check selections retain defaults. Narrowed bootstrap scopes must include regression files. A runner without existing tests supplies no coding baseline; changes and regressions precede final checking. |
 | Command preparation | Project-relative cwd and bare programs are resolved before native approval without inheriting environment values. Native preparation validation in the small local interface returns typed no-change rejection before child dispatch. Defaults fit configured execution ceilings; the engine owns execution, correction budgets and cleanup. |
 | Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
 | Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |

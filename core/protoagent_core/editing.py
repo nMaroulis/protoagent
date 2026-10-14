@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import os
 import shutil
@@ -9,9 +10,51 @@ from dataclasses import replace
 from pathlib import Path
 
 from protolink import Artifact, Part, RunAction, ToolRejectedError
+from protolink.core.resources import ResourceSnapshot
 from protolink.tools.prepared import PreparedTool
 
 from .tools import safe_path
+
+
+def _source_feedback(name, arguments, error):
+    """Prepare no-change feedback; the native loop owns correction and dispatch."""
+    return RunAction(
+        kind="tool.validation",
+        name=name,
+        payload={"arguments": arguments, "source_rejection": error.to_dict()},
+        capabilities=frozenset({"workspace.read"}),
+        description="Report invalid source; no write was prepared.",
+    )
+
+
+def _python_syntax_rejection(action):
+    """Reject newly introduced Python syntax errors, without importing code.
+
+    Existing malformed sources can still be repaired incrementally. This does
+    not diagnose names, packages, types or behavior; those need real checks.
+    """
+    if action.kind == "tool.validation":
+        return None
+    args = action.payload["arguments"]
+    path = Path(args["path"])
+    if path.suffix.lower() != ".py":
+        return None
+    try:
+        ast.parse(args["content"], filename=str(path))
+    except SyntaxError as error:
+        before = ResourceSnapshot.from_dict(action.payload["recovery"]["before"])
+        if before.data is not None:
+            try:
+                ast.parse(before.data.decode("utf-8"), filename=str(path))
+            except (SyntaxError, UnicodeError):
+                return None
+        return ToolRejectedError(
+            f"Proposed Python source has a syntax error on line {error.lineno}: {error.msg}. No file was changed.",
+            code="introduced_python_syntax",
+            details={"path": str(path), "line": error.lineno, "reason": error.msg},
+            suggestion="Correct the proposed source. Newlines in JSON string arguments must decode to real line breaks, not literal backslash-n text. Do not double-escape them. No import or test was executed.",
+        )
+    return None
 
 
 class NativePreparedAdapter(PreparedTool):
@@ -113,7 +156,7 @@ def process_tool_with_identity(native, workspace=None):
 
 def edit_tool(native_replace, workspace):
     def edit_file(path: str, old: str, new: str, expected_revision: str) -> dict:
-        """Replace one exact occurrence; use the revision returned by read_file. No regex or fuzzy matching."""
+        """Replace one exact occurrence. Use read_file.revision or a successful edit_file.source_revision; resource.version is a different native recovery identity. No regex, fuzzy matching or identical old/new text."""
         raise AssertionError("Signature only")
 
     def prepare(arguments, context):
@@ -121,17 +164,10 @@ def edit_tool(native_replace, workspace):
             # ProtoLink 0.8.1 corrects ToolRejectedError from execution, but
             # preparation errors terminate inference. Prepare only read-only
             # feedback here; the native loop owns its correction allowance.
-            return RunAction(
-                kind="tool.validation",
-                name="edit_file",
-                payload={
-                    "arguments": arguments,
-                    "source_rejection": ToolRejectedError(
-                        message, code=code, details=details, suggestion=suggestion
-                    ).to_dict(),
-                },
-                capabilities=frozenset({"workspace.read"}),
-                description="Report an invalid source selection; no write was prepared.",
+            return _source_feedback(
+                "edit_file",
+                arguments,
+                ToolRejectedError(message, code=code, details=details, suggestion=suggestion),
             )
 
         target = safe_path(arguments["path"], workspace)
@@ -145,6 +181,13 @@ def edit_tool(native_replace, workspace):
             )
         content = data.decode("utf-8")
         old = arguments["old"]
+        if old == arguments["new"]:
+            return reject(
+                "old and new are identical; no edit was prepared",
+                "unchanged_source",
+                {"path": str(target)},
+                "Choose an actual remaining change, or return your outcome to Architect if the assignment is finished. An unchanged replacement is not progress.",
+            )
         if not old or content.count(old) != 1:
             return reject(
                 "old must match exactly once; no edit was prepared",
@@ -155,6 +198,8 @@ def edit_tool(native_replace, workspace):
         action = native_replace.action_builder(
             {"path": str(target), "content": content.replace(old, arguments["new"], 1)}, context
         )
+        if error := _python_syntax_rejection(action):
+            return _source_feedback("edit_file", arguments, error)
         action.metadata["editing_tool"] = "edit_file"
         return action
 
@@ -163,7 +208,20 @@ def edit_tool(native_replace, workspace):
         action = execution.authorization.action
         if action.kind == "tool.validation":
             raise ToolRejectedError.from_dict(action.payload["source_rejection"])
-        return await native_replace.execute_authorized(execution)
+        result = await native_replace.execute_authorized(execution)
+        if isinstance(result, dict) and result.get("state") == "applied":
+            # Native resource.version includes filesystem identity. Exact edits
+            # use a byte digest instead; return the approved afterimage's digest
+            # so the worker need not reread known source after every small edit.
+            # The next edit still checks the live bytes; native recovery and
+            # resource identities are preserved.
+            return {
+                **result,
+                "source_revision": hashlib.sha256(
+                    action.payload["arguments"]["content"].encode("utf-8")
+                ).hexdigest(),
+            }
+        return result
 
     return NativePreparedAdapter(
         edit_file,
@@ -191,14 +249,27 @@ def workspace_file_tool(native, workspace):
         path = Path(arguments["path"])
         if not path.is_absolute():
             path = root / path
-        return native.action_builder({**arguments, "path": str(path)}, context)
+        action = native.action_builder({**arguments, "path": str(path)}, context)
+        if error := _python_syntax_rejection(action):
+            return _source_feedback(native.name, arguments, error)
+        return action
+
+    async def execute(execution):
+        execution.check()
+        action = execution.authorization.action
+        if action.kind == "tool.validation":
+            raise ToolRejectedError.from_dict(action.payload["source_rejection"])
+        return await native.execute_authorized(execution)
 
     tool = PreparedTool(
         native.func,
         name=native.name,
         prepare=prepare,
-        execute=native.execute_authorized,
-        capabilities=tuple(native.capabilities),
+        execute=execute,
+        # Preparation can yield read-only rejection feedback. Valid requests
+        # carry the native filesystem.write capability on the prepared action,
+        # so changing this declaration cannot bypass write authorization.
+        capabilities=("workspace.read",),
     )
     tool.description = "Use a project-relative or absolute path. " + native.description
     return tool
@@ -220,6 +291,16 @@ def check_tool(native_process, record):
                     "phases": ["baseline", "verify"],
                 },
                 suggestion="Use a required check ID; arbitrary commands cannot satisfy verification.",
+            )
+        if phase == "verify" and record.reports.get("coder", {}).get("reason") in {
+            "worker_turn_limit",
+            "worker_no_progress",
+        }:
+            raise ToolRejectedError(
+                "Coder returned unfinished work; no final check was prepared",
+                code="coder_handoff_unresolved",
+                details={"worker_report": record.reports["coder"]},
+                suggestion="Inspect current source and assign only remaining edits to Coder. Resolve its partial handoff before final verification; never replay applied edits.",
             )
         if phase == "baseline" and check_id not in record.baseline_check_ids():
             from .run_contracts import infer_run_contract

@@ -6,7 +6,8 @@ import inspect
 import os
 from typing import Any
 
-from .config import normalize_provider, provider_config
+from .config import load_config, normalize_provider, provider_config
+from .prompt_profiles import infer_prompt_profile
 
 DEFAULT_OLLAMA_CONTEXT_WINDOW = 8_192
 
@@ -24,7 +25,8 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
     provider request payload.
     """
     provider = normalize_provider(provider)
-    cfg = provider_config(provider)
+    settings = load_config()
+    cfg = provider_config(provider, settings)
     selected_model = model or cfg.get("model")
     kwargs: dict[str, Any] = {}
 
@@ -64,6 +66,26 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
         context_window = ollama_context_window(cfg)
         model_params = dict(cfg.get("model_params") or {})
         model_params["num_ctx"] = context_window
+        profile = settings.get("agent_prompt_profile", "auto")
+        if profile == "auto":
+            profile = infer_prompt_profile(provider, selected_model, str(base_url or ""))
+        if profile == "small":
+            # Bounded coding actions do not need the engine's 8192-token default.
+            # Explicit limits (including the engine's max_tokens alias) win.
+            if "max_tokens" not in model_params:
+                model_params.setdefault("num_predict", 4096)
+            if "gemma4" in str(selected_model or "").lower():
+                # Advertised tool support does not ensure a usable structured
+                # call: small Gemma can emit narration + <channel|> + action
+                # text instead. Select the engine's constrained JSON protocol
+                # for automatic mode; explicit native/json preferences win.
+                if kwargs["tool_calling"] == "auto":
+                    kwargs["tool_calling"] = "json"
+                # Gemma 4 exposes a boolean thinking control. For its small
+                # variants, avoid a separate hidden thinking generation before
+                # a short tool action. Keep the model's recommended sampling and
+                # any explicit user thinking preference.
+                model_params.setdefault("think", False)
         kwargs["model_params"] = model_params
 
     return kwargs

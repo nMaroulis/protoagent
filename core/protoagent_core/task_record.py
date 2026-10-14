@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
 from dataclasses import asdict, dataclass, field
+from itertools import islice
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,6 +17,85 @@ from .python_runtime import python_executable
 from .tools import read_file, safe_path
 
 PYTHON_BOOTSTRAP_SOURCE = "Python unittest bootstrap"
+PYTHON_TEST_DIRECTORIES = ("tests", "test", "core/tests")
+
+
+def _pytest_style(paths: tuple[Path, ...]) -> bool:
+    """Recognize pytest evidence with bounded static reads, never project imports."""
+    for path in paths[:512]:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64_000:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError, RecursionError):
+            continue
+        unittest_names = {"TestCase"}
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and node.module == "unittest":
+                unittest_names.update(
+                    alias.asname or alias.name for alias in node.names if alias.name == "TestCase"
+                )
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+                "test_"
+            ):
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                modules = (
+                    [alias.name for alias in node.names]
+                    if isinstance(node, ast.Import)
+                    else [node.module or ""]
+                )
+                if any(name == "pytest" or name.startswith("pytest.") for name in modules):
+                    return True
+            if (
+                isinstance(node, ast.ClassDef)
+                and node.name.startswith("Test")
+                and any(
+                    isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and item.name.startswith("test_")
+                    for item in node.body
+                )
+                and not any(
+                    isinstance(base, ast.Attribute)
+                    and base.attr == "TestCase"
+                    or isinstance(base, ast.Name)
+                    and base.id in unittest_names
+                    for base in node.bases
+                )
+            ):
+                return True
+    return False
+
+
+def _test_files(directory: Path, *, strict=False) -> tuple[Path, ...]:
+    """Bound directory inspection and omit symlinks/build environments."""
+    from .tools import DEFAULT_IGNORES
+
+    files, pending, visited, entries = [], [directory], 0, 0
+    while pending and visited < 128 and len(files) < 512 and entries < 4096:
+        current = pending.pop()
+        visited += 1
+        for child in current.iterdir():
+            entries += 1
+            if entries > 4096:
+                break
+            if child.is_symlink() or child.name in DEFAULT_IGNORES or child.name.startswith("."):
+                continue
+            if child.is_dir():
+                if len(pending) < 128:
+                    pending.append(child)
+            elif child.is_file() and (
+                child.match("test_*.py") or child.match("*_test.py") or child.name == "conftest.py"
+            ):
+                files.append(child)
+                if len(files) >= 512:
+                    break
+    if strict and (pending or visited >= 128 or entries >= 4096 or len(files) >= 512):
+        raise ValueError(
+            "Pytest dependency inspection exceeded its bound; configure narrower check paths"
+        )
+    return tuple(files)
 
 
 @dataclass(frozen=True)
@@ -106,7 +187,7 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
             )
         return checks
     python_project = (
-        any((root / directory).is_dir() for directory in ("tests", "core/tests"))
+        any((root / directory).is_dir() for directory in PYTHON_TEST_DIRECTORIES)
         or any(root.glob("*.py"))
         or any(
             (root / name).is_file() for name in ("pyproject.toml", "requirements.txt", "setup.cfg")
@@ -115,24 +196,34 @@ def discover_checks(workspace: str) -> dict[str, CheckSpec]:
     executable = python_executable(root) if python_project else ""
     if executable:
         path_env["PATH"] = os.pathsep.join([str(Path(executable).parent), path_env["PATH"]])
-    for directory in ("tests", "core/tests"):
-        if (root / directory).is_dir():
+    for directory in PYTHON_TEST_DIRECTORIES:
+        if (root / directory).is_dir() and not (root / directory).is_symlink():
             env = dict(path_env)
             if directory.startswith("core/"):
                 env["PYTHONPATH"] = "core"
             checks["python-tests"] = CheckSpec(
                 "python-tests",
-                (executable, "-m", "unittest", "discover", "-s", directory, "-q"),
+                (executable, "-m", "pytest", directory, "-q")
+                if _pytest_style(_test_files(root / directory))
+                else (executable, "-m", "unittest", "discover", "-s", directory, "-q"),
                 str(root),
                 env,
                 (str(root / directory),),
             )
             break
-    root_tests = tuple(str(path) for path in root.glob("test_*.py") if path.is_file())
+    root_tests = tuple(
+        str(path)
+        for path in islice(
+            (path for path in root.glob("test_*.py") if path.is_file() and not path.is_symlink()),
+            512,
+        )
+    )
     if "python-tests" not in checks and root_tests:
         checks["python-tests"] = CheckSpec(
             "python-tests",
-            (executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-q"),
+            (executable, "-m", "pytest", ".", "-q")
+            if _pytest_style(tuple(Path(path) for path in root_tests))
+            else (executable, "-m", "unittest", "discover", "-s", ".", "-p", "test_*.py", "-q"),
             str(root),
             dict(path_env),
             root_tests,
@@ -308,6 +399,15 @@ class TaskRecord:
     def dependencies(self) -> set[str]:
         paths = set(self.source_paths)
         for key in self.selected:
+            if self.checks[key].argv[1:] == ("-m", "pytest", ".", "-q"):
+                # Pytest finds functions in moved/non-package folders. Keep
+                # its frozen root runner tied to current test/config inputs.
+                paths.update(str(path) for path in _test_files(Path(self.workspace), strict=True))
+                paths.update(
+                    str(path)
+                    for name in ("pytest.ini", "pyproject.toml", "setup.cfg")
+                    if (path := Path(self.workspace) / name).is_file() and not path.is_symlink()
+                )
             check = self.checks[key]
             if check.source != ".protoagent/project.json" and check.argv[1:] == (
                 "-m",

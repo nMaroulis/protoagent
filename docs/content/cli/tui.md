@@ -74,6 +74,21 @@ removes test-design inference; repository checks remain required. Shell commands
 use the same arguments after `proto-cli agents`, such as
 `proto-cli agents tester off`.
 
+## Approval preferences and final review
+
+`/approvals` opens a picker for the active project. Choose Ask (default), Edits
+(auto-accept file edits, ask before commands), or Auto (auto-accept edits and
+commands with normal host permissions). Set directly with `/approvals ask|edits|auto`;
+`/approvals status` reports the saved choice. The status area shows the current
+mode. Preferences apply to subsequent runs; MCP access and restoration still ask.
+No model is needed to change the setting.
+
+Write runs finish with a compact summary of applied files and line counts.
+`/diff` opens their combined applied diff; `/diff raw` prints it and `/diff proposed`
+opens separately labeled approval previews. Partial edits remain reviewable after
+failure or deferred verification. See [approval and review behavior](safety-tracing.md)
+for native guards, external effects and review limits.
+
 ## Input Editor
 
 The input editor wraps by terminal cell width and keeps the cursor visible in a
@@ -137,8 +152,18 @@ read-only context.
 
 Replies use an `AGENT / architect` or `AGENT / guide` heading. Each starts with
 a steady mint `_` cursor and animated `thinking.`, `thinking..`, `thinking...` dots.
+While the answer is empty, a single muted line explains the current work:
+gathering project context, reading a file, preparing edits, waiting for approval
+or running a check. Runtime events replace that line in place; ordinary policy
+and trace bookkeeping do not overwrite it. It disappears when answer text starts
+streaming and is never saved as part of the answer. No model call is needed to
+generate these labels.
 As answer text arrives, it appears in that same message with a `streaming`
-indicator. JSON action wrappers are hidden. Response text and its cursor retain
+indicator. Tool-call JSON stays hidden even when a native-capable model sends
+it as text. Actual calls appear through the muted activity line; full arguments
+remain in `/trace`. Ordinary JSON answer data is preserved. Provisional narration
+is cleared when the engine selects a tool, so it cannot linger as an answer.
+Response text and its cursor retain
 your terminal's default background. The cursor does not blink and reserves a
 fixed cell through completion; the rest of the UI keeps its existing palette.
 
@@ -167,8 +192,9 @@ preserved, and handlers created during the run are detached from temporary
 buffers before those buffers close. The renderer owns terminal output during
 the embedded core call. Native subprocess tools retain their separate capture.
 
-Worker activity appears only in the bottom status bar; the top model row shows
-the provider and model. Use `/trace` for the full trace and
+Worker activity appears in the bottom status bar and, before answer text arrives,
+in the transient muted response line. The top model row shows the provider and
+model. Use `/trace` for the full trace and
 retained worker/command output, or `/diff` for proposed changes. Esc or Ctrl-C
 cancels an active task or Guide answer.
 

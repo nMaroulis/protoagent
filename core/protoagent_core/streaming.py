@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 
+from protolink.llms.actions import FinalAction
+from protolink.llms.parsing import ActionParseError, normalize_native_text
+
 
 def _string_prefix(value: str) -> str:
     """Decode a JSON string prefix, withholding unfinished escapes and surrogates."""
@@ -29,7 +32,7 @@ def _final_content_prefix(raw: str) -> str:
 
     Wait for the top-level type before exposing content. Unsupported/unfinished
     envelopes stay hidden until ProtoLink emits its authoritative llm_final.
-    Native-tool streams bypass this projection, including genuine JSON answers.
+    This is display projection only; native typed results remain authoritative.
     """
     raw = raw.lstrip()
     if raw.startswith("```"):
@@ -60,6 +63,45 @@ def _final_content_prefix(raw: str) -> str:
     return content if kind == "final" else ""
 
 
+def _native_text_prefix(raw: str) -> tuple[str, bool]:
+    """Buffer leading JSON until its display intent is known; never dispatch it.
+
+    Native-capable providers can still send fallback actions as text. Ordinary
+    prose passes through immediately. Domain JSON waits for a complete object;
+    the engine's normalizer distinguishes it from a control envelope. A typed
+    llm_final always preserves its actual content, including protocol examples.
+    """
+    candidate = raw.lstrip()
+    if not candidate or "```".startswith(candidate):
+        return "", False
+    if candidate.startswith("```"):
+        if "\n" not in candidate:
+            return "", False
+        candidate = candidate.partition("\n")[2].lstrip()
+        if not candidate:
+            return "", False
+    if not candidate.startswith("{"):
+        return raw, True
+    final_prefix = _final_content_prefix(raw)
+    if final_prefix:
+        return final_prefix, False
+    try:
+        _, end = json.JSONDecoder().raw_decode(candidate)
+    except ValueError:
+        return "", False
+    try:
+        # Classify the complete object itself even while its Markdown closing
+        # fence has not arrived; otherwise a fenced tool call can leak early.
+        result = normalize_native_text(candidate[:end])
+    except ActionParseError:
+        # Invalid action-shaped text belongs to native correction feedback,
+        # not an answer preview. No action is authorized by this projection.
+        return "", False
+    if result.native:
+        return raw, True
+    return (result.action.content if isinstance(result.action, FinalAction) else ""), False
+
+
 class LiveOutput:
     """Project answer deltas and protect secrets split across transport chunks."""
 
@@ -71,11 +113,13 @@ class LiveOutput:
         self.envelopes: dict[str, str] = {}
         self.projected: dict[str, str] = {}
         self.pending: dict[str, str] = {}
+        self.passthrough: set[str] = set()
+        self.emitted: set[str] = set()
 
     def emit(self, event):
         """Display native events; only ProtoLink validates and dispatches actions."""
         kind = event.payload.get("llm_event_type")
-        if kind not in {"llm_chunk", "llm_final"} and event.type != "process.output":
+        if kind not in {"llm_chunk", "llm_final", "llm_action"} and event.type != "process.output":
             return
         process = event.type == "process.output"
         channel = (
@@ -85,24 +129,55 @@ class LiveOutput:
             if event.agent_name == self.answer_agent
             else "generation"
         )
-        text = event.payload.get("text" if process else "content", "")
+        text = (
+            "" if kind == "llm_action" else event.payload.get("text" if process else "content", "")
+        )
         if not isinstance(text, str):
             return
         key = json.dumps([event.run_id, event.task_id, event.agent_name, event.step, channel])
+        if kind == "llm_action":
+            action = event.payload.get("action") or event.payload.get("metadata", {}).get("action")
+            if isinstance(action, str) and action in {"tool_call", "agent_call"}:
+                # Native selection ends this provisional text step. Restore the
+                # loading line if the provider narrated before selecting a tool.
+                if key in self.emitted:
+                    self.bridge.emit_output(
+                        {
+                            "id": key,
+                            "agent": event.agent_name,
+                            "channel": channel,
+                            "text": "",
+                            "replace": True,
+                        }
+                    )
+                self.pending.pop(key, None)
+                self.envelopes.pop(key, None)
+                self.projected.pop(key, None)
+                self.passthrough.discard(key)
+                self.emitted.discard(key)
+            return
         replace = kind == "llm_final"
         if replace:
             self.pending.pop(key, None)
             self.envelopes.pop(key, None)
             self.projected.pop(key, None)
+            self.passthrough.discard(key)
         else:
-            if not process and event.agent_name in self.json_agents:
+            if not process and key not in self.passthrough:
                 self.envelopes[key] = self.envelopes.get(key, "") + text
-                visible = _final_content_prefix(self.envelopes[key])
+                if event.agent_name in self.json_agents:
+                    visible, passthrough = _final_content_prefix(self.envelopes[key]), False
+                else:
+                    visible, passthrough = _native_text_prefix(self.envelopes[key])
                 previous = self.projected.get(key, "")
                 if not visible.startswith(previous):
                     return
                 self.projected[key] = visible
                 text = visible[len(previous) :]
+                if passthrough:
+                    self.passthrough.add(key)
+                    self.envelopes.pop(key, None)
+                    self.projected.pop(key, None)
             text = self.pending.pop(key, "") + text
             text = self.redaction.redact(text)
             # A full secret is handled by the native policy. A proper prefix at
@@ -119,6 +194,8 @@ class LiveOutput:
             if hold:
                 self.pending[key], text = text[-hold:], text[:-hold]
         if text or replace:
+            if text:
+                self.emitted.add(key)
             self.bridge.emit_output(
                 {
                     "id": key,

@@ -6,6 +6,15 @@ and session state while embedding the Python core through PyO3.
 
 Current CLI version: `0.3.0`, sourced from `cli/Cargo.toml`.
 
+Use `/approvals` to choose project approvals in the TUI. Direct commands are
+`/approvals ask` (default), `/approvals edits` (automatic file edits, ask for
+commands), and `/approvals auto` (automatic edits and commands with normal host
+permissions). Shell: `proto-cli approvals MODE`. Saved preferences apply to the
+next run in that project. MCP and file restoration still ask. Write runs end
+with an applied-file summary and combined diff: `/diff` reviews actual changes,
+`/diff proposed` reviews approval previews separately. Shell runs print the
+applied diff. [Details and bounds](../docs/content/cli/safety-tracing.md).
+
 Proto-CLI is a hybrid Rust/Python application, not a standalone binary: the
 Python environment must contain `protoagent-core` and ProtoLink. Building the
 CLI requires Rust/Cargo 1.85 or newer.
@@ -169,6 +178,10 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 
 ## TUI Commands
 
+`/approvals` opens a project picker; `/approvals ask|edits|auto|status` sets or
+reports its preference. `/diff` shows the last run's combined applied changes;
+`/diff proposed` separately shows approval previews.
+
 | Command | Purpose |
 | --- | --- |
 | `/help` or `/help QUESTION` | Show command help or ask the isolated Guide agent a usage question. |
@@ -190,7 +203,7 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 | `/context reset` | Clear project conversation history and trim the Rust session index. |
 | `/context window 16k` | Set the Ollama request window and ProtoLink model profile together. |
 | `/index refresh` | Refresh the incremental Context Loom index. |
-| `/trace`, `/timeline`, `/diff` | Inspect the latest normalized run trace, event sequence, or diff preview. |
+| `/trace`, `/timeline`, `/diff` | Inspect the latest normalized run trace, event sequence, or combined applied diff. |
 | `/debug [on\|off]` | Show the mode, reveal response metadata with a `/trace` hint, or hide it. |
 | `/last` | Replay the last agent response. |
 | `/run TASK` | Run a task from a slash command. |
@@ -201,6 +214,9 @@ core registers ProtoLink's `web_search` and `fetch_url` tools with
 blocks to the chat.
 
 ## Direct Commands
+
+`proto-cli approvals [ask|edits|auto|status]` configures or reports approvals
+for the active project, without a model.
 
 ```bash
 proto-cli start

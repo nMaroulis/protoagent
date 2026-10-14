@@ -194,6 +194,14 @@ session cleanup and result/error normalization. See the
 
 ## Engine integration
 
+Project approval preferences are selected outside inference through
+`configure_approvals(mode, workspace)`: `ask` (default), `edits`, or `auto`.
+The runtime freezes the preference and resolves eligible native broker requests
+with exact fingerprints and trusted run scope, retaining policies and recovery.
+MCP access and restoration still require manual approval. Final `change_review`
+and applied `diffs` come from this run's native snapshots, independently of model
+claims; approval previews remain in separate `proposal_diffs`.
+
 The harness uses ProtoLink's owned local children, context policies, action
 validation and capability selection. Native `ToolRejectedError` feedback handles
 invalid plans, stale/ambiguous edit proposals and invalid check requests before

@@ -56,6 +56,13 @@ def get_config() -> str:
     return _json(visible_config())
 
 
+def configure_approvals(value: str | None = None, workspace: str | None = None) -> str:
+    """Show or set the current project's explicit approval preference without an LLM."""
+    from .approvals import configure_approvals as configure
+
+    return _json(configure(value, workspace))
+
+
 def component_versions(cli_version: str | None = None) -> str:
     """Return version metadata for the CLI, core, and ACP components."""
     return _json(build_component_versions(cli_version))
@@ -637,6 +644,13 @@ def _model_response(
         ),
         "file_target": target_label,
         "diff": diff,
+        "proposal_diff": "\n".join(
+            str(item.get("diff", ""))
+            for item in result.get("proposal_diffs", [])
+            if isinstance(item, dict)
+        ),
+        "change_review": result.get("change_review", {}),
+        "approval_mode": result.get("approval_mode", "ask"),
         "events": [
             *result.get("events", []),
             *_context_events(loom_context),

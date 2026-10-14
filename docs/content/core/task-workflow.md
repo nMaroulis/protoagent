@@ -51,6 +51,53 @@ omit redundant `task_status` and `list_files` tools: state is already injected,
 and source discovery belongs to Explorer. Coder can still read assigned files,
 apply scoped edits and report missing context.
 
+ProtoLink bounds each inference invocation to ten turns, independently of the
+shared run budget. Coder stops before the tenth provider call. If that work window
+made new native writes and their revisions remain current, the harness can start
+another native inference window in the same assignment, preserving its original
+scope, conversation and execution context. It admits at most three windows
+(27 model calls), with all work charged to the same aggregate budget. Each window
+must earn another through its own fresh writes; earlier edits cannot justify an
+unproductive window. Explicit missing-context reports prevent this continuation.
+`worker.continuing` records normal ongoing work, without a new Architect call or
+repeated approvals. `PROTOAGENT_CODER_MAX_WINDOWS=1` restores one-window behavior;
+values are clamped to 1–3, with invalid values using the default three.
+
+After the last progressing window, an unfinished assignment returns
+`needs_context`/`worker_turn_limit`. A window with no new edits returns
+`blocked`/`worker_no_progress`, retaining any earlier partial edits. Neither proves
+completion, and native action/provider failures are never retried as new windows.
+Architect can inspect current source and issue a smaller assignment for the
+unfinished edits, within the same frozen plan and shared budget. Already applied
+edits are not replayed. A normal subsequent outcome resolves the limit handoff;
+explicit missing-context/blocker reports remain unresolved until addressed.
+Final checks follow the finished assignment, rather than closing editing while
+the worker still has unfinished work. The handoff consumes only a typed
+application control signal raised by the before-model hook. Denials, native
+execution failures, cancellation, uncertainty and shared-budget exhaustion retain
+their original stop behavior and are never converted into this handoff.
+
+When Coder exhausts a progressing assignment, Architect yields before another
+model request; it does not ask the user whether to continue already requested work.
+The native Graph may continue the edit phase at most twice. It
+supplies the current task state and an explicit instruction to inspect and finish
+one remaining part. The plan stays frozen, no repair phase is opened, applied
+actions are not replayed and all work shares the original run budget. This path
+requires stable applied-file evidence and an open edit phase. No-progress
+handoffs, denied/failed/uncertain actions, stale revisions, manual verification
+stops and completed final checking do not qualify. Exhausting the two
+continuations leaves the task incomplete with its actual edits and check results.
+`workflow.work_yielded` records the direct return; `workflow.continuing` records a
+qualifying new focused assignment. Previous handoffs do not interrupt that assignment.
+
+A completed failing final check returns control to the native repair Graph before
+Architect's next model request. The Graph evaluates the actual receipts and may
+open a fresh edit phase for at most two repairs; Architect cannot start that phase
+itself. A repair receives the measured failure and frozen task plan. If the test
+environment is missing a dependency, Architect may ask whether verification should
+be deferred or dependency setup is external. Denied or interrupted execution is
+never converted into a repair. Failures remaining after two repairs are incomplete.
+
 | Role | Responsibility |
 | --- | --- |
 | Architect | Choose focused tasks and explain the final outcome. |
@@ -130,11 +177,15 @@ an explicitly configured `env.PATH`. Environments are not inherited. No provider
 credentials are copied. Keep dependency paths focused; dependency inventory is
 limited to 512 files. Relative paths resolve beneath the selected workspace.
 
-Without a project configuration, the runtime discovers Python unittest suites in
-`tests/` or `core/tests/`, root Cargo tests, and npm `test`, `typecheck`, `lint` and
+Without a project configuration, the runtime discovers Python suites, root Cargo tests, and npm `test`, `typecheck`, `lint` and
 `build` scripts. Discovery reads manifests and paths without importing project
-code or executing commands. Root `test_*.py` unittest suites are also discovered.
-For pytest projects, custom commands, monorepos and
+code or executing commands. Root `test_*.py` suites and `tests/`, `test/` and
+`core/tests/` directories are inspected with bounded static reads. Top-level
+test functions, pytest imports and non-unittest test classes select `python -m pytest`; unittest-only suites keep the stdlib runner. Mixed suites use pytest,
+which also collects unittest cases. Missing pytest is an environment failure
+reported by the approved command; discovery does not install it or substitute
+an empty unittest run. Root pytest discovery retains moved tests and conftest/
+pytest configuration as revision dependencies. For custom commands, monorepos and
 required environment settings, use explicit project configuration.
 
 If no checks are found in a Python project, the application captures a fixed
@@ -254,10 +305,10 @@ retain numbered evidence. Large files can be read in
 spans, up to an 8 MiB file ceiling. A partial long line is marked explicitly.
 
 `edit_file(path, old, new, expected_revision)` replaces exactly one occurrence.
-Ambiguous source or a stale revision produces no-change feedback before write
+Ambiguous source, a stale revision or identical `old`/`new` text produces no-change feedback before write
 approval. ProtoLink 0.8.1 corrects execution-time `ToolRejectedError`; preparation
 exceptions otherwise end inference. The adapter therefore prepares a read-only
-validation action for these two source-selection errors and raises the typed
+validation action for these source-selection errors and raises the typed
 rejection when that action executes. It never prepares a write, freezes the plan
 or creates a recovery record for invalid source. The native inference loop owns
 the correction limit; direct invocation still returns rejection without retrying.
@@ -266,7 +317,12 @@ diff approval, preserving the original preimage and recovery guards. Ordinary
 errors, denied actions and interrupted effects retain their stop behavior.
 
 Coder copies a short unique `old` span literally from `read_file.content`, using
-the returned revision. Truncated source is paginated before changing unseen code.
+the returned revision. Successful exact edits also return `source_revision`, the
+SHA-256 digest of the approved afterimage, for the next edit of known source.
+This avoids a read solely to refresh the digest; the next edit still checks the
+live bytes and rejects intervening changes. Native `resource.version` is a
+different recovery identity and must not be passed as `expected_revision`.
+Truncated source is paginated before changing unseen code.
 It preserves other
 source and line endings, then uses native ProtoLink replacement for its diff,
 preimage, approval, cancellation and recovery. New files still use `create_file`;

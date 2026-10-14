@@ -47,6 +47,45 @@ class SlowMock(MockLLM):
 factory.create_llm = lambda *args, **kwargs: SlowMock(default_response='Fixture answer complete.')
 """
 
+ACTIVITY_MOCK = r"""
+import asyncio, os
+from pathlib import Path
+import protoagent_core.models as models
+import protoagent_core.agent_engine as engine
+import protoagent_core.agents.explorer as explorer
+import protoagent_core.agents.deck as deck
+import protolink.llms.factory as factory
+from protolink.llms.mock_client import MockLLM
+models.model_startup_problem = lambda: None
+engine.model_startup_problem = lambda: None
+create_explorer = explorer.create_explorer_agent
+def slow_explorer(*args, **kwargs):
+    agent = create_explorer(*args, **kwargs)
+    original = agent.tools['read_file']
+    @agent.tool(capabilities=['workspace.read'])
+    async def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> dict:
+        await asyncio.sleep(0.8)
+        return await original(path=path, start_line=start_line, end_line=end_line)
+    return agent
+explorer.create_explorer_agent = slow_explorer
+deck.create_explorer_agent = slow_explorer
+class ActivityMock(MockLLM):
+    @property
+    def supports_native_action_stream(self):
+        # Reproduce native-capable providers sending JSON actions as text.
+        return True
+    async def call_stream(self, history):
+        await asyncio.sleep(0.8)
+        response = self.call(history)
+        for offset in range(0, len(response), 8):
+            await asyncio.sleep(0.04)
+            yield response[offset:offset + 8]
+factory.create_llm = lambda *args, **kwargs: ActivityMock(sequential_responses=[
+    {'type':'tool_call','tool':'read_file','args':{'path':'README.md'}},
+    {'type':'final','content':'Fixture answer complete.'},
+])
+"""
+
 APPROVAL_MOCK = """
 import os
 from pathlib import Path
@@ -180,6 +219,9 @@ class Terminal:
         )
         if fixture == "mock":
             (self.directory / "sitecustomize.py").write_text(MOCK)
+        elif fixture == "activity":
+            (self.directory / "sitecustomize.py").write_text(ACTIVITY_MOCK)
+            (self.project / "README.md").write_text("A project for tracking widgets.\n")
         elif fixture == "broken":
             (self.directory / "sitecustomize.py").write_text(
                 MOCK
@@ -308,6 +350,30 @@ class Terminal:
 
 @unittest.skipUnless(BINARY.is_file(), "Build the release CLI first")
 class TuiSmokeTests(unittest.TestCase):
+    def test_loading_activity_replaces_itself_and_disappears_when_answer_streams(self):
+        terminal = self.terminal("activity")
+        offset = terminal.send("What's this project about?\r")
+        terminal.wait_for("Architect: Planning the next step...", after=offset)
+        terminal.wait_for("Explorer: Reading README.md...", after=offset)
+        self.assertIn("Explorer: Reading README.md...", terminal.screen.text())
+        self.assertNotIn("Architect: Planning the next step...", terminal.screen.text())
+        next_phase = len(terminal.data)
+        terminal.wait_for("Architect: Planning the next step...", after=next_phase)
+        self.assertNotIn("Explorer: Reading README.md...", terminal.screen.text())
+        terminal.wait_for("Fixture answer complete.", after=next_phase)
+        terminal.wait_for("Ask anything", after=next_phase)
+        self.assertNotIn("Planning the next step", terminal.screen.text())
+        self.assertNotIn("Reading README", terminal.screen.text())
+        transcript = CSI.sub("", terminal.data[offset:].decode("utf-8", "replace"))
+        self.assertNotIn('"type":"tool_call"', transcript)
+        self.assertNotIn('"type": "tool_call"', transcript)
+        session = json.loads((terminal.directory / "sessions.json").read_text())
+        self.assertEqual(
+            session["sessions"][0]["history"][-1]["answer_preview"], "Fixture answer complete."
+        )
+        self.assertNotIn("Planning the next step", json.dumps(session))
+        self.assert_intact(terminal)
+
     def test_free_text_manual_verification_finishes_with_applied_diff_and_failed_evidence(self):
         terminal = self.terminal("handoff")
         start = terminal.send("Change sample.py so value is 42\r")
@@ -325,6 +391,40 @@ class TuiSmokeTests(unittest.TestCase):
         terminal.wait_for("Changes applied: sample.py.", after=offset)
         counts = json.loads((terminal.directory / "model-calls.json").read_text())
         self.assertEqual(counts, {"architect": 3, "coder": 2})
+        self.assert_intact(terminal)
+
+    def test_auto_edits_skip_file_approval_and_finish_with_applied_review(self):
+        terminal = self.terminal("handoff")
+        terminal.command("/approvals edits", "Approvals: edits")
+        modes = json.loads((terminal.directory / "config.json").read_text())["approval_modes"]
+        self.assertEqual(modes[str(terminal.project.resolve())], "edits")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Run verification check?", after=start)
+        self.assertNotIn("Apply file change?", terminal.data[start:].decode(errors="replace"))
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
+        offset = terminal.send("y")
+        terminal.wait_for("Architect has a question", after=offset)
+        offset = terminal.send("do not run it its ok Ill do it\r")
+        terminal.wait_for("Edits: 1 file(s)", after=offset)
+        terminal.wait_for("Ask anything", after=offset)
+        offset = terminal.send("/diff\r")
+        terminal.wait_for("Applied Diff Review", after=offset)
+        terminal.wait_for("value = 0", after=offset)
+        terminal.wait_for("value = 42", after=offset)
+        offset = terminal.send("\x1b")
+        terminal.wait_for("Ask anything", after=offset)
+        terminal.command("/approvals ask", "Approvals: ask")
+        self.assert_intact(terminal)
+
+    def test_approval_picker_is_offline_and_settings_persist(self):
+        terminal = self.terminal("offline")
+        offset = terminal.send("/approvals\r")
+        terminal.wait_for("Project approvals", after=offset)
+        offset = terminal.send("\x1b[B\r")
+        terminal.wait_for("Approvals: edits", after=offset)
+        terminal.wait_for("Ask anything", after=offset)
+        terminal.command("/approvals status", "Approvals: edits")
+        terminal.command("/approvals ask", "Approvals: ask")
         self.assert_intact(terminal)
 
     def test_command_details_require_an_explicit_decision(self):

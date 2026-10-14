@@ -245,6 +245,9 @@ class NativeRuntimeTests(NativeRuntimeCase):
     async def test_owned_local_children_preserve_bounded_repairs(self):
         await self.exercise_embedded_mesh("local", repairs=True)
 
+    async def test_project_auto_mode_flows_through_owned_children_and_final_review(self):
+        await self.exercise_embedded_mesh("local", approval_mode="auto")
+
     async def test_parent_cancellation_drains_owned_verifier_process(self):
         from unittest.mock import patch
 
@@ -302,10 +305,15 @@ class NativeRuntimeTests(NativeRuntimeCase):
     async def test_single_agent_eval_path_preserves_native_approval_and_checks(self):
         await self.exercise_embedded_mesh("runtime", architecture="single")
 
-    async def exercise_embedded_mesh(self, transport, repairs=False, architecture="deck"):
+    async def exercise_embedded_mesh(
+        self, transport, repairs=False, architecture="deck", approval_mode="ask"
+    ):
         from unittest.mock import patch
 
+        from protoagent_core.approvals import configure_approvals
         from protoagent_core.runtime import _run_agent_deck
+
+        configure_approvals(approval_mode, self.root)
 
         target = self.root / "actual.py"
         release_file = self.root / "release-process"
@@ -316,7 +324,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
                 "agent": "coder",
                 "action": "tool_call",
                 "tool": "create_file",
-                "args": {"path": str(target), "content": "native edit"},
+                "args": {"path": str(target), "content": "# native edit\n"},
             },
             {
                 "type": "agent_call",
@@ -346,6 +354,9 @@ class NativeRuntimeTests(NativeRuntimeCase):
             import copy
 
             responses[1]["args"]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
+            # Completed failing checks now yield before a model final. Each
+            # following scripted action belongs to the next Graph edit phase.
+            responses = responses[:2]
             repair = copy.deepcopy(responses)
             repair[0]["tool"] = "replace_file"
             responses += copy.deepcopy(repair) + copy.deepcopy(repair)
@@ -429,12 +440,24 @@ class NativeRuntimeTests(NativeRuntimeCase):
             controls.cancel()
             await asyncio.gather(controls, return_exceptions=True)
         if repairs:
-            self.assertEqual(result["status"], "failed", result["answer"])
+            self.assertEqual(result["status"], "incomplete", result["answer"])
             self.assertEqual(result["verification"]["attempts"], 3)
             self.assertEqual(len(result["verification"]["results"]), 3)
             self.assertEqual(len(result["approval_decisions"]), 6)
             return
         self.assertEqual(result["status"], "completed", result["answer"])
+        self.assertEqual(result["approval_mode"], approval_mode)
+        self.assertEqual(result["change_review"]["file_count"], 1)
+        self.assertEqual(result["change_review"]["files"][0]["path"], "actual.py")
+        self.assertIn("Edits: 1 file(s)", result["answer"])
+        self.assertIn("+# native edit", result["diffs"][0]["diff"])
+        if approval_mode == "auto":
+            self.assertTrue(
+                all(
+                    decision["decided_by"] == "protoagent-auto"
+                    for decision in result["approval_decisions"]
+                )
+            )
         admission = result["context_admission"]["architect"]
         self.assertEqual(admission["window_tokens"], 8192)
         self.assertGreater(admission["request_count"], 0)
@@ -444,7 +467,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
         self.assertTrue(
             saw_live_process, "Worker stdout must arrive while the process is still running"
         )
-        self.assertEqual(target.read_text(), "native edit")
+        self.assertEqual(target.read_text(), "# native edit\n")
         self.assertEqual(
             result["verification"]["status"], "passed", result["completion_validation"]
         )

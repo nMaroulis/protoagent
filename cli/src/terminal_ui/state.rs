@@ -23,6 +23,7 @@ pub(super) struct TerminalApp {
     pub(super) context_usage: ContextUsage,
     pub(super) live_output: LiveOutput,
     pub(super) active_response: Option<usize>,
+    loading_activity: String,
     answer_revision: Option<u64>,
     pub(super) models_loading: bool,
     inventory_summary: Option<(String, String)>,
@@ -52,6 +53,7 @@ impl TerminalApp {
             context_usage: ContextUsage::default(),
             live_output: LiveOutput::default(),
             active_response: None,
+            loading_activity: String::new(),
             answer_revision: None,
             models_loading: false,
             inventory_summary: None,
@@ -271,11 +273,23 @@ impl TerminalApp {
                     .push(("ProtoLink transports".to_string(), report));
             }
         }
+        self.last_diff_preview = response.diff.clone();
         if !response.diff.trim().is_empty() {
-            self.last_diff_preview = response.diff.clone();
             message
                 .details
-                .push(("Proposed diff".to_string(), response.diff.clone()));
+                .push(("Applied diff".to_string(), response.diff.clone()));
+        }
+        if !response.approval_mode.is_empty() {
+            message
+                .meta
+                .push(format!("approvals {}", response.approval_mode));
+        }
+        if !response.change_review.is_null() {
+            if let Ok(review) = serde_json::to_string_pretty(&response.change_review) {
+                message
+                    .details
+                    .push(("Applied change review".into(), review));
+            }
         }
         if !response.approval_requests.is_empty() {
             message
@@ -296,6 +310,9 @@ impl TerminalApp {
 
     pub(super) fn begin_response(&mut self, agent: &str) {
         self.answer_revision = None;
+        self.live_output = Default::default();
+        self.loading_activity = "Preparing your request...".into();
+        self.activity = "preparing your request".into();
         self.active_response = Some(self.messages.len());
         self.push(Role::Assistant, agent, "");
         self.update_streaming_response(0);
@@ -304,11 +321,15 @@ impl TerminalApp {
     pub(super) fn update_streaming_response(&mut self, tick: usize) {
         if let Some(index) = self.active_response {
             let revision = self.live_output.answer_revision();
-            let meta = vec![if self.live_output.answer().is_empty() {
+            let waiting = self.live_output.answer().is_empty();
+            let mut meta = vec![if waiting {
                 format!("status thinking{:<3}", ".".repeat((tick / 4) % 3 + 1))
             } else {
                 "status streaming".into()
             }];
+            if waiting {
+                meta.push(format!("loading {}", self.loading_activity));
+            }
             if self.answer_revision != Some(revision) || self.messages[index].meta != meta {
                 // Replacing the immutable message invalidates its cached layout.
                 // Animation-only ticks retain it without copying answer text.
@@ -322,6 +343,15 @@ impl TerminalApp {
                 self.answer_revision = Some(revision);
             }
         }
+    }
+
+    pub(super) fn set_loading_activity(&mut self, activity: &str) {
+        // Never render terminal controls from a filename or external event.
+        self.loading_activity = activity
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(180)
+            .collect();
     }
 
     pub(super) fn configure_debug(&mut self, argument: &str) {
@@ -431,6 +461,50 @@ pub(super) struct TerminalMessage {
 #[cfg(test)]
 mod streaming_tests {
     use super::*;
+
+    #[test]
+    fn loading_is_transient_and_never_becomes_answer_or_failure_text() {
+        let mut app = TerminalApp::empty();
+        app.begin_response("architect");
+        app.set_loading_activity("Explorer: Reading README.md...");
+        app.update_streaming_response(0);
+        assert!(app.messages[0].body.is_empty());
+        assert!(app.messages[0]
+            .meta
+            .iter()
+            .any(|m| m.contains("Reading README")));
+        app.set_loading_activity("Verifier: Running the check...");
+        app.update_streaming_response(1);
+        assert_eq!(app.messages.len(), 1);
+        assert!(!app.messages[0].meta.iter().any(|m| m.contains("README")));
+        app.live_output.observe(crate::progress::OutputUpdate {
+            id: "answer".into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: "The answer".into(),
+            replace: false,
+        });
+        app.update_streaming_response(2);
+        assert_eq!(app.messages[0].body, "The answer");
+        assert!(!app.messages[0]
+            .meta
+            .iter()
+            .any(|m| m.starts_with("loading ")));
+        app.push_response(&serde_json::from_value(serde_json::json!({"status":"completed","responder":"architect","answer":"The answer"})).unwrap());
+        app.begin_response("guide");
+        assert!(app.messages[1]
+            .meta
+            .iter()
+            .any(|m| m == "loading Preparing your request..."));
+        app.set_loading_activity("Reading another file...");
+        app.update_streaming_response(0);
+        app.fail_streaming_response("Connection interrupted");
+        assert_eq!(app.messages[1].body, "Connection interrupted");
+        assert!(!app.messages[1]
+            .meta
+            .iter()
+            .any(|m| m.starts_with("loading ")));
+    }
 
     #[test]
     fn clarification_is_before_the_continuing_answer_without_changing_its_identity() {
@@ -594,6 +668,7 @@ pub(super) struct StatusSnapshot {
     pub(super) model_summary: String,
     pub(super) provider_summary: String,
     pub(super) prompt_profile: String,
+    pub(super) approval_mode: String,
     pub(super) runtime: String,
 }
 
@@ -610,9 +685,11 @@ impl StatusSnapshot {
             model_summary: "model inventory unavailable".to_string(),
             provider_summary: "providers unavailable".to_string(),
             prompt_profile: "auto".to_string(),
+            approval_mode: "ask".to_string(),
             runtime: "runtime not checked".to_string(),
         };
         if let Ok(config) = load_visible_config() {
+            snapshot.approval_mode = crate::project_approval_mode(&config);
             snapshot.provider = config.active_provider.clone();
             snapshot.config_path = config.config_path.clone();
             snapshot.prompt_profile = if config.agent_prompt_profile.is_empty() {

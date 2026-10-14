@@ -577,6 +577,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             ));
             rows.push(row("models", &app.status.model_summary, cyan(), false));
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
+            rows.push(row("approvals", &app.status.approval_mode, yellow(), false));
             rows.push(row(
                 "agents",
                 "TaskRecord -> Architect -> optional Tester -> Coder -> required checks",
@@ -812,6 +813,12 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("provider", &app.status.provider, cyan(), true));
             rows.push(row("model", &app.status.model, magenta(), false));
             rows.push(row("prompt", &app.status.prompt_profile, green(), false));
+            rows.push(row(
+                "approvals",
+                format!("{} — /approvals to choose", app.status.approval_mode),
+                yellow(),
+                false,
+            ));
             rows.push(row("config", &app.status.config_path, yellow(), false));
             rows.push(row(
                 "keys",
@@ -1127,6 +1134,17 @@ fn draw_bottom_status(out: &mut impl Write, y: u16, width: u16, app: &TerminalAp
         true,
     )?;
 
+    draw_badge(
+        out,
+        &mut x,
+        y,
+        width,
+        &format!("APPROVALS {}", app.status.approval_mode.to_uppercase()),
+        text(),
+        surface_bg(),
+        false,
+    )?;
+    draw_text_segment(out, &mut x, y, width, "  ", muted(), input_bg(), false)?;
     let live = app.scroll_offset == 0;
     draw_badge(
         out,
@@ -1445,7 +1463,28 @@ fn append_message_lines(
         cursor
     };
     if agent {
-        append_answer_lines(lines, &message.body, width, running);
+        if running && message.body.is_empty() {
+            let loading = message
+                .meta
+                .iter()
+                .find_map(|item| item.strip_prefix("loading "))
+                .unwrap_or("Preparing your request...");
+            let label = clip_plain(&format!("  | {loading}"), width.saturating_sub(1));
+            lines.push(RenderLine {
+                text: label.clone(),
+                color: muted(),
+                bold: false,
+                footnote: false,
+                cursor: None,
+                // Plain spans keep filenames inert, including Markdown syntax.
+                spans: Some(vec![Span {
+                    text: label,
+                    style: Style::default(),
+                }]),
+            });
+        } else {
+            append_answer_lines(lines, &message.body, width, running);
+        }
     } else {
         append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
     }
@@ -1690,6 +1729,56 @@ mod context_meter_tests {
             .window(0, 6)
             .iter()
             .any(|row| row.text.contains("conversation")));
+    }
+
+    #[test]
+    fn loading_is_one_muted_row_and_only_rebuilds_the_active_message() {
+        use super::*;
+        let mut app = TerminalApp::for_test();
+        for _ in 0..100 {
+            app.push(
+                super::super::state::Role::Assistant,
+                "architect",
+                "Saved answer",
+            );
+        }
+        app.begin_response("architect");
+        app.set_loading_activity("Explorer: Reading `server.py`...");
+        app.update_streaming_response(0);
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 44);
+        let before = cache.rebuilds;
+        let pending = &cache.entries[100].lines;
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[1].color, muted());
+        assert!(pending[1].text.contains("`server.py`"));
+        assert!(pending[1]
+            .spans
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|s| s.style.code == Code::None));
+        app.set_loading_activity("Verifier: Running the check...");
+        app.update_streaming_response(1);
+        cache.update(&app, 44);
+        assert_eq!(cache.rebuilds, before + 1);
+        assert!(!cache.entries[100].lines[1].text.contains("server.py"));
+        cache.update(&app, 44);
+        assert_eq!(cache.rebuilds, before + 1);
+        app.live_output.observe(crate::progress::OutputUpdate {
+            id: "answer".into(),
+            agent: "architect".into(),
+            channel: "answer".into(),
+            text: "Here is the answer".into(),
+            replace: false,
+        });
+        app.update_streaming_response(2);
+        cache.update(&app, 44);
+        assert_eq!(cache.entries[100].lines[1].color, text());
+        assert!(cache.entries[100].lines[1]
+            .text
+            .contains("Here is the answer"));
+        assert!(!cache.entries[100].lines[1].text.contains("Verifier"));
     }
 
     #[test]

@@ -130,6 +130,7 @@ async def _run_agent_deck(
     from protolink.storage import SQLiteRunStore, SQLiteStorage
 
     from . import config
+    from .approvals import approval_mode
     from .checkpoints import checkpoint_store, private_file, workspace_writer
     from .mcp import server_settings
     from .request_budget import configure_agent_context
@@ -140,6 +141,7 @@ async def _run_agent_deck(
     from .workflow import CodingWorkflow
 
     project = str(Path(workspace or os.getenv("PROTOAGENT_WORKSPACE", os.getcwd())).resolve())
+    selected_approval_mode = approval_mode(project)
     contract = infer_run_contract(user_prompt or prompt)
     context = RunContext(
         session_id=session_id,
@@ -148,6 +150,7 @@ async def _run_agent_deck(
         budget=_run_budget(provider, model, RunBudget),
         metadata={
             "application": "protoagent",
+            "approval_mode": selected_approval_mode,
             "interface": "rust-cli",
             "prompt_profile": prompt_profile,
             "run_contract": contract.to_dict(),
@@ -165,18 +168,20 @@ async def _run_agent_deck(
     bridge.redaction = redaction
     events: list[str] = []
     live_updates = _streaming_enabled()
+    seen_events: set[str] = set()
 
     def emit(message):
         events.append(message)
         bridge.emit(message)
 
     async def observe(handle):
-        seen = set()
-
         def present(event):
-            if event.event_id in seen:
+            # Graph attempts and the enclosing handle expose the same native
+            # receipts. Deduplicate presentation across the whole application
+            # run, not just one handle; full evidence remains in native reports.
+            if event.event_id in seen_events:
                 return
-            seen.add(event.event_id)
+            seen_events.add(event.event_id)
             if live_updates:
                 live_output.emit(event)
             data = event.to_dict(redaction_policy=redaction)
@@ -221,7 +226,7 @@ async def _run_agent_deck(
             storage=SQLiteStorage(store.db_path, table_name="approvals", namespace=context.run_id),
             timeout_seconds=float(_runtime_timeout()),
         )
-        bridge.bind(broker, authorization, redaction)
+        bridge.bind(broker, authorization, redaction, approval_mode=selected_approval_mode)
         task = Task.create_tool_call(tool_name="run_workflow", args={})
         context.attach_to_task(task)
         if reason := bridge.cancel_reason():
@@ -336,6 +341,7 @@ async def _run_agent_deck(
         )
         emit(f"Project: {project}. Run: {context.run_id}. Repair limit: 2.")
         coordinator = Agent(
+            execution_version="protoagent-workflow-3",
             card={
                 "name": "protoagent-workflow",
                 "description": "Application coding workflow",
@@ -410,7 +416,7 @@ async def _run_agent_deck(
                     )
                     answer += "\nStopped as requested; no further commands or repairs were run."
                 elif status != "completed":
-                    detail = str(
+                    detail = _failure_detail(
                         result.error
                         or (
                             result.task.metadata.get(
@@ -422,13 +428,44 @@ async def _run_agent_deck(
                         or acceptance.completion["message"]
                         or status
                     )
-                    answer = f"Run {status}: {detail}\n\n{answer}".strip()
+                    if (
+                        status == "incomplete"
+                        and contract.requires_write
+                        and not acceptance.completion["applied"]
+                    ):
+                        # An unexecuted promise or action printed as text is
+                        # not a useful result. Preserve the proposal in the
+                        # native trace, and report what actually happened.
+                        answer = f"Run incomplete: {acceptance.completion['message']}"
+                    elif status == "incomplete" and workflow.continuations:
+                        answer = (
+                            "Run incomplete: remaining edits were not finished after "
+                            f"{workflow.continuations} bounded continuations. "
+                            "The current changes have not satisfied the required checks."
+                        )
+                    else:
+                        answer = f"Run {status}: {detail}\n\n{answer}".strip()
+                    if acceptance.completion["applied_paths"]:
+                        paths = [
+                            str(Path(path).relative_to(project))
+                            for path in acceptance.completion["applied_paths"]
+                        ]
+                        answer += (
+                            "\n\nChanges already applied: " + ", ".join(paths) + ". "
+                            "The task is incomplete; these edits may be partial. "
+                            "Inspect /diff and the current files before continuing."
+                        )
                 if (
                     contract.requires_write
                     or contract.task_kind == "workspace-verification"
                     or acceptance.verification["results"]
                 ):
                     answer += "\n\n" + verification_summary(acceptance.verification)
+                from .change_review import review_changes
+
+                change_review, applied_diffs = review_changes(attempt, evidence_report)
+                if contract.requires_write or change_review["files"]:
+                    answer += "\n\n" + change_review["summary"]
                 # Native Graph tasks already retain parent and delegated receipts.
                 # Preserve the outer handle's normalized terminal task.
                 combined = RunReport.from_task(evidence_task)
@@ -438,6 +475,7 @@ async def _run_agent_deck(
                     final_task=native_report.final_task,
                     metadata={
                         "application": "protoagent",
+                        "approval_mode": selected_approval_mode,
                         "provider": provider,
                         "model": model,
                         "transport_task_status": result.status,
@@ -445,6 +483,8 @@ async def _run_agent_deck(
                         "run_contract": contract.to_dict(),
                         "completion_validation": acceptance.completion,
                         "verification": acceptance.verification,
+                        "change_review": change_review,
+                        "workflow_continuations": workflow.continuations,
                         "task_record": record.snapshot(),
                         "context_admission": {
                             name: getattr(agent.llm, "protoagent_context_admission", {})
@@ -466,10 +506,13 @@ async def _run_agent_deck(
                 "events": events,
                 "run_events": [event.to_dict() for event in report.events],
                 "run_report": report.to_dict(),
-                "diffs": previews["diffs"],
+                "diffs": applied_diffs,
+                "proposal_diffs": previews["diffs"],
+                "change_review": change_review,
                 "targets": previews["targets"],
                 "approval_requests": bridge.approval_requests,
                 "approval_decisions": bridge.approval_decisions,
+                "approval_mode": selected_approval_mode,
                 "run_context": (
                     RunContext.from_task(result.task) if result.task else context
                 ).to_dict(),
@@ -478,6 +521,7 @@ async def _run_agent_deck(
                 "completion_validation": acceptance.completion,
                 "verification": acceptance.verification,
                 "task_record": record.snapshot(),
+                "workflow_continuations": workflow.continuations,
                 "context_admission": {
                     name: getattr(agent.llm, "protoagent_context_admission", {})
                     for name, agent in deck.items()
@@ -702,6 +746,8 @@ def _append_event(
             or event_type
             in {
                 "action.completed",
+                "action.started",
+                "llm.call.started",
                 "action.failed",
                 "action.denied",
                 "workflow.blocked",
@@ -710,6 +756,11 @@ def _append_event(
                 "budget.exceeded",
                 "tool.correction.exhausted",
                 "verification.deferred",
+                "worker.handoff",
+                "worker.continuing",
+                "workflow.continuing",
+                "workflow.repair.requested",
+                "workflow.work_yielded",
                 "run.completed",
                 "run.failed",
                 "run.canceled",
@@ -743,6 +794,39 @@ def _content_to_text(content: Any) -> str:
     if isinstance(content, list):
         return "\n".join(filter(None, (_content_to_text(item) for item in content))).strip()
     return str(content).strip()
+
+
+def _failure_detail(error: Any) -> str:
+    """Project nested native error envelopes into prose; retain originals in /trace."""
+    import ast
+    import re
+
+    for _ in range(6):
+        if isinstance(error, dict) and "message" in error:
+            error = error["message"]
+            continue
+        if isinstance(error, str) and error.startswith("Native run failed: "):
+            candidate = error.removeprefix("Native run failed: ")
+            if len(candidate) <= 10_000:
+                try:
+                    error = ast.literal_eval(candidate)
+                    continue
+                except (SyntaxError, ValueError, RecursionError):
+                    pass
+        break
+    detail = str(error)
+    if "prediction aborted, token repeat limit reached" in detail:
+        return (
+            "Ollama stopped the model because its generated tokens began repeating. "
+            "The interrupted response was not executed as a tool request. "
+            "This is a generation failure, separate from the agent's turn limit."
+        )
+    limit = re.search(r"Maximum inference steps \((\d+)\) exceeded", detail)
+    if limit:
+        worker = re.search(r"Tool '([^']+)' execution failed:", detail)
+        name = worker.group(1).capitalize() if worker else "Agent"
+        return f"{name} reached its {limit.group(1)}-turn limit before finishing."
+    return detail
 
 
 def _approval_previews(requests: list[dict[str, Any]]) -> dict[str, list[Any]]:

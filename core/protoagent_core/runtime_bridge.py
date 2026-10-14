@@ -31,6 +31,7 @@ class RuntimeBridge:
         self.broker: ApprovalBroker | None = None
         self.authorization: RunAuthorization | None = None
         self.redaction = output_redaction()
+        self.approval_mode = "ask"
         self._write_lock = threading.Lock()
         self._input_lock = asyncio.Lock()
         # Rust owns stale-control cleanup before the worker starts. Preserve a
@@ -113,9 +114,17 @@ class RuntimeBridge:
         except OSError:
             pass
 
-    def bind(self, broker: ApprovalBroker, authorization: RunAuthorization, redaction=None) -> None:
+    def bind(
+        self,
+        broker: ApprovalBroker,
+        authorization: RunAuthorization,
+        redaction=None,
+        *,
+        approval_mode="ask",
+    ) -> None:
         """Attach the native broker and the application's trusted authorization scope."""
         self.broker, self.authorization = broker, authorization
+        self.approval_mode = approval_mode
         if redaction is not None:
             self.redaction = redaction
 
@@ -227,6 +236,10 @@ class RuntimeBridge:
             if record is None:
                 self._unlink(self.request_path)
                 presented = None
+            elif self._auto_accept(record):
+                self._unlink(self.request_path)
+                self._unlink(self.decision_path)
+                presented = None
             elif self.progress_path is None:
                 self.broker.resolve(
                     ApprovalDecision(
@@ -272,6 +285,33 @@ class RuntimeBridge:
                     presented = None
                     generation += 1
             await asyncio.sleep(0.08)
+
+    def _auto_accept(self, record):
+        from urllib.parse import unquote, urlparse
+
+        from .approvals import can_auto_accept
+
+        if self.authorization is None or self.broker is None:
+            return False
+        workspace = urlparse(self.authorization.context.workspace_uri or "")
+        if workspace.scheme != "file" or workspace.netloc not in {"", "localhost"}:
+            return False
+        if not can_auto_accept(record.request.action, self.approval_mode, unquote(workspace.path)):
+            return False
+        resolution = self.broker.resolve(
+            ApprovalDecision(
+                True,
+                record.request.request_id,
+                reason=f"Project auto-accept mode: {self.approval_mode}",
+                decided_by="protoagent-auto",
+            ),
+            scope=self.authorization.scope,
+            fingerprint=record.fingerprint,
+        )
+        self.emit(
+            f"Auto-accepted {record.request.action.name} ({self.approval_mode}): {resolution.status}."
+        )
+        return resolution.status == "approved"
 
     def cancel_reason(self) -> str | None:
         """Return the application cancellation reason when one was requested."""

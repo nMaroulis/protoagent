@@ -34,6 +34,14 @@ Architect, Explorer, and Coder. Valid values are `auto`, `small`, `medium`,
 such as 14B/27B resolve to `medium`; 30B+ or `large` model names resolve to
 `large`.
 
+Project approval preferences live under `approval_modes`, a map from canonical
+absolute project paths to `edits` or `auto`. Missing or invalid values resolve
+to `ask`. `configure_approvals(value, workspace)` validates and saves a choice;
+`approval_mode(workspace)` reads it. Selecting `ask` removes that project's
+override. Run setup freezes the preference so later configuration changes do
+not change a live run. This private setting is not a model tool or project file.
+See [approval modes and review](../cli/safety-tracing.md).
+
 Optional agents live under a separate top-level key:
 
 ```json
@@ -160,7 +168,21 @@ model_params["num_ctx"] = ollama_context_window(cfg)
 The same value is written into `LLMModelProfile.context_window`, so request
 parameters and UI metrics do not drift apart.
 
-Ollama receives native `tool_calling="auto"` by default. ProtoLink owns the
+For the small profile, Ollama requests also default to `num_predict=4096`.
+Small Gemma 4 variants default to `think=false`; user-specified values, including
+the `max_tokens` alias, remain authoritative. Other profiles keep engine defaults.
+Model-recommended sampling is preserved. ProtoLink puts `think` at the request
+level and `num_predict` in generation options; neither changes the action protocol
+or grants execution authority. Generation controls reduce unnecessary output,
+but are not a guarantee against a model or runner error.
+
+Ollama receives `tool_calling="auto"` by default, except automatic small-profile
+Gemma 4 selection uses the engine's `json` protocol. An advertised tool capability
+can coexist with leaked narration/channel/action text; JSON action acquisition
+lets the existing engine parse and validate one action rather than treating
+that output as an ordinary native final answer. Explicit `native` or `json`
+configuration remains authoritative. No application action parser or dispatcher
+is added. For other automatic models, ProtoLink owns the
 authenticated `/api/show` request, five-minute capability cache and task-local
 protocol choice; missing/unsupported metadata selects JSON. Optional
 `providers.ollama.tool_calling` selects `auto` (default), `native` or `json`;

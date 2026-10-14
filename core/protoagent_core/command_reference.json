@@ -49,6 +49,10 @@
       "Show or set the prompt profile. Usage: /agents profile [auto|small|medium|large|api]."
     ],
     [
+      "/approvals",
+      "Choose project approvals in a picker, or use /approvals ask|edits|auto|status. Ask is default; Edits auto-accepts file edits; Auto also accepts commands with normal host permissions. Saved for this project, next run. MCP and restoration still ask."
+    ],
+    [
       "/agents scout on",
       "Enable public web research"
     ],
@@ -110,7 +114,7 @@
     ],
     [
       "/diff",
-      "Review the latest diff"
+      "Review the combined applied diff from the last run. Partial edits remain reviewable after failures. Approval previews are separate: /diff proposed."
     ],
     [
       "/timeline",
@@ -126,7 +130,7 @@
     ],
     [
       "/config",
-      "Show the redacted provider configuration panel: active provider, models, base URLs, context window and key presence. Read-only; use /model, /key, /context window or /agents to change settings. Shell: proto-cli config."
+      "Show the redacted provider configuration panel: project approval mode, active provider, models, base URLs, context window and key presence. Read-only; use /model, /key, /context window , /approvals or /agents to change settings. Shell: proto-cli config."
     ],
     [
       "/version",
@@ -158,7 +162,7 @@
     ],
     [
       "/diff raw",
-      "Print the latest raw diff in the transcript."
+      "Print the combined applied diff in the transcript."
     ],
     [
       "/models choose",
@@ -259,6 +263,10 @@
     [
       "/agents mcp off",
       "Disable the tool-only MCP broker (default off)."
+    ],
+    [
+      "/diff proposed",
+      "Review approval previews, including proposals that may never have been applied."
     ]
   ],
   "shell": [
@@ -445,6 +453,10 @@
     [
       "eval harness [--json]",
       "Run four offline native engine-contract samples with fresh factories and linked child receipts; no live model or workspace writes."
+    ],
+    [
+      "proto-cli approvals",
+      "Show saved project approvals. Set with proto-cli approvals ask|edits|auto. Auto commands use normal host permissions; MCP and restoration still ask."
     ]
   ]
 }

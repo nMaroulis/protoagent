@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from protolink import Agent
 from protolink.tools.builtins import filesystem_tools
 from protolink.transport import Transport
 from protolink.types import TransportType
@@ -13,6 +12,7 @@ from ..editing import edit_tool, workspace_file_tool
 from ..runtime_policy import WorkspacePolicy
 from ..task_record import add_task_tools
 from ..tools import workspace_root
+from ..worker_budget import BoundedCoderAgent, coder_budget_hooks
 from .common import (
     QUIET_LOGGER,
     create_configured_transport,
@@ -31,13 +31,23 @@ describe required regression coverage, not commands you should run. Do not keep
 exploring after the requested edits or promise to run checks yourself.
 
 Read the assigned source using read_file(path, start_line, end_line). Use edit_file
-with one exact old/new replacement and the returned revision. Prefer it over
+with one exact old/new replacement and read_file.revision. A successful edit
+returns source_revision for the next edit of source you already know; use that
+instead of another read. Native resource.version is a recovery identity, not
+expected_revision. Reread only for missing source or a source rejection.
+Prefer edit_file over
 regenerating a file. Copy old literally from read_file.content, including spaces
 and line breaks. Use a short unique span, such as one import or one function;
-never reconstruct the old file or invent placeholder source. If a read is
+never reconstruct the old file or invent placeholder source. old and new must
+differ; an identical replacement is not progress. Keep replacements small to
+avoid malformed JSON. If a read is
 truncated, use next_line to read more before changing unseen code. After a
-no-change source rejection, reread and correct the selection within the native
-allowance. Do not retry denied, interrupted or uncertain writes.
+stale revision or selection rejection, reread and correct it within the native
+allowance. For introduced_python_syntax, no write occurred: correct the proposed
+new/content using the source and revision you already observed. JSON string
+newlines must decode to real line breaks; never double-escape them into literal
+backslash-n text. The parse-only guard does not check imports or runtime behavior.
+Do not retry denied, interrupted or uncertain writes.
 Use create_file for new files and replace_file only for
 small complete replacements. Follow task_status criteria and file scope. Paths
 may be project-relative or absolute beneath the project root; parent directories must already
@@ -47,8 +57,9 @@ For bootstrap_checks, create focused stdlib unittest regressions in root
 test_*.py files within the assigned scope. Exercise the requested behavior,
 not just imports or syntax. Verifier runs them; you never claim they passed.
 
-Each write presents an exact unified diff for approval, checks the preimage and
-saves recovery bytes before changing the file. A preview or approval is not an
+Each write prepares an exact unified diff for native authorization, checks the
+preimage and saves recovery bytes before changing the file. The user's project
+approval preference may resolve writes automatically. A preview or approval is not an
 applied edit. Report the native change_id and state returned after execution.
 preview_change(change_id) inspects recovery records. restore_change(change_id)
 requires separate approval and refuses changed resources. Use it only when the
@@ -82,7 +93,9 @@ def create_coder_agent(
     """
     record = attempt.record if attempt is not None else None
     agent_url = resolve_agent_url("coder", url)
-    agent = Agent(
+    agent = BoundedCoderAgent(
+        work_record=record,
+        work_attempt=attempt,
         card={
             "name": "coder",
             "description": (
@@ -154,18 +167,31 @@ def create_coder_agent(
         verbosity=0,
     )
 
-    for tool in filesystem_tools(
+    native_files = filesystem_tools(
         roots=[workspace_root(workspace)],
         checkpoints=checkpoints if checkpoints is not None else checkpoint_store(workspace),
-    ):
+    )
+    for tool in native_files:
         agent.add_tool(
             workspace_file_tool(tool, workspace)
             if tool.name in {"create_file", "replace_file"}
             else tool
         )
-    agent.execution_version += ":protoagent-file-paths-1"
-    agent.add_tool(edit_tool(agent.tools["replace_file"], workspace))
-    agent.execution_version += ":protoagent-source-feedback-1"
+    agent.execution_version += ":protoagent-file-paths-2"
+    # Exact edits prepare the raw native replacement once. The full-file
+    # interface has its own validation adapter and need not be nested here.
+    agent.add_tool(
+        edit_tool(next(tool for tool in native_files if tool.name == "replace_file"), workspace)
+    )
+    agent.execution_version += ":protoagent-source-feedback-3"
+    if not single_agent and not tool_only:
+        # Context preparation combines this hook with schema admission so the
+        # stop boundary survives rebuilding. Standalone agents use the
+        # same public lifecycle extension without context preparation.
+        budget_hooks = coder_budget_hooks(record)
+        setattr(agent, "protoagent_coder_budget_hooks", budget_hooks)
+        agent.hooks = (*agent.hooks, budget_hooks)
+        agent.execution_version += ":protoagent-coder-budget-3"
 
     @agent.tool(capabilities=["workspace.read"])
     def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> dict:

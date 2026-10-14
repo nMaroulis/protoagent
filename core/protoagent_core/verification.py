@@ -18,6 +18,7 @@ class Acceptance:
     completion: dict[str, Any]
     verification: dict[str, Any]
     repairable: bool = False
+    continuable: bool = False
 
 
 async def validate_completion(contract, task, report, attempt, broker) -> Acceptance:
@@ -123,7 +124,11 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     for check_id in sorted(required_ids - observed_ids):
         checks.append(
             CompletionCheck(
-                f"required check: {check_id}", lambda evidence: False, require_execution=False
+                f"required check: {check_id}",
+                lambda evidence: ValidationResult(
+                    "check", "blocked", "check_not_run", "This required check was not run."
+                ),
+                require_execution=False,
             )
         )
     for index, item in enumerate(latest_commands.values()):
@@ -188,9 +193,13 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     stop_reason = ""
     if stopped:
         runtime_expired = any(
-            event.type == "workflow.blocked"
+            event.type in {"workflow.blocked", "budget.exceeded"}
             and event.payload.get("blocker", {}).get("code") == "budget_exceeded"
-            and event.payload.get("blocker", {}).get("limit") == "max_runtime_seconds"
+            and (
+                event.payload.get("blocker", {}).get("limit") == "max_runtime_seconds"
+                or event.payload.get("blocker", {}).get("decision", {}).get("limit_name")
+                == "max_runtime_seconds"
+            )
             for event in report.events
         )
         unanswered = any(
@@ -201,6 +210,19 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             stop_reason = (
                 "Run time limit reached while waiting for your approval. "
                 "Viewing details does not approve execution. Start a new run to continue."
+            )
+        elif runtime_expired:
+            waiting_for_answer = any(
+                event.type == "action.failed"
+                and isinstance(event.payload.get("action"), dict)
+                and event.payload["action"].get("name") == "ask_user"
+                for event in report.events
+            )
+            stop_reason = (
+                "Run time limit reached while waiting for your answer. "
+                "Start a new run to continue; already applied edits may be partial."
+                if waiting_for_answer
+                else "Run time limit reached. Inspect current files before starting a new run."
             )
         missing.append(
             stop_reason or "A native denial, blocker or failed action requires a new instruction."
@@ -251,6 +273,21 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             for result in results
             if not result.passed
         ]
+    missing_checks = sorted(required_ids - observed_ids)
+    unfinished_message = ""
+    if outcome == "incomplete":
+        if contract.requires_write and not latest_writes:
+            unfinished_message = "No file changes were applied. The model stopped before executing the requested edits."
+        elif missing_checks:
+            unfinished_message = (
+                "Changes were applied, but verification is incomplete."
+                if latest_writes
+                else "Verification is incomplete."
+            )
+        if missing_checks:
+            unfinished_message += (
+                " Required checks were not run: " + ", ".join(missing_checks) + "."
+            )
     repairable = (
         contract.requires_write
         and not (record and any(worker["status"] != "done" for worker in record.reports.values()))
@@ -268,6 +305,23 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             for flag in ("timed_out", "canceled", "budget_exceeded", "stale")
         )
     )
+    continuable = (
+        contract.requires_write
+        and outcome == "incomplete"
+        and not stopped
+        and not attempt.checking
+        and bool(latest_writes)
+        and all(
+            result.status in {"passed", "failed"} or result.code == "check_not_run"
+            for result in results
+        )
+        and bool(record)
+        and record.reports.get("coder", {}).get("reason") == "worker_turn_limit"
+        and record.reports["coder"]["status"] == "needs_context"
+        and all(
+            worker["status"] == "done" for role, worker in record.reports.items() if role != "coder"
+        )
+    )
     return Acceptance(
         {
             "outcome": outcome,
@@ -283,7 +337,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "checks": validations,
             "message": "Execution evidence satisfies the application checks."
             if outcome == "satisfied"
-            else stop_reason or " ".join(missing) or f"Run is {outcome}.",
+            else stop_reason or unfinished_message or " ".join(missing) or f"Run is {outcome}.",
             "missing": missing,
         },
         {
@@ -294,6 +348,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             **({"last_attempt_status": last_attempt_status, "handoff": handoff} if handoff else {}),
         },
         repairable,
+        continuable,
     )
 
 
@@ -305,15 +360,20 @@ def verification_summary(report: dict[str, Any]) -> str:
         return lines[0] + " No test/build command was executed."
     if deferred:
         lines.append(f"Last attempt: {report['last_attempt_status']}.")
-        output = "\n".join(
-            str(item.get("stdout", "")) + str(item.get("stderr", ""))
-            for item in report.get("latest") or report["results"]
-        )
-        missing_module = re.search(
-            r"ModuleNotFoundError: No module named ['\"]([^'\"]+)['\"]", output
-        )
-        if missing_module:
-            lines.append(f"The selected environment could not import {missing_module.group(1)}.")
+    for item in report.get("latest") or report["results"]:
+        if item.get("exit_code") not in {None, 0}:
+            output = str(item.get("stdout", "")) + str(item.get("stderr", ""))
+            missing_module = re.search(
+                r"(?:ModuleNotFoundError: )?No module named ['\"]?([a-zA-Z_][\w.]*)", output
+            )
+            if missing_module:
+                lines.append(
+                    f"The selected environment could not import {missing_module.group(1).rstrip('.')}."
+                )
+                lines.append(
+                    "This is an environment/setup problem; the command did not establish whether the edits work."
+                )
+                break
     for item in report.get("latest") or report["results"]:
         outcome = (
             "zero tests ran; verification is missing"

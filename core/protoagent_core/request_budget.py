@@ -267,6 +267,7 @@ def configure_agent_context(
         agent.add_tool(context_artifact_tool())
     agent.context_policy = policy
     instructions = agent.to_dict().get("system_prompt") or ""
+    coder_hooks = getattr(agent, "protoagent_coder_budget_hooks", None)
     worker_interface = getattr(agent, "protoagent_worker_interface", None)
     if worker_interface is not None and (run_contract is None or run_contract.requires_write):
         from .agents.architect import SMALL_WORKER_INTERFACE_PROMPT
@@ -278,6 +279,14 @@ def configure_agent_context(
         history = request.history
         native = llm.resolve_tool_calling() == "native"
         state = record.snapshot() if record else {}
+        budget_instruction = ""
+        if coder_hooks:
+            from .worker_budget import reserve_coder_turn
+
+            # Narrow before constructing declarations/counting native schemas.
+            # The stop signal precedes schema admission/provider acquisition;
+            # earlier reminders are injected after rebuilding the prompt below.
+            budget_instruction = reserve_coder_turn(request)
         from .run_contracts import infer_run_contract
 
         contract = run_contract or infer_run_contract(state.get("objective", ""))
@@ -315,6 +324,8 @@ def configure_agent_context(
                         iter(
                             state.get("required_checks", [])
                             if contract.task_kind == "workspace-verification"
+                            else []
+                            if state.get("frozen")
                             else state.get("baseline_check_ids", state.get("required_checks", []))
                         ),
                         None,
@@ -323,6 +334,7 @@ def configure_agent_context(
                     answer_only=conversational,
                     writing=contract.requires_write,
                     bootstrap_only=bool(state.get("required_checks"))
+                    and not state.get("frozen")
                     and state.get("baseline_check_ids") == []
                     and contract.requires_write
                     and not contract.allows_unverified_docs,
@@ -337,6 +349,8 @@ def configure_agent_context(
                 }
             first = history.messages_raw()[0]
             first.content += "\n\nCurrent request state:\n" + json.dumps(state)
+        if budget_instruction:
+            history.messages_raw()[0].content += "\n\n" + budget_instruction
 
         # agent_call observations are portable JSON messages, unlike native
         # tool observations. Prepare those copies through the same public policy.
@@ -415,8 +429,11 @@ def configure_agent_context(
         }
 
     agent.hooks = (
-        *agent.hooks,
-        AgentHooks(before_model=prepare),
+        *(hook for hook in agent.hooks if hook is not coder_hooks),
+        AgentHooks(
+            before_model=prepare,
+            before_complete=coder_hooks.before_complete if coder_hooks else None,
+        ),
     )
     suffix = ":protoagent-context-5"
     if not agent.execution_version.endswith(suffix):

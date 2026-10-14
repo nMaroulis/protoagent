@@ -42,6 +42,12 @@ struct CoreResponse {
     #[serde(default)]
     diff: String,
     #[serde(default)]
+    proposal_diff: String,
+    #[serde(default)]
+    change_review: Value,
+    #[serde(default)]
+    approval_mode: String,
+    #[serde(default)]
     events: Vec<String>,
     #[serde(default)]
     run_events: Vec<Value>,
@@ -125,6 +131,8 @@ struct VisibleConfig {
     active_provider: String,
     #[serde(default)]
     agent_prompt_profile: String,
+    #[serde(default)]
+    approval_modes: HashMap<String, String>,
     providers: HashMap<String, VisibleProviderConfig>,
 }
 
@@ -404,6 +412,17 @@ async fn main() -> Result<()> {
             print_header()?;
             handle_agents_command(&args[1..])
         }
+        Some("approvals") => {
+            print_header()?;
+            let argument = args[1..].join(" ");
+            let text = approval_settings_text(argument.trim())?;
+            print_panel(
+                "APPROVALS",
+                &text.lines().map(str::to_string).collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
         Some("mcp") => {
             print_header()?;
             let text = mcp_settings_text(&args[1..])?;
@@ -481,6 +500,7 @@ fn print_cli_help() {
     println!("  proto-cli model              Pick active provider/model");
     println!("  proto-cli key [provider]     Add API key");
     println!("  proto-cli config             Show current config");
+    println!("  proto-cli approvals MODE     Project approvals: ask, edits or auto");
     println!("  proto-cli version            Show CLI, core, and ACP component versions");
     println!("  proto-cli project            Show or choose active project folder");
     println!("  proto-cli project set PATH   Set active project folder");
@@ -765,6 +785,9 @@ fn render_response(response: &CoreResponse) -> Result<()> {
     ];
     if !response.headline.is_empty() {
         summary.push(format!("Headline    : {}", response.headline));
+    }
+    if !response.approval_mode.is_empty() {
+        summary.push(format!("Approvals   : {}", response.approval_mode));
     }
     if !response.warning.is_empty() {
         summary.push(format!("Warning     : {}", response.warning));
@@ -1495,6 +1518,7 @@ fn show_config() -> Result<()> {
         &[
             format!("Path   : {}", config.config_path),
             format!("Active : {}", config.active_provider),
+            format!("Project approvals: {}", project_approval_mode(&config)),
             format!(
                 "Prompt: {}",
                 if config.agent_prompt_profile.is_empty() {
@@ -3324,6 +3348,56 @@ fn call_configure_agent_prompt_profile(value: Option<String>) -> PyResult<String
             .call1((value,))?
             .extract()
     })
+}
+
+const APPROVAL_MODES: [&str; 3] = ["ask", "edits", "auto"];
+const APPROVAL_CHOICES: [&str; 3] = [
+    "Ask — review each file edit and command",
+    "Edits — auto-accept file edits; ask before commands",
+    "Auto — auto-accept edits and commands with normal host permissions",
+];
+
+fn approval_settings(argument: &str) -> Result<Value> {
+    let mode = match argument.trim() {
+        "" | "status" => None,
+        value if APPROVAL_MODES.contains(&value) => Some(value.to_string()),
+        _ => return Err(anyhow!("Usage: approvals [ask|edits|auto|status]")),
+    };
+    let workspace = require_project_dir_string()?;
+    let raw: String = Python::attach(|py| {
+        prepare_python_path(py)?;
+        py.import("protoagent_core.agent_engine")?
+            .getattr("configure_approvals")?
+            .call1((mode, workspace))?
+            .extract()
+    })
+    .map_err(|err| anyhow!("Approval settings failed: {err}"))?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+fn approval_settings_text(argument: &str) -> Result<String> {
+    let settings = approval_settings(argument)?;
+    Ok(format!(
+        "Approvals: {}\n{}\nProject: {}\n{}\nAlways ask: {}\nUse /approvals ask|edits|auto (shell: proto-cli approvals MODE).",
+        settings["mode"].as_str().unwrap_or("ask"),
+        settings["description"].as_str().unwrap_or(""),
+        settings["workspace"].as_str().unwrap_or(""),
+        settings["scope"].as_str().unwrap_or(""),
+        settings["always_ask"].as_str().unwrap_or(""),
+    ))
+}
+
+fn project_approval_mode(config: &VisibleConfig) -> String {
+    active_project_dir()
+        .and_then(|path| path.canonicalize().ok())
+        .and_then(|path| {
+            config
+                .approval_modes
+                .get(&path.to_string_lossy().to_string())
+                .cloned()
+        })
+        .filter(|mode| APPROVAL_MODES.contains(&mode.as_str()))
+        .unwrap_or_else(|| "ask".into())
 }
 
 fn call_configure_optional_agent(name: String, enabled: bool) -> PyResult<String> {

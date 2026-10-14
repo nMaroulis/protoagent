@@ -36,6 +36,7 @@ pub(crate) struct ProgressBatch {
     pub(crate) events: Vec<String>,
     pub(crate) context_samples: Vec<ContextSample>,
     pub(crate) output: Vec<OutputUpdate>,
+    pub(crate) loading_activity: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -260,6 +261,18 @@ impl ProgressFile {
                 break;
             };
             let run_event = value.get("run_event");
+            if let Some(activity) =
+                run_event
+                    .and_then(loading_activity_from_run_event)
+                    .or_else(|| {
+                        value
+                            .get("event")
+                            .and_then(Value::as_str)
+                            .and_then(loading_activity_from_summary)
+                    })
+            {
+                batch.loading_activity = Some(activity);
+            }
             if let Some(output) = value.get("live_output") {
                 if let Ok(update) = serde_json::from_value::<OutputUpdate>(output.clone()) {
                     batch.output.push(update);
@@ -840,6 +853,148 @@ fn run_event_agent(value: &Value) -> String {
     )
 }
 
+/// One transient work label, independent of noisy trace/policy bookkeeping.
+fn loading_activity_from_run_event(value: &Value) -> Option<String> {
+    let kind = value.get("type")?.as_str()?;
+    let payload = value.get("payload").unwrap_or(&Value::Null);
+    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
+    let agent = run_event_agent(value);
+    let llm = value_string(payload, &["llm_event_type"]);
+    if kind == "llm.call.started" || (kind == "llm.stream" && llm == "llm_step") {
+        return Some(match agent.as_str() {
+            "Coder" => "Coder: Working on the requested changes...".into(),
+            "Explorer" => "Explorer: Examining the project...".into(),
+            "Tester" => "Tester: Designing regression tests...".into(),
+            "Guide" => "Guide: Preparing your answer...".into(),
+            _ => "Architect: Planning the next step...".into(),
+        });
+    }
+    match kind {
+        "worker.continuing" => return Some("Coder: Continuing the applied changes...".into()),
+        "workflow.work_yielded" | "workflow.continuing" => {
+            return Some("Architect: Focusing on the remaining work...".into())
+        }
+        "workflow.repair.requested" => {
+            return Some("Architect: Reviewing the failed check...".into())
+        }
+        "action.requested" | "action.started" => {
+            let action = payload.get("action").filter(|a| a.is_object());
+            let tool = action
+                .map(|a| {
+                    value_string(a, &["payload", "tool"])
+                        .if_empty_then(|| value_string(a, &["name"]))
+                })
+                .unwrap_or_else(|| {
+                    value_string(metadata, &["tool"])
+                        .if_empty_then(|| value_string(metadata, &["agent"]))
+                });
+            let args = action
+                .and_then(|a| a.get("payload"))
+                .and_then(|p| p.get("args").or_else(|| p.get("arguments")))
+                .or_else(|| metadata.get("args"))
+                .unwrap_or(&Value::Null);
+            let executing = kind == "action.started"
+                && action.is_some_and(|a| value_string(a, &["kind"]) == "tool.call");
+            if executing && tool == "execute_command" {
+                let check = action
+                    .map(|a| value_string(a, &["metadata", "check_id"]))
+                    .unwrap_or_default();
+                if !check.is_empty() {
+                    return Some(format!("Verifier: Running {check}..."));
+                }
+            }
+            return loading_tool_activity(&tool, args, &agent, executing);
+        }
+        "approval.required" => return Some("Waiting for your approval...".into()),
+        "user_input.requested" => return Some("Waiting for your answer...".into()),
+        "user_input.answered" | "user_input.declined" => {
+            return Some("Architect: Continuing with your feedback...".into())
+        }
+        "action.rejected" => return Some(format!("{agent}: Correcting the request...")),
+        "process.finished" => return Some("Verifier: Reviewing the command result...".into()),
+        "verification.deferred" => return Some("Finishing your verification handoff...".into()),
+        "action.failed" | "workflow.blocked" | "tool.correction.exhausted" => {
+            return Some("Preparing the run report...".into())
+        }
+        "task.status"
+            if value.get("final").and_then(Value::as_bool) == Some(true)
+                && agent == "Architect" =>
+        {
+            return Some("Finishing your response...".into())
+        }
+        _ => {}
+    }
+    None
+}
+
+fn loading_tool_activity(tool: &str, args: &Value, agent: &str, executing: bool) -> Option<String> {
+    let path = value_string(args, &["path"]);
+    let file = Path::new(&path)
+        .file_name()
+        .and_then(|p| p.to_str())
+        .unwrap_or("the file");
+    Some(match tool {
+        "read_file" => format!(
+            "{}: Reading {file}...",
+            if matches!(agent, "Coder" | "Tester" | "Explorer") {
+                agent
+            } else {
+                "Explorer"
+            }
+        ),
+        "list_directory" | "list_files" => "Explorer: Browsing project files...".into(),
+        "search_regex" | "search_files" => "Explorer: Searching the project...".into(),
+        "coder" => "Coder: Working on the requested changes...".into(),
+        "tester" => "Tester: Designing regression tests...".into(),
+        "create_file" if executing => format!("Coder: Creating {file}..."),
+        "replace_file" | "edit_file" if executing => format!("Coder: Editing {file}..."),
+        "create_file" | "replace_file" | "edit_file" => {
+            format!("Coder: Preparing changes to {file}...")
+        }
+        "run_check" => {
+            let check = value_string(args, &["check_id"]);
+            format!(
+                "Verifier: Preparing {}...",
+                if check.is_empty() {
+                    "the check"
+                } else {
+                    &check
+                }
+            )
+        }
+        "execute_command" => if executing {
+            "Verifier: Running the approved command..."
+        } else {
+            "Verifier: Preparing the command..."
+        }
+        .into(),
+        "plan_task" | "worker_packet" => "Architect: Preparing the work plan...".into(),
+        "ask_user" => "Architect: Preparing a question for you...".into(),
+        "web_search" | "fetch_url" => "Scout: Looking up external information...".into(),
+        "list_mcp_tools" | "mcp_tool_schema" | "call_mcp_tool" => {
+            "MCP: Working with the external service...".into()
+        }
+        _ => return None,
+    })
+}
+
+fn loading_activity_from_summary(summary: &str) -> Option<String> {
+    Some(
+        if summary.starts_with("CLI accepted") {
+            "Preparing your request..."
+        } else if summary.starts_with("Resolving tagged") {
+            "Loading the files you tagged..."
+        } else if summary.starts_with("Weaving Context Loom") {
+            "Gathering relevant project context..."
+        } else if summary.starts_with("Runtime:") {
+            "Starting the agent runtime..."
+        } else {
+            return None;
+        }
+        .into(),
+    )
+}
+
 fn context_sample_from_run_event(value: &Value) -> Option<ContextSample> {
     let payload = value.get("payload")?;
     if value_string(value, &["type"]) == "context.prepared" {
@@ -1177,6 +1332,59 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loading_activity_replaces_work_without_being_overwritten_by_bookkeeping() {
+        let mut progress = super::ProgressFile::new("loading-phase");
+        let events = [
+            serde_json::json!({"event":"Weaving Context Loom pack from the active workspace."}),
+            serde_json::json!({"run_event":{"type":"action.started","agent_name":"architect","payload":{"metadata":{"tool":"read_file","args":{"path":"src/server.py"}}}}}),
+            serde_json::json!({"run_event":{"type":"action.policy","agent_name":"architect","payload":{"decision":{"effect":"allow"}}}}),
+        ];
+        std::fs::write(
+            &progress.path,
+            events.iter().map(|e| format!("{e}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let first = progress.read_ui_batch();
+        assert_eq!(
+            first.loading_activity.as_deref(),
+            Some("Explorer: Reading server.py...")
+        );
+        use std::io::Write;
+        let mut output = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&progress.path)
+            .unwrap();
+        writeln!(output, "{}", serde_json::json!({"run_event":{"type":"llm.call.started","agent_name":"coder","payload":{}}})).unwrap();
+        assert_eq!(
+            progress.read_ui_batch().loading_activity.as_deref(),
+            Some("Coder: Working on the requested changes...")
+        );
+        assert!(progress.read_ui_batch().loading_activity.is_none());
+        writeln!(output, "{}", serde_json::json!({"run_event":{"type":"worker.continuing","agent_name":"coder","payload":{"window":2}}})).unwrap();
+        assert_eq!(
+            progress.read_ui_batch().loading_activity.as_deref(),
+            Some("Coder: Continuing the applied changes...")
+        );
+        assert!(progress.read_ui_batch().loading_activity.is_none());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn command_activity_distinguishes_preparation_from_authorized_execution() {
+        let action = serde_json::json!({"kind":"tool.call","name":"execute_command","payload":{"arguments":{}},"metadata":{"check_id":"python-tests"}});
+        let mut event = serde_json::json!({"type":"action.requested","agent_name":"verifier","payload":{"action":action}});
+        assert_eq!(
+            super::loading_activity_from_run_event(&event).as_deref(),
+            Some("Verifier: Preparing the command...")
+        );
+        event["type"] = serde_json::json!("action.started");
+        assert_eq!(
+            super::loading_activity_from_run_event(&event).as_deref(),
+            Some("Verifier: Running python-tests...")
+        );
+    }
+
     #[test]
     fn rejection_is_visible_without_claiming_execution_or_retry() {
         let event = serde_json::json!({

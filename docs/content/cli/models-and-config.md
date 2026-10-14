@@ -27,6 +27,15 @@ Legacy home override:
 export PROTOAGENT_HOME=/tmp/protoagent-config
 ```
 
+## Project approval preferences
+
+`/approvals` opens the TUI picker. `/approvals ask` reviews edits and commands;
+`/approvals edits` automatically accepts file edits; `/approvals auto` also
+accepts commands with normal host permissions. Shell: `proto-cli approvals MODE`.
+Ask is the default. The private `approval_modes` map saves choices per canonical
+project path for subsequent runs. MCP access and restoration still ask, and
+verification remains a separate workflow. See [approval modes and applied review](safety-tracing.md).
+
 ## Default Provider Schema
 
 The config contains:
@@ -59,7 +68,12 @@ The CLI renders provider cards and compact provider strips from this inventory.
 
 ## Ollama Tool Calling
 
-Tool calling defaults to `auto`. ProtoAgent passes that policy to ProtoLink;
+Tool calling defaults to `auto`. For small-profile Gemma 4 on Ollama, automatic
+selection uses ProtoLink's JSON action protocol: these models can advertise
+tools but return narration plus a channel marker and action text instead of a
+structured call. JSON mode constrains output and uses the engine's existing
+single-action parser, validation and execution. Explicit `native` or `json`
+settings are honored. Other models pass automatic selection to ProtoLink;
 the engine reads Ollama's `/api/show` metadata when resolving the protocol.
 If the model advertises `tools`, ProtoLink sends
 native tool declarations and consumes structured calls. Models without that
@@ -83,6 +97,25 @@ loop in JSON/native modes. Completed observations remain available; there is
 no run restart or application parser executing displayed answers. Explanatory
 prose and examples inside explicit `final.content` remain data. Use `/trace`
 to inspect correction and actual execution receipts.
+
+## Small-model generation
+
+Small-profile Ollama requests default to `num_predict=4096`. Small Gemma 4
+variants also default to `think=false`, using their supported boolean thinking
+control for short coding actions. The harness keeps model sampling defaults;
+explicit `model_params.num_predict`, `max_tokens` and `think` values take priority.
+Other profiles retain engine generation defaults. For example:
+
+```json
+{"providers":{"ollama":{"model_params":{"think":true,"num_predict":8192}}}}
+```
+
+These are request settings; they do not recreate or download the model. They can
+reduce generation latency and avoid optional thinking loops, but cannot guarantee
+generation quality. If Ollama reports `token repeat limit reached`, it aborted
+generation before a complete action was returned. The error is distinct from a
+worker's inference-turn cap. Partial proposals are discarded; previously applied
+edits remain recorded. Inspect `/trace` and the applied paths before continuing.
 
 ## Request correction limits
 

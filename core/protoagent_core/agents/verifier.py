@@ -69,7 +69,7 @@ def create_verifier_agent(
         workspace,
     )
     agent.add_tool(native)
-    agent.execution_version += ":protoagent-command-paths-2"
+    agent.execution_version += ":protoagent-command-paths-4"
     if attempt is not None and attempt.record is not None:
         agent.add_tool(check_tool(native, attempt.record))
     return agent

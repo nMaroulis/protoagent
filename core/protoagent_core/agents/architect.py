@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from protolink import Agent, CapabilityPolicy, SubagentLimits
+from protolink import CapabilityPolicy, SubagentLimits
 from protolink.transport import Transport
 from protolink.types import TransportType
 
 from ..task_record import add_task_tools
 from ..user_input import add_user_input_tool
+from ..workflow_control import WorkflowArchitectAgent
 from .common import (
     QUIET_LOGGER,
     RUNTIME_SCOPES,
@@ -83,14 +84,23 @@ Workflow:
 3. For baseline_check_ids, delegate run_check(check_id, phase="baseline") to verifier.
    A bootstrap runner with no test files has no existing baseline: inspect the
    requested source and ask Coder for the change and regressions first.
-   Baseline and execute_command preparation allow later edits. Commands require
-   approval and exact argv. Relative cwd belongs to the project; env defaults
+   Baseline and execute_command preparation allow later edits.
+   A failed baseline alone does not require asking permission to implement an
+   already requested change; proceed within the plan and report the environment issue.
+   Commands require approval and exact argv. Relative cwd belongs to the project; env defaults
    to empty and bare programs resolve before approval. No environment is inherited.
    For moving tests, inspect the frozen runner first. Root unittest discovery
    recurses into test folders only with __init__.py. Approve mkdir/mv preparation
    before Coder adjusts package markers/imports; then run the existing check ID.
 4. Delegate focused edits and regression tests to Coder. Coder can read assigned
    spans and edit_file with exact old/new source. Request missing context explicitly.
+   Keep each assignment small: split complex migrations into concrete remaining
+   edits. A worker_turn_limit handoff is partial progress, not a failed action or
+   completion. Inspect current source and assign only unfinished work within the
+   remaining shared budget; never replay edits. Resolve that handoff before final checks.
+   worker_no_progress means no new edits in the last work window; earlier applied
+   paths remain. Gather specific missing
+   context or clarify the task; never repeat the unchanged assignment in a loop.
 5. After Coder has applied changes, delegate every required run_check(check_id, phase="verify") to verifier.
    Final verification closes the edit phase. Return after checking; the runtime
    allows at most two repairs after completed failing final checks.
@@ -131,8 +141,17 @@ answer. For code changes:
 2. Call run_check only for baseline_check_ids. If that list is empty, skip baseline
    and proceed to Coder; a predefined runner is not existing coverage. A failing
    existing baseline permits edits.
+   Do not ask whether to proceed solely because the existing baseline failed;
+   the user has already requested the change.
 3. Call coder with the concrete edit and regression requirements. It executes
    the worker; a plan, a promise or an approval alone does not apply changes.
+   Keep complex edits in small assignments. If Coder returns worker_turn_limit,
+   inspect current files and delegate only the concrete remaining work within
+   the shared budget. Resolve the partial handoff before final verification;
+   never replay applied edits, denied or uncertain actions.
+   worker_no_progress means the last work window applied nothing new; earlier
+   applied paths remain. Gather specific
+   missing context or clarify it; stop instead of repeating the same task.
 4. After Coder applied changes, call every required check with phase=verify.
    Final checks close editing. Return measured results; the bounded native
    workflow handles at most two repairs after completed failing final checks.
@@ -195,6 +214,7 @@ def create_architect_agent(
     subagent_limits: SubagentLimits | None = None,
     user_input_handler=None,
     run_contract=None,
+    attempt=None,
 ):
     """Create the stateful user-facing controller agent."""
     agent_url = resolve_agent_url("architect", url)
@@ -217,7 +237,8 @@ def create_architect_agent(
             prompt_profile,
         )
     )
-    agent = Agent(
+    agent = WorkflowArchitectAgent(
+        work_attempt=attempt if not read_only else None,
         card={
             "name": "architect",
             "description": (
@@ -278,6 +299,7 @@ def create_architect_agent(
         logger=QUIET_LOGGER,
         verbosity=0,
     )
+    agent.execution_version += ":protoagent-check-handoff-2"
 
     if run_contract is not None:
         policy = agent.action_authorizer.policy

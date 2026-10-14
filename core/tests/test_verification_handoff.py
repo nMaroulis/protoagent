@@ -12,7 +12,7 @@ from protoagent_core.runtime import _run_agent_deck
 
 
 class VerificationHandoffTests(NativeRuntimeCase):
-    async def test_applied_changes_and_failed_check_finish_without_model_or_repair(self):
+    async def test_applied_changes_and_failed_check_stop_without_further_effects(self):
         (self.root / ".protoagent").mkdir()
         (self.root / ".protoagent/project.json").write_text(
             json.dumps(
@@ -139,8 +139,11 @@ class VerificationHandoffTests(NativeRuntimeCase):
         self.assertFalse(completion["criteria_supported"])
         self.assertEqual(verification["status"], "deferred")
         self.assertEqual(verification["last_attempt_status"], "failed")
-        self.assertEqual(verification["attempts"], 1)
+        # The failed check hands back to Graph, which opens the next phase
+        # before asking. The user's stop prevents any repair effect or rerun.
+        self.assertEqual(verification["attempts"], 2)
         self.assertEqual(len(verification["results"]), 1)
+        self.assertEqual(verification["results"][0]["attempt"], 1)
         self.assertEqual(verification["results"][0]["exit_code"], 1)
         self.assertIn("ModuleNotFoundError", verification["results"][0]["stderr"])
         self.assertIn("Changes applied: server.py, test_server.py.", result["answer"])

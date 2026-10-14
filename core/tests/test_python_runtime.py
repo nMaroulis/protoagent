@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from protoagent_core.coding_eval import oracle_result
 from protoagent_core.python_runtime import python_executable
-from protoagent_core.task_record import discover_checks
+from protoagent_core.task_record import TaskRecord, discover_checks
 
 
 class PythonRuntimeTests(unittest.TestCase):
@@ -100,3 +100,51 @@ class PythonRuntimeTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "No external Python interpreter"):
                 python_executable()
+
+    def test_root_pytest_functions_choose_pytest_without_importing_project_code(self):
+        (self.root / "test_server.py").write_text(
+            "raise RuntimeError('Must not be imported by discovery')\n"
+            "def test_endpoint():\n    assert True\n"
+        )
+        check = discover_checks(str(self.root))["python-tests"]
+        self.assertEqual(check.argv[1:], ("-m", "pytest", ".", "-q"))
+        self.assertIn(str(self.root / "test_server.py"), check.paths)
+
+    def test_unittest_classes_keep_stdlib_runner_and_mixed_tests_use_pytest(self):
+        test = self.root / "test_server.py"
+        test.write_text(
+            "from unittest import TestCase as Base\nclass TestEndpoint(Base):\n    def test_endpoint(self):\n        self.assertTrue(True)\n"
+        )
+        self.assertEqual(
+            discover_checks(str(self.root))["python-tests"].argv[1:3], ("-m", "unittest")
+        )
+        test.write_text(test.read_text() + "\ndef test_function():\n    assert True\n")
+        self.assertEqual(
+            discover_checks(str(self.root))["python-tests"].argv[1:3], ("-m", "pytest")
+        )
+
+    def test_pytest_directory_and_moved_function_tests_preserve_check_inputs(self):
+        test = self.root / "test_server.py"
+        test.write_text("def test_endpoint():\n    assert True\n")
+        record = TaskRecord.create(str(self.root), "Move tests into test/")
+        command = record.checks["python-tests"].argv
+        folder = self.root / "test"
+        folder.mkdir()
+        moved = folder / test.name
+        test.rename(moved)
+        (folder / "conftest.py").write_text("# fixture inputs\n")
+        (self.root / "pytest.ini").write_text("[pytest]\n")
+        self.assertIn(str(moved), record.dependencies())
+        self.assertIn(str(folder / "conftest.py"), record.dependencies())
+        self.assertIn(str(self.root / "pytest.ini"), record.dependencies())
+        self.assertEqual(record.checks["python-tests"].argv, command)
+        self.assertEqual(
+            discover_checks(str(self.root))["python-tests"].argv[1:], ("-m", "pytest", "test", "-q")
+        )
+
+    def test_explicit_repository_check_overrides_inferred_pytest_runner(self):
+        (self.root / "test_server.py").write_text("def test_endpoint():\n    assert True\n")
+        folder = self.root / ".protoagent"
+        folder.mkdir()
+        (folder / "project.json").write_text('{"checks":[]}')
+        self.assertEqual(discover_checks(str(self.root)), {})

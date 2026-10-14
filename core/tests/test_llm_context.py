@@ -71,6 +71,60 @@ class OllamaContextTests(unittest.TestCase):
         self.assertEqual(llm.profile.context_window, DEFAULT_OLLAMA_CONTEXT_WINDOW)
         self.assertEqual(llm.profile.model, "gemma4:e4b")
 
+    def test_small_gemma_disables_optional_thinking_and_bounds_each_generation(self):
+        cfg = {"model": "gemma4:e4b", "base_url": "http://localhost:11434"}
+        with (
+            patch("protoagent_core.llm.provider_config", return_value=cfg),
+            patch("protoagent_core.llm.load_config", return_value={"agent_prompt_profile": "auto"}),
+        ):
+            params = llm_kwargs("ollama")["model_params"]
+        self.assertFalse(params["think"])
+        self.assertEqual(params["num_predict"], 4096)
+        self.assertNotIn("temperature", params, "Keep Gemma's recommended sampling")
+
+    def test_small_gemma_auto_uses_engine_json_actions_and_honors_explicit_native(self):
+        cfg = {"model": "gemma4:e4b", "base_url": "http://localhost:11434"}
+        with (
+            patch("protoagent_core.llm.provider_config", return_value=cfg),
+            patch("protoagent_core.llm.load_config", return_value={"agent_prompt_profile": "auto"}),
+        ):
+            self.assertEqual(llm_kwargs("ollama")["tool_calling"], "json")
+            cfg["tool_calling"] = "native"
+            self.assertEqual(llm_kwargs("ollama")["tool_calling"], "native")
+            cfg["tool_calling"] = "auto"
+            self.assertEqual(llm_kwargs("ollama")["tool_calling"], "json")
+        with (
+            patch("protoagent_core.llm.provider_config", return_value={"model": "gemma4:27b"}),
+            patch("protoagent_core.llm.load_config", return_value={"agent_prompt_profile": "auto"}),
+        ):
+            self.assertEqual(llm_kwargs("ollama")["tool_calling"], "auto")
+
+    def test_explicit_generation_settings_and_large_profiles_keep_owner_control(self):
+        cfg = {
+            "model": "gemma4:e4b",
+            "model_params": {"think": True, "max_tokens": 123, "temperature": 0.4},
+        }
+        with (
+            patch("protoagent_core.llm.provider_config", return_value=cfg),
+            patch(
+                "protoagent_core.llm.load_config", return_value={"agent_prompt_profile": "small"}
+            ),
+        ):
+            params = llm_kwargs("ollama")["model_params"]
+        self.assertTrue(params["think"])
+        self.assertEqual(params["max_tokens"], 123)
+        self.assertEqual(params["temperature"], 0.4)
+        self.assertNotIn("num_predict", params)
+        with (
+            patch("protoagent_core.llm.provider_config", return_value={"model": "gemma4:e4b"}),
+            patch(
+                "protoagent_core.llm.load_config", return_value={"agent_prompt_profile": "large"}
+            ),
+        ):
+            params = llm_kwargs("ollama")["model_params"]
+        self.assertNotIn("think", params)
+        self.assertNotIn("num_predict", params)
+
     def test_protolink_readiness_includes_shared_quiet_logger(self) -> None:
         from protoagent_core.agents.common import QUIET_LOGGER, create_runtime_auth
 

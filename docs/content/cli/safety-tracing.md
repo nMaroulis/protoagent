@@ -13,6 +13,62 @@ checkpoint storage. `filesystem.write` and `filesystem.restore` require approval
 The native tool prepares a `RunAction` with an exact diff and preimage before
 `ApprovalBroker` waits for a decision.
 
+## Project approval modes
+
+Use **`/approvals`** to choose a mode in the TUI, or set it directly:
+
+| Mode | TUI | Behavior |
+| --- | --- | --- |
+| Ask (default) | `/approvals ask` | Review each file edit and command. |
+| Edits | `/approvals edits` | Auto-accept file edits; ask before commands, including tests. |
+| Auto | `/approvals auto` | Auto-accept file edits and commands. Commands have normal host permissions. |
+
+Shell equivalents are `proto-cli approvals ask`, `proto-cli approvals edits`
+and `proto-cli approvals auto`. `/approvals status` (shell: `proto-cli approvals`)
+shows the current mode. Preferences are saved for the canonical project path and
+apply to subsequent runs. Other projects start in Ask. The TUI shows the current
+mode in its status area and configuration panel.
+
+These preferences resolve exact requests through ProtoLink's native broker;
+they do not bypass capability policies, planned file scope, revision guards,
+budgets or recovery storage. Each automatic decision remains in the native trace
+with `decided_by=protoagent-auto`. MCP connections/calls and file restoration
+always ask. Auto-accept is an approval preference, separate from verification:
+it does not disable tests or turn a failed check into a pass.
+
+## End-of-run edit review
+
+Write runs end with a deterministic list of files, applied edit count and
+displayed added/removed line counts alongside the verification result. **`/diff`**
+opens the combined applied diff; shell runs print it. Multiple edits to one file
+are combined from this run's first native preimage to its final applied snapshot.
+Existing uncommitted work is preserved as the starting point, and denied or
+unexecuted proposals are excluded. Partial edits remain reviewable after failure,
+cancellation or a manual verification handoff.
+
+If the model ends before executing an edit, the final answer says no changes
+were applied instead of displaying its promise or action-shaped text as a result.
+A required check with no execution receipt is **not run**, not a failed test.
+Missing Python runners or packages are explained as environment/setup problems;
+the actual failed command and its exit status remain in the native trace.
+
+Before write approval, Python proposals are parsed without executing them. Newly
+introduced syntax errors (including double-escaped newlines written as literal
+backslash-n code) get no-change correction feedback rather than being applied.
+This covers create, replace and exact edits. Already malformed sources can be
+repaired incrementally. Passing this guard does not establish correct imports,
+names, routes or behavior; Verifier still runs the selected checks.
+
+`/diff proposed` separately displays approval previews, which may include changes
+that were never applied; `/diff raw` prints the applied diff in the transcript.
+The review marks uncertain effects and files changed since the recorded edit.
+If outside changes interrupt a snapshot chain, it shows individual applied steps
+instead of attributing those outside changes to the agent. Binary or oversized
+files get a summary without a text diff. Review is bounded to 64 files, 1 MiB per
+text file and 120,000 diff characters. Native checkpoints retain the complete
+recovery records. Effects of process commands or MCP tools outside native file
+tools are not included in this diff; inspect their receipts and the workspace.
+
 ```mermaid
 sequenceDiagram
   participant Tool as Native tool
@@ -35,7 +91,8 @@ sequenceDiagram
 
 ## Command approval and recovery
 
-Verifier's native `execute_command` requires `process.execute` approval. Its
+Verifier's native `execute_command` requires `process.execute` approval, resolved
+automatically only in Auto mode. Its
 JSON preview contains argv, absolute cwd, explicit env, timeout, output cap and
 host execution boundary. **V opens details; it does not approve or execute.**
 Press **Y** to approve and run the exact command, or **N/Esc** to deny from the
@@ -74,6 +131,23 @@ and reports applied files with **verification deferred to you**. The native
 failed check remains in `/trace`; the change is not marked verified or satisfied.
 Skipping the question does not make that choice. Waiting for your answer counts
 toward the run's default ten-minute runtime budget.
+If that budget expires during a question, the final report says it reached the
+run time limit while waiting for your answer. Earlier partial edits remain recorded.
+
+Failed runs can leave approved edits in place. The final answer lists paths
+already changed and distinguishes partial work from completion; inspect `/diff`
+and the current files before continuing. The harness ends Coder's work slice
+before ProtoLink's tenth provider call in each window. Fresh applied edits with
+current revisions permit up to three windows in the same assignment and shared
+budget. The pale loading label shows Coder continuing; `/trace` records
+`worker.continuing`. A window without new writes cannot reuse earlier progress.
+After the window bound, partial work returns to the workflow without another
+Architect question about whether to continue the task. Use
+`PROTOAGENT_CODER_MAX_WINDOWS=1` for one-window assignments.
+Architect can assign remaining work within
+the shared run budget, but unresolved limit handoffs cannot enter final checking
+or satisfy completion. Native execution failures and denials still stop work;
+handoffs and native receipts are retained in `/trace`.
 
 The live trace preview retains 120 summary messages by default. Its limit notice
 does not stop the run or truncate the stored native report. `/trace` retains the
@@ -109,11 +183,21 @@ streams answer text under **AGENT / architect** (or **AGENT / guide** for help),
 with a cyan prompt and steady mint `_` cursor on the text background. Markdown
 emphasis, headings and highlighted code render during generation; original
 answer text remains available in the saved response. JSON action wrappers stay
-hidden. Completion settles into the
+hidden in both JSON and native tool modes. Native-capable models can send tool
+requests as text; these remain control data and show as activity rather than
+answer JSON. Real JSON answers and explicitly supplied final content remain
+intact. Provisional narration clears when the engine selects a tool.
+Completion settles into the
 same message, updates its status and hides the cursor without changing layout. `/trace` opens the
 full run details without duplicating the answer in the conversation.
 
-Worker activity appears in the status area; `/trace` includes retained worker
+Before answer text arrives, one muted line in the response shows the current
+activity. Native work events replace it; it disappears when streaming begins,
+on completion or on failure. It is not part of the saved answer or conversation
+history. Preparations and waiting for approval are labeled separately from
+authorized command execution.
+
+Worker activity also appears in the status area; `/trace` includes retained worker
 text and command stdout/stderr, labeled by agent and channel. These previews
 retain the last 4096 characters of up to four streams;
 the Architect answer stays complete. Streamed text remains provisional, and a
@@ -128,7 +212,8 @@ Guide help follows the same controls in both `/help QUESTION` and
 `/debug on` reveals metadata beneath completed answers and a `/trace` hint;
 `/debug off` hides it again. `/debug` shows the mode. This is a TUI display
 setting, off by default per session; it does not disable native traces or alter
-execution. Runtime activity remains in the bottom status bar in either mode.
+execution. Runtime activity remains in the bottom status bar and the transient
+loading line in either mode.
 
 ## Trace Commands
 
@@ -137,7 +222,7 @@ execution. Runtime activity remains in the bottom status bar in either mode.
 | TUI | `/trace` | Latest normalized trace in the transcript. |
 | TUI | `/debug on` | Response metadata, report labels and a `/trace` hint below completed answers. |
 | TUI | `/timeline` | Structured agent path. |
-| TUI | `/diff` | Latest proposed diff or approval preview in a styled review modal with old/new line gutters. |
+| TUI | `/diff` | Combined applied diff from the last run, with old/new line gutters. `/diff proposed` shows proposal previews separately. |
 | Shell | `proto-cli run "task"` | Prints `AGENT TRACE`, `AGENT TIMELINE`, answer, and a styled diff. |
 | Telemetry | `PROTOAGENT_TRACE=1` | Writes durable ProtoLink JSONL telemetry. |
 

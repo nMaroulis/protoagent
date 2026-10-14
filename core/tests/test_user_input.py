@@ -175,6 +175,18 @@ class UserInputTests(NativeRuntimeCase):
         self.assertNotEqual(result.status, "completed")
         self.assertRegex(str(result.error), "(?i)(budget|runtime|deadline)")
         self.assertFalse(self.bridge.input_request_path.exists())
+        from protoagent_core.run_contracts import infer_run_contract
+        from protoagent_core.verification import validate_completion
+
+        acceptance = await validate_completion(
+            infer_run_contract("Fix sample.py"),
+            result.task,
+            result.report,
+            self.attempt,
+            self.broker,
+        )
+        self.assertIn("Run time limit reached", acceptance.completion["message"])
+        self.assertIn("waiting for your answer", acceptance.completion["message"])
 
     async def test_verification_handoff_stops_before_another_model_call(self):
         calls = []

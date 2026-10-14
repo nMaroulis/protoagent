@@ -15,6 +15,91 @@ from protoagent_core.request_budget import configure_agent_context
 
 
 class SourceFeedbackTests(NativeRuntimeCase):
+    async def test_double_escaped_newlines_are_corrected_before_approval_or_mutation(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        invalid = {**self.arguments(), "old": "value = 0\n", "new": "value = 42\\n"}
+        model = create_llm(
+            "mock",
+            sequential_responses=[
+                {"type": "tool_call", "tool": "edit_file", "args": invalid},
+                {"type": "tool_call", "tool": "edit_file", "args": self.arguments()},
+                {"type": "final", "content": "Updated sample.py."},
+            ],
+        )
+        handle = self.start_inference(self.make_coder(model))
+        (record,) = await self.pending()
+        self.assertEqual(sample.read_text(), "value = 0\n")
+        self.assertEqual(self.checkpoints.list_changes(), [])
+        self.assertEqual(len(self.broker.records(self.authorization.scope)), 1)
+        self.broker.resolve(
+            ApprovalDecision(True, record.request.request_id),
+            scope=self.authorization.scope,
+            fingerprint=record.fingerprint,
+        )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(sample.read_text(), "value = 42\n")
+        self.assertIn("introduced_python_syntax", json.dumps(result.report.to_dict()))
+        self.assertEqual(len(self.checkpoints.list_changes(state="applied")), 1)
+
+    async def test_create_and_replace_reject_introduced_syntax_without_effects(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        for name, path in (("replace_file", sample), ("create_file", self.root / "new.py")):
+            with self.subTest(tool=name):
+                result = await self.start_tool(
+                    self.coder, name, {"path": str(path), "content": "value = 42\\n"}
+                ).result()
+                self.assertEqual(result.status, "failed")
+                self.assertIn("introduced_python_syntax", json.dumps(result.report.to_dict()))
+                self.assertFalse(self.broker.records(self.authorization.scope))
+                self.assertFalse(self.checkpoints.list_changes())
+        self.assertFalse((self.root / "new.py").exists())
+        self.assertEqual(sample.read_text(), "value = 0\n")
+
+    async def test_python_strings_keep_literal_escapes_and_validation_does_not_import(self):
+        content = "import a_dependency_that_is_not_installed\ntext = '\\n'\n"
+        sample = self.root / "sample.py"
+        result = await self.tool(
+            self.coder, "create_file", {"path": str(sample), "content": content}
+        )
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(sample.read_text(), content)
+
+    async def test_preexisting_syntax_errors_can_be_repaired_incrementally(self):
+        sample = self.root / "sample.py"
+        sample.write_text("x =\ny =\n")
+        result = await self.tool(
+            self.coder,
+            "edit_file",
+            {
+                "path": str(sample),
+                "old": "x =",
+                "new": "x = 1",
+                "expected_revision": hashlib.sha256(sample.read_bytes()).hexdigest(),
+            },
+        )
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(sample.read_text(), "x = 1\ny =\n")
+
+    async def test_valid_create_and_replace_still_enforce_native_write_denial(self):
+        self.context.permissions = {"filesystem.write": "deny"}
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        for name, path in (("replace_file", sample), ("create_file", self.root / "new.py")):
+            with self.subTest(tool=name):
+                result = await self.start_tool(
+                    self.coder, name, {"path": str(path), "content": "value = 42\n"}
+                ).result()
+                self.assertEqual(result.status, "failed")
+                self.assertTrue(
+                    any(event.type == "action.denied" for event in result.report.events)
+                )
+        self.assertEqual(sample.read_text(), "value = 0\n")
+        self.assertFalse((self.root / "new.py").exists())
+        self.assertFalse(self.broker.records(self.authorization.scope))
+
     def arguments(self, old="value = 0", revision=None):
         return {
             "path": str(self.root / "sample.py"),
@@ -162,6 +247,67 @@ class SourceFeedbackTests(NativeRuntimeCase):
         self.assertFalse(any(e.type == "action.failed" for e in result.report.events))
         self.assertFalse(self.broker.records(self.authorization.scope))
         self.assertFalse(self.attempt.record.frozen)
+
+    async def test_identical_edit_is_rejected_without_approval_checkpoint_or_write(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        before = sample.stat().st_mtime_ns
+        result = await self.start_tool(
+            self.coder, "edit_file", {**self.arguments(), "new": "value = 0"}
+        ).result()
+        self.assertEqual(result.status, "failed")
+        self.assertIn("unchanged_source", json.dumps(result.report.to_dict()))
+        self.assertEqual(sample.stat().st_mtime_ns, before)
+        self.assertFalse(self.broker.records(self.authorization.scope))
+        self.assertFalse(list(self.attempt.file_changes()))
+        self.assertFalse(self.attempt.record.frozen)
+
+    async def test_returned_source_revision_allows_chained_edits_and_rejects_external_changes(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\n")
+        first = await self.tool(self.coder, "edit_file", self.arguments())
+        self.assertEqual(first.status, "completed", first.error)
+        revision = first.output["source_revision"]
+        second = await self.tool(
+            self.coder,
+            "edit_file",
+            {
+                "path": "sample.py",
+                "old": "value = 42",
+                "new": "value = 43",
+                "expected_revision": revision,
+            },
+        )
+        self.assertEqual(second.status, "completed", second.error)
+        self.assertEqual(sample.read_text(), "value = 43\n")
+        self.assertNotEqual(second.output["source_revision"], revision)
+        receipts = [
+            event.payload["result"]
+            for event in second.report.events
+            if event.type == "action.completed" and "result" in event.payload
+        ]
+        self.assertTrue(receipts)
+        self.assertTrue(
+            all(receipt["resource"] == second.output["resource"] for receipt in receipts)
+        )
+        self.assertTrue(
+            all(receipt["change_id"] == second.output["change_id"] for receipt in receipts)
+        )
+        sample.write_text("value = 100\n")
+        rejected = await self.start_tool(
+            self.coder,
+            "edit_file",
+            {
+                "path": "sample.py",
+                "old": "value = 43",
+                "new": "value = 44",
+                "expected_revision": second.output["source_revision"],
+            },
+        ).result()
+        self.assertEqual(rejected.status, "failed")
+        self.assertIn("stale_source_revision", json.dumps(rejected.report.to_dict()))
+        self.assertEqual(sample.read_text(), "value = 100\n")
+        self.assertEqual(len(self.broker.records(self.authorization.scope)), 2)
 
     async def test_valid_edit_cannot_bypass_native_write_denial(self):
         (self.root / "sample.py").write_text("value = 0\n")

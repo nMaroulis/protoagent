@@ -6,6 +6,25 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ### Added
 
+- Small-profile Gemma 4 automatic action acquisition uses ProtoLink's JSON
+  protocol when advertised native tooling emits narration/channel/action text.
+  Explicit native/json settings remain authoritative. Missing verification
+  receipts are labeled not run, stopped-before-edit results report no changes,
+  and Python dependency/runner failures get environment/setup explanations.
+- Parse-only Python afterimage guards for create, replace and exact edits reject
+  introduced syntax errors before approval through native no-change feedback.
+  Literal escapes remain unchanged; already malformed sources can be repaired
+  incrementally, and valid proposals retain native write authorization/recovery.
+
+- Per-project `/approvals` picker and `proto-cli approvals` controls: Ask (default),
+  automatic file edits, or automatic edits and commands. Exact native broker
+  decisions retain policies, revision checks, checkpoints and audit records;
+  MCP access and restoration still ask. The TUI displays the active mode.
+- Deterministic end-of-run applied-file summaries and combined diffs from native
+  snapshots, including partial failures. `/diff` shows applied changes and
+  `/diff proposed` labels proposal previews separately. Pre-existing work,
+  rejected proposals, external edits and uncertain effects are distinguished.
+
 - Model-free project inspection in shell/TUI: ls, browse/files, open and cat.
   Folder browsing supports filtering, parent navigation and Enter to view text;
   the read-only viewer has line numbers, paging and horizontal panning. Listings,
@@ -48,6 +67,65 @@ This file records user-visible changes to the active ProtoAgent components.
   cancellation, correlated replies, native deadlines and no implicit approval.
 
 ### Changed
+
+- Admit up to three progressing native Coder work windows in one assignment,
+  rather than interrupting every nine calls. Each continuation requires fresh
+  applied writes, current revisions and no native stop or explicit missing-context
+  report. Scope, history, receipts, approvals and aggregate budgets are preserved.
+  A stalled window cannot borrow earlier progress. `PROTOAGENT_CODER_MAX_WINDOWS`
+  lowers the application ceiling (1–3, default three); `worker.continuing` updates
+  the transient TUI activity. Native inference limits remain unchanged.
+- Return exhausted partial Coder assignments directly to the bounded Graph
+  before another Architect model call, avoiding routine continuation questions
+  that spend the run deadline. `workflow.work_yielded` records the transition;
+  fresh Graph nodes can still inspect and narrow remaining work.
+- Explain native runtime expiry, including expiry while awaiting a user answer,
+  rather than presenting it only as an unresolved worker/check failure.
+- Return completed failing final checks directly to the native repair Graph
+  before another Architect model request. This prevents edits in a closed check
+  phase from turning an eligible repair into a policy denial. After two repairs,
+  remaining failures finish incomplete. Missing dependency failures can still
+  prompt for a manual verification handoff in the repair attempt.
+- Deduplicate live native events across the whole workflow, so continuation and
+  enclosing handles do not replay old activity, answer chunks or command output.
+  Complete native reports retain their execution evidence.
+- Continue stable, applied partial Coder work when Architect returns too early:
+  the native Graph permits at most two continuations before final verification,
+  preserving the frozen plan, edit phase and shared budget. Execution failures,
+  denials, uncertainty, no-progress handoffs and manual verification stops do not
+  qualify. Exhausted continuations report incomplete work without retaining
+  unfinished tool-call prose as the final answer.
+
+- Small-profile Ollama requests default to at most 4096 generated tokens; small
+  Gemma 4 variants default to `think=false` for short coding actions. Explicit
+  `num_predict`/`max_tokens` and thinking settings win; sampling is preserved.
+  Generation-repeat aborts now explain the provider failure separately from
+  agent turn limits; partial streamed tool proposals are never executed/replayed.
+- Statically recognize pytest functions/imports/test classes when selecting a
+  Python runner, including `test/` directories. Preserve unittest for its own
+  suites and owner-declared checks. Root pytest checks retain current moved test
+  files/configuration as dependencies; discovery never imports project code or
+  installs a missing test runner.
+
+- Enforce Coder's work-slice handoff before the last native inference turn,
+  without requiring a final model reply. A public Agent extension consumes only
+  the harness's pre-model stop signal, preserving native execution and stop
+  conditions. Return recorded partial edits, or a blocked no-progress report.
+  Architect can assign only unfinished work within the shared run budget;
+  unresolved handoffs never satisfy completion. Reject identical exact edits
+  before approval and return the approved source digest after successful edits
+  to avoid redundant reads. Failed runs show applied paths and readable causes
+  while retaining the complete native error and receipts in the trace.
+
+- Hide fallback tool/delegation JSON from native-capable model streams, reusing
+  ProtoLink normalization for display classification. Preserve JSON answer data
+  and typed final content; clear provisional narration at native tool selection
+  so the muted work status returns instead of retaining an action as an answer.
+
+- Show one muted, transient activity line while an answer is loading. Native
+  work phases replace it in place, distinguish command preparation from running,
+  and disappear when text streams or the run ends. Saved answers retain no
+  loading labels; phase updates survive the live trace preview cap.
 
 - Resolve bare command programs and project-relative working directories before
   native approval, preserving explicit environments and interpreter identity.

@@ -129,6 +129,48 @@ async fn handle_command(
             handle_agents_command(app, command, arg.trim())?;
             Ok(true)
         }
+        "/approvals" => {
+            let arg = parts.collect::<Vec<_>>().join(" ");
+            let result = (|| -> Result<Option<String>> {
+                let mode = if arg.is_empty() {
+                    let settings = crate::approval_settings("status")?;
+                    let current = settings["mode"].as_str().unwrap_or("ask");
+                    let selected = pick_choice_modal(
+                        terminal,
+                        app,
+                        "Project approvals",
+                        &[
+                            format!("Current: {current}. Applies to subsequent runs."),
+                            "MCP and file restoration always ask.".into(),
+                        ],
+                        &crate::APPROVAL_CHOICES
+                            .iter()
+                            .map(|choice| choice.to_string())
+                            .collect::<Vec<_>>(),
+                        crate::APPROVAL_MODES
+                            .iter()
+                            .position(|mode| *mode == current)
+                            .unwrap_or(0),
+                    )?;
+                    let Some(index) = selected else {
+                        return Ok(None);
+                    };
+                    crate::APPROVAL_MODES[index]
+                } else {
+                    arg.as_str()
+                };
+                Ok(Some(crate::approval_settings_text(mode)?))
+            })();
+            match result {
+                Ok(Some(text)) => {
+                    app.refresh(None);
+                    app.push(Role::Command, command, &text);
+                }
+                Ok(None) => {}
+                Err(error) => app.push(Role::Error, command, &error.to_string()),
+            }
+            Ok(true)
+        }
         "/mcp" => {
             let arg = input.strip_prefix(command).unwrap_or("").trim();
             match mcp_settings_text_input(arg) {
@@ -281,20 +323,41 @@ async fn handle_command(
         }
         "/diff" => {
             let arg = parts.collect::<Vec<_>>().join(" ");
-            let diff = latest_diff_preview(app);
+            let proposed = arg.trim() == "proposed";
+            let diff = if proposed {
+                app.last_response
+                    .as_ref()
+                    .map(|response| response.proposal_diff.clone())
+                    .unwrap_or_default()
+            } else {
+                latest_diff_preview(app)
+            };
             if !diff.trim().is_empty() {
                 if arg.trim() == "raw" {
                     let raw = truncate_detail(&diff, 80);
                     app.push(Role::Command, "/diff raw", &raw);
                 } else {
                     app.push(Role::Command, "/diff", &diff_review_summary(&diff));
-                    show_diff_modal(terminal, app, "Diff Review", &diff)?;
+                    show_diff_modal(
+                        terminal,
+                        app,
+                        if proposed {
+                            "Proposed Diff (may not be applied)"
+                        } else {
+                            "Applied Diff Review"
+                        },
+                        &diff,
+                    )?;
                 }
             } else if app.last_response.is_some() {
                 app.push(
                     Role::Command,
                     "/diff",
-                    "No proposed diff is available from the last run.",
+                    if proposed {
+                        "No proposal preview is available from the last run."
+                    } else {
+                        "No applied text diff is available from the last run."
+                    },
                 );
             } else {
                 app.push(Role::Command, "/diff", "No response in this session yet.");
@@ -500,7 +563,6 @@ async fn run_agent(
     let session_id = crate::context_session_id(&workspace);
     app.turn += 1;
     app.context_usage.reset();
-    app.live_output = Default::default();
     app.last_query = query.to_string();
     if !guide {
         app.last_diff_preview.clear();
@@ -548,6 +610,8 @@ async fn run_agent(
                 if !cancellation_requested {
                     if let Some(question) = progress_file.take_question() {
                         app.activity = "waiting for your answer".into();
+                        app.set_loading_activity("Waiting for your answer...");
+                        app.update_streaming_response(0);
                         terminal.render(app, None)?;
                         let reply = question_prompt(terminal, app, &progress_file, &question)?;
                         // Restore the transcript frame after painting the overlay.
@@ -575,6 +639,8 @@ async fn run_agent(
                         }
                         terminal.render(app, None)?;
                         app.activity = "waiting for your approval · Y runs/applies · V views details".into();
+                        app.set_loading_activity("Waiting for your approval...");
+                        app.update_streaming_response(0);
                         let approved = approval_prompt(terminal, app, &approval, &progress_file)?;
                         // Modal painting bypasses the transcript cache. Restore the
                         // complete frame before returning to incremental updates.
@@ -601,6 +667,9 @@ async fn run_agent(
                 }
                 let tick = (animation_started.elapsed().as_millis() / u128::from(ANIMATION_MS)) as usize;
                 app.activity = if cancellation_requested { "canceling · waiting for cleanup".into() } else { progress_activity(&progress_events, tick) };
+                if cancellation_requested {
+                    app.set_loading_activity("Canceling; waiting for cleanup...");
+                }
                 app.update_streaming_response(tick);
                 terminal.render_streaming(app)?;
             }
@@ -656,12 +725,14 @@ fn latest_diff_preview(app: &TerminalApp) -> String {
     app.last_response
         .as_ref()
         .map(|response| response.diff.trim())
-        .filter(|diff| !diff.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| app.last_diff_preview.clone())
 }
 
 fn ingest_progress(app: &mut TerminalApp, events: &mut Vec<String>, batch: ProgressBatch) {
+    if let Some(activity) = batch.loading_activity {
+        app.set_loading_activity(&activity);
+    }
     events.extend(batch.events);
     // These are status-bar summaries; complete events remain in the native trace.
     if events.len() > 512 {

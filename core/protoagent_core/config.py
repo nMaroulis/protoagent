@@ -90,6 +90,7 @@ def default_config() -> dict[str, Any]:
         "active_provider": "ollama",
         "agent_prompt_profile": "auto",
         "optional_agents": deepcopy(OPTIONAL_AGENT_DEFAULTS),
+        "approval_modes": {},
         "mcp_servers": {},
         "providers": providers,
     }

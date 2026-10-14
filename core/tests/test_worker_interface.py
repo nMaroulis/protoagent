@@ -1,10 +1,12 @@
 """Simple calls still execute through native children, policy and receipts."""
 
 import asyncio
+import hashlib
 import json
 from unittest.mock import patch
 
 from protolink import Agent, ApprovalDecision, CapabilityPolicy, RunHandle, SubagentLimits, Task
+from protolink.llms.base import MAX_INFER_STEPS
 from protolink.llms.factory import create_llm
 from runtime_support import NativeRuntimeCase
 
@@ -481,6 +483,125 @@ class WorkerInterfaceTests(NativeRuntimeCase):
         )
         self.assertTrue(accepted.completion["applied"], accepted.completion)
         self.assertTrue(accepted.completion["verified"], accepted.completion)
+        self.assertEqual(len(result.task.metadata["subagent_runs"]), 3)
+
+    @patch.dict("os.environ", {"PROTOAGENT_CODER_MAX_WINDOWS": "1"})
+    async def test_partial_coder_handoff_can_finish_in_a_focused_new_child_without_replay(self):
+        sample = self.root / "sample.py"
+        sample.write_text("value = 0\nremaining = 0\n" + "# source\n" * MAX_INFER_STEPS)
+        (self.root / "test_sample.py").write_text(
+            "import unittest\nfrom sample import value, remaining\n"
+            "class Regression(unittest.TestCase):\n"
+            "    def test_values(self):\n"
+            "        self.assertEqual((value, remaining), (42, 99))\n"
+        )
+        record = self.attempt.record
+        record.checks = discover_checks(str(self.root))
+        record.selected = tuple(record.checks)
+        record.plan(["sample.py"], ["Both values are updated"])
+        responses = [
+            {
+                "type": "tool_call",
+                "tool": "replace_file",
+                "args": {
+                    "path": "sample.py",
+                    "content": "value = 42\nremaining = 0\n" + "# source\n" * MAX_INFER_STEPS,
+                },
+            },
+            *[
+                {
+                    "type": "tool_call",
+                    "tool": "read_file",
+                    "args": {"path": "sample.py", "start_line": line, "end_line": line},
+                }
+                for line in range(2, MAX_INFER_STEPS)
+            ],
+            {
+                "type": "tool_call",
+                "tool": "edit_file",
+                "args": {
+                    "path": "sample.py",
+                    "old": "remaining = 0",
+                    "new": "remaining = 99",
+                    "expected_revision": hashlib.sha256(
+                        sample.read_bytes().replace(b"value = 0", b"value = 42")
+                    ).hexdigest(),
+                },
+            },
+            {"type": "final", "content": "Finished the remaining edit; Architect should verify."},
+        ]
+        model = create_llm("mock", sequential_responses=responses)
+        with patch("protoagent_core.agents.coder.create_selected_llm", return_value=model):
+            coder = create_coder_agent(
+                workspace=str(self.root),
+                transport=None,
+                prompt_profile="small",
+                approval_handler=self.broker,
+                authorization=self.authorization,
+                attempt=self.attempt,
+                checkpoints=self.checkpoints,
+            )
+        configure_agent_context(coder, record, compact_protocol=True)
+        seen = []
+        parent = self.parent(
+            [
+                {
+                    "type": "tool_call",
+                    "tool": "coder",
+                    "args": {"task": "Update both values in sample.py."},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "verify"},
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "coder",
+                    "args": {
+                        "task": "Value is already applied. Update only remaining to 99 in sample.py."
+                    },
+                },
+                {
+                    "type": "tool_call",
+                    "tool": "run_check",
+                    "args": {"check_id": "python-tests", "phase": "verify"},
+                },
+                {"type": "final", "content": "Both changes applied and checked."},
+            ],
+            children=[coder, self.verifier],
+            seen=seen,
+        )
+        handle = self.start(parent, "Fix both values in sample.py")
+        for expected in ("replace_file", "replace_file", "execute_command"):
+            (approval,) = await self.pending()
+            self.assertEqual(approval.request.action.name, expected)
+            self.broker.resolve(
+                ApprovalDecision(True, approval.request.request_id),
+                scope=self.authorization.scope,
+                fingerprint=approval.fingerprint,
+            )
+        result = await handle.result()
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertIn("worker_turn_limit", json.dumps(seen[1]))
+        self.assertIn("coder_handoff_unresolved", json.dumps(seen[2]))
+        self.assertEqual(record.reports["coder"]["status"], "done")
+        applied = [
+            event
+            for event in result.report.events
+            if event.type == "action.completed"
+            and isinstance(event.payload.get("result"), dict)
+            and event.payload.get("result", {}).get("state") == "applied"
+        ]
+        self.assertEqual(len(applied), 2, "Continuation must not replay the first edit")
+        accepted = await validate_completion(
+            infer_run_contract("Fix sample.py"),
+            result.task,
+            result.report,
+            self.attempt,
+            self.broker,
+        )
+        self.assertTrue(accepted.completion["satisfied"], accepted.completion)
         self.assertEqual(len(result.task.metadata["subagent_runs"]), 3)
 
     async def test_denied_command_stops_without_retry_or_execution(self):
