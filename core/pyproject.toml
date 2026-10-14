@@ -21,6 +21,8 @@ classifiers = [
 ]
 dependencies = [
     "protolink[http,llms,mcp]>=0.8.1",
+    # ProtoLink's Anthropic adapter still sends the pre-1.0 generation parameters.
+    "anthropic>=0.109.2,<1",
 ]
 
 [project.urls]

@@ -1,0 +1,4 @@
+# Keep contributor and CI checks on the same tested tool versions.
+ruff==0.17.0
+ty==0.0.87
+build==1.6.1

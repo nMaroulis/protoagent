@@ -4,6 +4,20 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ## [0.3.0] - 2026-09-26
 
+### Dependency maintenance
+
+- Refresh Rust dependencies, including PyO3 0.29.3, Crossterm 0.29,
+  Inquire 0.9.4, Indicatif 0.18.6, Console 0.16.6 and Tokio 1.53.3.
+  Update the Cargo lockfile and validate with stable Rust 1.99.
+- Pin Ruff 0.17.0, ty 0.0.87 and build 1.6.1 in `requirements-dev.txt`
+  for consistent contributor and CI checks. Update installed Python runtime
+  integrations, retaining ProtoLink 0.8.1 as the engine.
+  Bound Anthropic below 1.0 because its new Messages API removes generation
+  parameters still sent by ProtoLink's adapter.
+- Update Docusaurus to 3.10.2, React to 19.3.1 and the docs lockfile.
+  Retain ELK 0.1.9 as required by the Docusaurus Mermaid theme.
+- Refresh GitHub Actions and use Node 24 for documentation CI.
+
 ### Added
 
 - Compact styled Edits cards in CLI/TUI, with green additions, red removals,

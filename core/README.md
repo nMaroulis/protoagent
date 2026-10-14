@@ -6,11 +6,17 @@ through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 Current package version: `0.3.0`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install ProtoLink 0.8.1 or newer with the HTTP, LLM and MCP extras:
+Install from the monorepo root. The core brings ProtoLink 0.8.1 or newer with
+its HTTP, LLM and MCP extras and the compatible provider SDK versions:
 
 ```bash
-pip install "protolink[http,llms,mcp]>=0.8.1"
+pip install -e core
 ```
+
+ProtoLink 0.8.1's Anthropic adapter requires `anthropic<1`; the core's package
+metadata enforces that bound. Upgrade through the core package rather than
+upgrading the provider SDK independently. Contributor tooling is pinned in
+`requirements-dev.txt` at the repository root.
 
 Recoverable Coder writes require POSIX. The runtime uses the native execution,
 approval, lifecycle, recovery and completion APIs; ProtoAgent owns coding roles,

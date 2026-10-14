@@ -2032,6 +2032,7 @@ mod context_meter_tests {
     #[test]
     fn response_cursor_uses_the_text_background_without_blink_attributes() {
         use super::*;
+        crossterm::style::force_color_output(true);
         let mut line = answer_line(markdown::layout("**bold** `code` plain", 80, true).remove(0));
         line.text.push('_');
         line.cursor = Some(true);
@@ -2087,6 +2088,7 @@ mod context_meter_tests {
     #[test]
     fn shared_ui_helpers_keep_plain_terminal_backgrounds_and_existing_chips() {
         use super::*;
+        crossterm::style::force_color_output(true);
         for background in [bg(), panel_bg(), input_bg()] {
             let mut output = vec![];
             write_line(&mut output, 0, 40, "plain row", text(), background, false).unwrap();

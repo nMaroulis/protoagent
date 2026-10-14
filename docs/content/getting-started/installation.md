@@ -12,7 +12,7 @@ PyO3, so both the Rust toolchain and the Python environment must be available.
 | --- | --- |
 | POSIX host (macOS/Linux) | Required by native recoverable Coder filesystem tools. |
 | Python 3.12 or newer | Runs `core/protoagent_core` and ProtoLink. |
-| Rust and Cargo 1.85 or newer | Builds `cli/`, including PyO3 0.28. |
+| Rust and Cargo 1.85 or newer | Builds `cli/`, including PyO3 0.29.3. |
 | A model provider | Ollama, LM Studio, llama.cpp, OpenAI-compatible local server, or a cloud API provider. |
 | Node.js 20 or newer | Runs the Docusaurus documentation site. |
 
@@ -24,9 +24,12 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "protolink[http,llms,mcp]>=0.8.1"
 pip install -e core
 ```
+
+The core install includes ProtoLink's HTTP, LLM and MCP extras and compatible
+SDK constraints. Use this install when upgrading too; ProtoLink 0.8.1's
+Anthropic adapter needs `anthropic<1`.
 
 The core imports are resolved from `core/` by the Rust CLI at runtime. The CLI
 also checks common `.venv/lib/python3.x/site-packages` paths so ProtoLink and

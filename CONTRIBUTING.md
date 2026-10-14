@@ -6,13 +6,14 @@ Rust under `cli/`, and the docs live under `docs/`.
 
 ## Development Setup
 
-Use Python 3.12 or newer, the latest version of ruff and ty and Rust/Cargo 1.85 or newer.
+Use Python 3.12 or newer and Rust/Cargo 1.85 or newer. Install the tested Ruff,
+ty and build tool versions from `requirements-dev.txt`; CI uses the same file.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install "protolink[http,llms,mcp]>=0.8.0" ruff ty
+python -m pip install -e core -r requirements-dev.txt
 rustup component add rustfmt clippy
 cargo build --locked --manifest-path cli/Cargo.toml
 ```
@@ -51,11 +52,18 @@ ty check --extra-search-path core
 
 # Python core tests
 PYTHONPATH=core .venv/bin/python -m unittest discover core/tests
+python -m pip check
+python -m build core
 
 # Rust formatting, linting, and tests
 cargo fmt --manifest-path cli/Cargo.toml -- --check
 cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path cli/Cargo.toml
+cargo build --release --locked --manifest-path cli/Cargo.toml
+
+# Real terminal smoke tests after building the debug CLI
+cargo build --locked --manifest-path cli/Cargo.toml
+PROTOAGENT_TEST_CLI="$PWD/cli/target/debug/proto-cli" .venv/bin/python cli/tests/tui_smoke.py
 
 # Documentation site
 cd docs

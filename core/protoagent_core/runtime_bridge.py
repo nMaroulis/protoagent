@@ -446,6 +446,7 @@ class _ConsoleBuffer(TextIOBase):
     """Bound console capture without blocking a provider's writes."""
 
     LIMIT = 32_768
+    encoding = "utf-8"
 
     def __init__(self):
         super().__init__()
@@ -453,10 +454,6 @@ class _ConsoleBuffer(TextIOBase):
         # private temporary file captures that output too, unlike StringIO.
         self._file = TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         self.truncated = False
-
-    @property
-    def encoding(self):
-        return "utf-8"
 
     def fileno(self):
         return self._file.fileno()

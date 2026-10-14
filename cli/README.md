@@ -26,12 +26,14 @@ From the monorepo root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.8.1"
 python -m pip install -e core
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
 
 The built binary is `cli/target/release/proto-cli`.
+
+The core install includes ProtoLink's runtime extras and compatible provider
+SDKs. Install `requirements-dev.txt` for the tested Ruff, ty and packaging tools.
 
 Development and test builds omit debug symbols and incremental compilation
 caches to reduce disk usage. Dependencies remain cached, but recompiling changed

@@ -14,8 +14,6 @@ MCP dependencies are included in the core install:
 
 ```bash
 pip install -e core
-# Or install the runtime dependency explicitly:
-pip install "protolink[http,llms,mcp]>=0.8.1"
 ```
 
 Create a server JSON file. For a local server, use an explicit executable and

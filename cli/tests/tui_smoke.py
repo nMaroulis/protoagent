@@ -270,6 +270,8 @@ class Terminal:
                 )
             )
         environment = os.environ.copy()
+        # Palette assertions should not depend on the calling shell's NO_COLOR.
+        environment.pop("NO_COLOR", None)
         environment.update(
             {
                 "PROTOAGENT_CONFIG_DIR": str(self.directory),

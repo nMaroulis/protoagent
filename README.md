@@ -140,11 +140,14 @@ cd protoagent
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install "protolink[http,llms,mcp]>=0.8.1"
 python -m pip install -e core
 
 cargo build --release --locked --manifest-path cli/Cargo.toml
 ```
+
+Installing the core also installs ProtoLink's HTTP, LLM and MCP extras with the
+SDK compatibility constraints tested by the harness. For contributor tooling,
+install `requirements-dev.txt`; CI uses those same Ruff, ty and build versions.
 
 Start the TUI from the repository root:
 
