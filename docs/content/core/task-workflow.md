@@ -93,9 +93,13 @@ qualifying new focused assignment. Previous handoffs do not interrupt that assig
 A completed failing final check returns control to the native repair Graph before
 Architect's next model request. The Graph evaluates the actual receipts and may
 open a fresh edit phase for at most two repairs; Architect cannot start that phase
-itself. A repair receives the measured failure and frozen task plan. If the test
-environment is missing a dependency, Architect may ask whether verification should
-be deferred or dependency setup is external. Denied or interrupted execution is
+itself. A repair receives the measured failure and frozen task plan. Missing
+Python runners/external modules instead yield a `verification.unavailable` event
+before another model request. The run ends with applied edits unverified and a
+short setup note, without installation questions, automatic setup or code repairs.
+Missing existing project modules remain code/import-path problems eligible for
+repair. An unavailable baseline does not revoke already requested edits.
+Denied or interrupted execution is
 never converted into a repair. Failures remaining after two repairs are incomplete.
 
 | Role | Responsibility |

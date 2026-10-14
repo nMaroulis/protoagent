@@ -149,6 +149,7 @@ impl TerminalApp {
             body: body.to_string(),
             meta: Vec::new(),
             details: Vec::new(),
+            review: None,
         }));
     }
 
@@ -169,6 +170,7 @@ impl TerminalApp {
                     body: body.into(),
                     meta: Vec::new(),
                     details: Vec::new(),
+                    review: None,
                 }),
             );
         }
@@ -192,10 +194,11 @@ impl TerminalApp {
             .and_then(|index| self.messages.get(index))
             .filter(|message| message.body.trim() == body)
             .map_or_else(|| body.to_string(), |message| message.body.clone());
+        let (body, has_review) = crate::summary::answer_body(&body, &response.change_review);
         let mut message = TerminalMessage {
             role: Role::Assistant,
             label: crate::response_actor(response),
-            body,
+            body: body.into(),
             meta: vec![
                 format!("status {}", response.status),
                 format!("provider {}", empty_as_unknown(&response.provider)),
@@ -210,6 +213,7 @@ impl TerminalApp {
                 format!("{} ms", response.elapsed_ms),
             ],
             details: Vec::new(),
+            review: has_review.then(|| response.change_review.clone()),
         };
         if !response.file_target.is_empty() {
             message
@@ -339,6 +343,7 @@ impl TerminalApp {
                     body: self.live_output.answer().to_string(),
                     meta,
                     details: Vec::new(),
+                    review: None,
                 });
                 self.answer_revision = Some(revision);
             }
@@ -456,6 +461,7 @@ pub(super) struct TerminalMessage {
     pub(super) body: String,
     pub(super) meta: Vec<String>,
     pub(super) details: Vec<(String, String)>,
+    pub(super) review: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

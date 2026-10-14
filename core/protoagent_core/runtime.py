@@ -397,7 +397,9 @@ async def _run_agent_deck(
                 status = result.status
                 if workflow.uncertain or acceptance.completion["outcome"] == "uncertain":
                     status = "uncertain"
-                elif acceptance.completion["outcome"] == "unverified":
+                elif acceptance.completion["outcome"] == "unverified" and (
+                    result.status != "canceled" or acceptance.verification["status"] == "deferred"
+                ):
                     status = "unverified"
                 elif status == "completed" and not acceptance.completion["satisfied"]:
                     status = acceptance.completion["outcome"]
@@ -409,12 +411,17 @@ async def _run_agent_deck(
                         str(Path(path).relative_to(project))
                         for path in acceptance.completion["applied_paths"]
                     ]
-                    answer = (
-                        "Changes applied: " + ", ".join(paths) + "."
-                        if paths
-                        else "No file changes were applied."
-                    )
-                    answer += "\nStopped as requested; no further commands or repairs were run."
+                    if acceptance.verification["status"] == "unavailable":
+                        answer = (
+                            "Changes applied." if paths else "Verification could not be completed."
+                        )
+                    else:
+                        answer = (
+                            "Changes applied: " + ", ".join(paths) + "."
+                            if paths
+                            else "No file changes were applied."
+                        )
+                        answer += "\nStopped as requested; no further commands or repairs were run."
                 elif status != "completed":
                     detail = _failure_detail(
                         result.error
@@ -756,6 +763,7 @@ def _append_event(
                 "budget.exceeded",
                 "tool.correction.exhausted",
                 "verification.deferred",
+                "verification.unavailable",
                 "worker.handoff",
                 "worker.continuing",
                 "workflow.continuing",

@@ -23,7 +23,7 @@ class VerificationHandoffTests(NativeRuntimeCase):
                             "argv": [
                                 sys.executable,
                                 "-c",
-                                "raise ModuleNotFoundError(\"No module named 'fastapi'\")",
+                                'raise AssertionError("Regression failed")',
                             ],
                             "env": {},
                             "paths": ["server.py", "test_server.py"],
@@ -58,7 +58,7 @@ class VerificationHandoffTests(NativeRuntimeCase):
                 "type": "tool_call",
                 "tool": "ask_user",
                 "args": {
-                    "question": "Verification failed: fastapi is missing. Install it or retry tests?",
+                    "question": "Regression failed. Retry or defer verification?",
                     "options": ["Install", "Retry"],
                 },
             },
@@ -145,10 +145,10 @@ class VerificationHandoffTests(NativeRuntimeCase):
         self.assertEqual(len(verification["results"]), 1)
         self.assertEqual(verification["results"][0]["attempt"], 1)
         self.assertEqual(verification["results"][0]["exit_code"], 1)
-        self.assertIn("ModuleNotFoundError", verification["results"][0]["stderr"])
+        self.assertIn("AssertionError", verification["results"][0]["stderr"])
         self.assertIn("Changes applied: server.py, test_server.py.", result["answer"])
         self.assertIn("Verification: deferred to you.", result["answer"])
-        self.assertIn("could not import fastapi", result["answer"])
+        self.assertIn("Previous check details: /trace", result["answer"])
         self.assertNotIn("Run blocked", result["answer"])
         self.assertEqual(len(result["approval_decisions"]), 3)
         native = result["run_report"]

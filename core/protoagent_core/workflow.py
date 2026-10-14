@@ -81,9 +81,8 @@ class CodingWorkflow:
                         "\n\nThis is a new bounded repair attempt after a completed failing check. "
                         "Inspect the failure, apply one focused repair, then rerun the affected checks. "
                         "Do not replay interrupted or denied actions. Return after checking.\n"
-                        "If the failure reports a missing test dependency or unavailable environment, "
-                        "ask whether verification should be deferred or dependency setup is handled "
-                        "externally. Do not alter application code to hide an environment failure.\n"
+                        "Do not install dependencies or alter application code to hide an environment failure. "
+                        "Missing runners/dependencies end with unavailable verification rather than a repair.\n"
                         + json.dumps(workflow.acceptance.verification["latest"], ensure_ascii=True)[
                             :12000
                         ]

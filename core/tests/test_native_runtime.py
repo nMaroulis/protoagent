@@ -449,7 +449,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
         self.assertEqual(result["approval_mode"], approval_mode)
         self.assertEqual(result["change_review"]["file_count"], 1)
         self.assertEqual(result["change_review"]["files"][0]["path"], "actual.py")
-        self.assertIn("Edits: 1 file(s)", result["answer"])
+        self.assertIn("Edits: 1 file", result["answer"])
         self.assertIn("+# native edit", result["diffs"][0]["diff"])
         if approval_mode == "auto":
             self.assertTrue(

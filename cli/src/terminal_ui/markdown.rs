@@ -17,6 +17,7 @@ pub(super) struct Style {
     pub(super) bold: bool,
     pub(super) italic: bool,
     pub(super) code: Code,
+    pub(super) tone: crate::summary::Tone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +43,7 @@ impl InlineState {
             } else {
                 Code::None
             },
+            ..Default::default()
         }
     }
 

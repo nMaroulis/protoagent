@@ -6,6 +6,14 @@ This file records user-visible changes to the active ProtoAgent components.
 
 ### Added
 
+- Compact styled Edits cards in CLI/TUI, with green additions, red removals,
+  bold literal file names and muted diff hints. Verification summaries fit one
+  line, with full logs retained in `/trace`.
+- Missing Python runners/external dependencies end final verification quietly
+  before another model request, preserving applied edits as unverified without
+  install questions or code-repair loops. Genuine regressions retain bounded
+  repair; native failed receipts and stop conditions remain authoritative.
+
 - Small-profile Gemma 4 automatic action acquisition uses ProtoLink's JSON
   protocol when advertised native tooling emits narration/channel/action text.
   Explicit native/json settings remain authoritative. Missing verification

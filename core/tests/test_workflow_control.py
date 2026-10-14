@@ -155,7 +155,7 @@ class WorkflowControlTests(NativeRuntimeCase):
         self.assertEqual((self.root / "sample.py").read_text(), "value = 3\n")
         self.assertFalse(any(event["type"] == "action.denied" for event in result["run_events"]))
 
-    async def test_dependency_failure_can_still_defer_verification_without_more_effects(self):
+    async def test_dependency_failure_reports_unavailable_without_questions_or_repairs(self):
         self.prepare_source()
         (self.root / "test_sample.py").write_text(
             "import unittest\n"
@@ -183,8 +183,12 @@ class WorkflowControlTests(NativeRuntimeCase):
             answer="Don't run tests; I'll verify it myself. Stop here.",
         )
         self.assertEqual(result["status"], "unverified", result["answer"])
-        self.assertEqual(result["verification"]["status"], "deferred")
-        self.assertEqual(result["verification"]["last_attempt_status"], "failed")
-        self.assertEqual(architect._current_seq_idx, 3)
+        self.assertEqual(result["verification"]["status"], "unavailable")
+        self.assertEqual(result["verification"]["attempts"], 1)
+        self.assertEqual(result["verification"]["setup_issues"][0]["module"], "fastapi")
+        self.assertFalse(
+            any(event["type"] == "user_input.requested" for event in result["run_events"])
+        )
+        self.assertEqual(architect._current_seq_idx, 2)
         self.assertEqual(len(result["approval_requests"]), 2)
         self.assertEqual((self.root / "sample.py").read_text(), "value = 42\n")

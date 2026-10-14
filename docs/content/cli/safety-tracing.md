@@ -46,11 +46,25 @@ Existing uncommitted work is preserved as the starting point, and denied or
 unexecuted proposals are excluded. Partial edits remain reviewable after failure,
 cancellation or a manual verification handoff.
 
+The CLI and TUI render the edit summary as a compact card: a cyan heading,
+bold file names, green additions, red removals and muted status/diff hints.
+Colors come from runtime metadata in the frontend; saved answers remain plain
+text. File names are displayed literally, including Markdown characters.
+
 If the model ends before executing an edit, the final answer says no changes
 were applied instead of displaying its promise or action-shaped text as a result.
 A required check with no execution receipt is **not run**, not a failed test.
 Missing Python runners or packages are explained as environment/setup problems;
 the actual failed command and its exit status remain in the native trace.
+
+Verification normally occupies one line. For example:
+`Verification: unavailable (missing pytest). Details: /trace.` A missing Python
+runner or external module in a completed final check ends the run with applied
+edits **unverified**, without installation questions, automatic setup or code
+repairs. Existing project modules remain code/import-path failures; genuine test
+failures retain bounded repairs. Canceled, denied, stale or uncertain evidence
+cannot be downgraded to this unavailable state. No skipped check is marked passed.
+Full commands, output and exit codes remain in `/trace` and the native report.
 
 Before write approval, Python proposals are parsed without executing them. Newly
 introduced syntax errors (including double-escaped newlines written as literal

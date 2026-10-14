@@ -441,6 +441,15 @@ covers policy, execution evidence, plan stability, revision freshness and repair
 limits. A completed failing check can justify a focused repair. A timeout,
 denial or uncertain effect requires inspection, not an automatic replay.
 
+An unavailable verification environment is also distinct from a measured
+regression. If a completed final check cannot import its Python runner or an
+external dependency, repeating a code-repair loop does not establish correctness.
+The harness can return immediately with applied edits marked unverified and a
+compact explanation, retaining the original failed command receipt. Missing
+project modules still warrant source/import-path investigation. This boundary
+reduces unnecessary model calls and operator questions without waiving checks
+or downgrading stale, denied, canceled or uncertain evidence.
+
 Approval authorizes a prepared operation; it does not establish that the
 operation executed or achieved the requested behavior. File recovery can undo a
 recorded write subject to revision checks, but cannot undo arbitrary process or
@@ -600,6 +609,12 @@ changed live revision is disclosed rather than presented as solely agent work.
 Review is bounded and requires no model inference or Git baseline. It covers
 recoverable file-tool effects; arbitrary process and external-tool effects need
 their own receipts and inspection.
+
+The interface projects that review into a compact styled card, with literal
+file names, green additions and red removals. Verification has a single summary
+line; detailed commands and logs remain in trace inspection. Presentation and
+stored evidence remain separate: colors add no execution authority and an
+unavailable check is never reported as a pass.
 
 Operator inspection can also remain outside inference. The CLI provides shallow
 directory listing, folder navigation and a read-only file viewer with bounded

@@ -102,6 +102,13 @@ Manual:
   always ask. Native policies, revisions, budgets and recovery still apply.
   Auto-accept does not disable verification or mark failed checks passed.
 - Write runs end with a deterministic applied-file summary and line counts.
+  The Edits card uses green additions, red removals, bold literal file names and
+  a muted /diff hint. Verification is one line; command logs stay in /trace.
+  Missing Python runners/external modules at final checking finish with unavailable
+  verification, retaining applied edits unverified. No installation question,
+  automatic setup or code repair is triggered for that setup error. Existing
+  local-module import failures and genuine regressions retain bounded repair;
+  cancellation, denial, stale revisions and uncertainty still take precedence.
   `/diff` reviews the combined applied diff; `/diff raw` prints it. Incremental
   edits to one file combine from this run's first preimage to last applied
   snapshot, excluding denied/unexecuted proposals and pre-existing changes.
@@ -274,8 +281,8 @@ Manual:
   /trace shows actual execution receipts, rejections and correction exhaustion.
 - If a model stops before executing edits, the final answer says no files changed.
   Required checks that were never executed are labeled not run, not failed tests.
-  A completed command failing to import pytest or a dependency is reported as
-  an environment/setup problem, with its original exit status kept in the trace.
+  A completed command missing a Python runner/external module ends as unavailable,
+  with its original exit status kept in the trace. It never counts as a passed check.
 - Python create/replace/exact edits reject introduced syntax errors before write
   approval via native no-change feedback. This catches literal double-escaped
   newline code without silently unescaping anything or running/importing source.

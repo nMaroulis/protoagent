@@ -112,6 +112,8 @@ def review_changes(attempt, report):
         "additions": sum(row["additions"] for row in rows),
         "removals": sum(row["removals"] for row in rows),
         "truncated": len(groups) > MAX_FILES,
+        "has_diff": bool(diffs),
+        "scope": "Native file-tool effects; process and external-tool effects are outside this review.",
     }
     review["summary"] = _summary(review, bool(diffs))
     return review, diffs
@@ -151,8 +153,8 @@ def _summary(review, has_diff):
     if not review["files"]:
         return "Edits: no recoverable file changes were applied."
     lines = [
-        f"Edits: {review['file_count']} file(s), {review['edit_count']} applied edit(s); "
-        f"+{review['additions']} / -{review['removals']} displayed lines."
+        f"Edits: {review['file_count']} {'file' if review['file_count'] == 1 else 'files'} · "
+        f"+{review['additions']} / -{review['removals']} lines."
     ]
     for row in review["files"][:12]:
         kind = "uncertain" if row["uncertain"] else row["kind"]
@@ -165,6 +167,5 @@ def _summary(review, has_diff):
     if len(review["files"]) > 12 or review["truncated"]:
         lines.append("More files in the run report and /checkpoints.")
     if has_diff:
-        lines.append("Review the combined applied diff with /diff.")
-    lines.append("Command effects outside native file tools are not included in this diff.")
+        lines.append("/diff to review.")
     return "\n".join(lines)

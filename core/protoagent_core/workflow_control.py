@@ -134,19 +134,37 @@ class WorkflowArchitectAgent(Agent):
             event = self._new_partial(task) if partial else self._failed_check(task)
             if context.canceled or not event:
                 raise RuntimeError("Stopped execution cannot be handed to another workflow phase")
+            from .verification import verification_setup_issue
+
+            issue = (
+                None
+                if partial
+                else verification_setup_issue(
+                    event.payload["result"],
+                    event.payload["action"]["payload"]["arguments"],
+                    self.work_attempt.workspace,
+                )
+            )
             await publish_runtime_event(
                 RunEvent(
-                    type="workflow.work_yielded" if partial else "workflow.repair.requested",
+                    type="workflow.work_yielded"
+                    if partial
+                    else "verification.unavailable"
+                    if issue
+                    else "workflow.repair.requested",
                     run_id=context.run_id,
                     task_id=task.id,
                     agent_name=self.card.name,
                     summary="Coder returned partial work; continuing through the bounded workflow"
                     if partial
+                    else issue["message"]
+                    if issue
                     else "Check failed; returning control to the bounded repair workflow",
                     payload={
                         "handoff_event_id": event.event_id,
                         "check_action_id": event.action_id if not partial else None,
                         "attempt": self.work_attempt.attempt,
+                        **({"setup_issue": issue} if issue else {}),
                     },
                 )
             )
@@ -154,6 +172,8 @@ class WorkflowArchitectAgent(Agent):
                 "infer_output",
                 "Coder returned partial work. Returning control to the bounded workflow."
                 if partial
+                else "Verification unavailable: " + issue["message"]
+                if issue
                 else "A required check failed. Returning the measured result to the bounded repair workflow.",
             )
         finally:

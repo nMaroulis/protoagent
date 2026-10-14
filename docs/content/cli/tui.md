@@ -84,6 +84,11 @@ mode. Preferences apply to subsequent runs; MCP access and restoration still ask
 No model is needed to change the setting.
 
 Write runs finish with a compact summary of applied files and line counts.
+The Edits card uses green `+` counts, red `-` counts, bold file names and a muted
+diff hint. Verification has one compact status line; commands and logs stay in
+`/trace`. Missing Python runners/dependencies finish as verification unavailable
+without installation questions or repair loops, preserving applied edits as
+unverified.
 `/diff` opens their combined applied diff; `/diff raw` prints it and `/diff proposed`
 opens separately labeled approval previews. Partial edits remain reviewable after
 failure or deferred verification. See [approval and review behavior](safety-tracing.md)

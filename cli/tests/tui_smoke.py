@@ -136,7 +136,7 @@ def respond(history, prompt):
     if step == 1:
         return {'type':'tool_call','tool':'run_check','args':{'check_id':'regression','phase':'verify'}}
     if step == 2:
-        return {'type':'tool_call','tool':'ask_user','args':{'question':'Verification failed: fastapi is missing. Install it or retry tests?','options':['Install', 'Retry']}}
+        return {'type':'tool_call','tool':'ask_user','args':{'question':'Regression failed. Retry or defer verification?','options':['Install', 'Retry']}}
     raise RuntimeError('Manual handoff incorrectly continued model inference')
 factory.create_llm = lambda *args, **kwargs: MockLLM(response_callback=respond)
 """
@@ -245,7 +245,7 @@ class Terminal:
                     "    def test_command(self):\n        Path(__file__).with_name('check-executed').write_text('ran')\n"
                     "        self.assertTrue(True)\n"
                 )
-        elif fixture == "handoff":
+        elif fixture in {"handoff", "unavailable"}:
             (self.directory / "sitecustomize.py").write_text(HANDOFF_MOCK)
             (self.project / "sample.py").write_text("value = 0\n")
             (self.project / ".protoagent").mkdir()
@@ -258,7 +258,9 @@ class Terminal:
                                 "argv": [
                                     str(ROOT / ".venv/bin/python"),
                                     "-c",
-                                    "raise ModuleNotFoundError(\"No module named 'fastapi'\")",
+                                    "raise ModuleNotFoundError(\"No module named 'pytest'\")"
+                                    if fixture == "unavailable"
+                                    else 'raise AssertionError("Regression failed")',
                                 ],
                                 "env": {},
                                 "paths": ["sample.py"],
@@ -405,7 +407,7 @@ class TuiSmokeTests(unittest.TestCase):
         offset = terminal.send("y")
         terminal.wait_for("Architect has a question", after=offset)
         offset = terminal.send("do not run it its ok Ill do it\r")
-        terminal.wait_for("Edits: 1 file(s)", after=offset)
+        terminal.wait_for("Edits: 1 file", after=offset)
         terminal.wait_for("Ask anything", after=offset)
         offset = terminal.send("/diff\r")
         terminal.wait_for("Applied Diff Review", after=offset)
@@ -414,6 +416,23 @@ class TuiSmokeTests(unittest.TestCase):
         offset = terminal.send("\x1b")
         terminal.wait_for("Ask anything", after=offset)
         terminal.command("/approvals ask", "Approvals: ask")
+        self.assert_intact(terminal)
+
+    def test_missing_pytest_is_compact_without_install_question_or_repair(self):
+        terminal = self.terminal("unavailable")
+        terminal.command("/approvals auto", "Approvals: auto")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Verification: unavailable (missing pytest).", after=start)
+        terminal.wait_for("Edits: 1 file", after=start)
+        terminal.wait_for("Ask anything", after=start)
+        output = terminal.data[start:].decode(errors="replace")
+        self.assertNotIn("Architect has a question", output)
+        self.assertNotIn("raise ModuleNotFoundError", output)
+        counts = json.loads((terminal.directory / "model-calls.json").read_text())
+        self.assertEqual(counts, {"architect": 2, "coder": 2})
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
+        self.assertRegex(output, r"\x1b\[38;2;116;223;159m(?:\x1b\[[0-9;]*m)*\+1")
+        self.assertRegex(output, r"\x1b\[38;2;255;122;138m(?:\x1b\[[0-9;]*m)*-1")
         self.assert_intact(terminal)
 
     def test_approval_picker_is_offline_and_settings_persist(self):

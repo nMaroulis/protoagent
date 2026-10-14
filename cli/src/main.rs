@@ -17,6 +17,7 @@ mod progress;
 mod project_files;
 mod question;
 mod sessions;
+mod summary;
 mod terminal_ui;
 mod timeline;
 
@@ -818,9 +819,28 @@ fn render_response(response: &CoreResponse) -> Result<()> {
         render_agent_timeline(&response.run_events, &response.events);
     }
 
-    if !response.answer.trim().is_empty() {
-        let answer = wrap_lines(&response.answer, panel_inner_width());
+    let (body, has_review) = summary::answer_body(&response.answer, &response.change_review);
+    if !body.trim().is_empty() {
+        let answer = wrap_lines(body, panel_inner_width());
         print_panel("ANSWER", &answer, PanelTone::Cyan);
+    }
+    if has_review {
+        println!();
+        for row in summary::rows(&response.change_review, panel_inner_width()) {
+            print!("  ");
+            for part in row {
+                let styled = match part.tone {
+                    summary::Tone::Plain => style(part.text),
+                    summary::Tone::Title => style(part.text).cyan(),
+                    summary::Tone::Added => style(part.text).green(),
+                    summary::Tone::Removed => style(part.text).red(),
+                    summary::Tone::Muted => style(part.text).dim(),
+                    summary::Tone::Warning => style(part.text).yellow(),
+                };
+                print!("{}", if part.bold { styled.bold() } else { styled });
+            }
+            println!();
+        }
     }
 
     if !response.file_target.is_empty() {

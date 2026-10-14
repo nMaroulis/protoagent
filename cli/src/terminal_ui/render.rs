@@ -227,6 +227,14 @@ fn draw_render_line(out: &mut impl Write, y: u16, width: u16, line: &RenderLine)
                 Code::Inline => (black(), yellow()),
                 Code::Block => (green(), Color::Reset),
             };
+            let fg = match span.style.tone {
+                crate::summary::Tone::Plain => fg,
+                crate::summary::Tone::Title => cyan(),
+                crate::summary::Tone::Added => green(),
+                crate::summary::Tone::Removed => red(),
+                crate::summary::Tone::Muted => muted(),
+                crate::summary::Tone::Warning => yellow(),
+            };
             draw_styled_segment(
                 out, &mut x, y, width, &span.text, fg, background, span.style,
             )?;
@@ -1484,6 +1492,23 @@ fn append_message_lines(
             });
         } else {
             append_answer_lines(lines, &message.body, width, running);
+            if let Some(review) = &message.review {
+                lines.push(answer_line(vec![]));
+                for row in crate::summary::rows(review, width.saturating_sub(4)) {
+                    lines.push(answer_line(
+                        row.into_iter()
+                            .map(|part| Span {
+                                text: part.text,
+                                style: Style {
+                                    bold: part.bold,
+                                    tone: part.tone,
+                                    ..Default::default()
+                                },
+                            })
+                            .collect(),
+                    ));
+                }
+            }
         }
     } else {
         append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
@@ -1901,6 +1926,7 @@ mod context_meter_tests {
             body: "Use /config.".into(),
             meta: vec!["status completed".into(), "provider mock".into()],
             details: vec![("RunReport".into(), "report".into())],
+            review: None,
         };
         let render = |cursor, debug| {
             let mut lines = vec![];
@@ -1951,6 +1977,7 @@ mod context_meter_tests {
                     body: body.into(),
                     meta: vec!["status streaming".into()],
                     details: vec![],
+                    review: None,
                 };
                 let mut live = vec![];
                 append_message_lines(&mut live, &message, width, Some(true), false);
@@ -1982,6 +2009,7 @@ mod context_meter_tests {
                 body: body.into(),
                 meta: vec![],
                 details: vec![],
+                review: None,
             };
             let mut on = vec![];
             let mut off = vec![];

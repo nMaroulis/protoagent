@@ -231,7 +231,7 @@ class PlanningCheckTests(NativeRuntimeCase):
         self.assertFalse(accepted.completion["satisfied"])
         self.assertFalse(accepted.completion["verified"])
         self.assertTrue(accepted.verification["latest"][0]["empty_test_suite"])
-        self.assertIn("zero tests ran", verification_summary(accepted.verification))
+        self.assertIn("no tests were discovered", verification_summary(accepted.verification))
 
     async def test_explicit_empty_configuration_preserved_and_edits_remain_unverified(self):
         (self.root / ".protoagent").mkdir()

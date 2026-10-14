@@ -913,6 +913,9 @@ fn loading_activity_from_run_event(value: &Value) -> Option<String> {
         "action.rejected" => return Some(format!("{agent}: Correcting the request...")),
         "process.finished" => return Some("Verifier: Reviewing the command result...".into()),
         "verification.deferred" => return Some("Finishing your verification handoff...".into()),
+        "verification.unavailable" => {
+            return Some("Verification unavailable; preparing the edit summary...".into())
+        }
         "action.failed" | "workflow.blocked" | "tool.correction.exhausted" => {
             return Some("Preparing the run report...".into())
         }
