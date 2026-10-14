@@ -10,7 +10,9 @@ description: Inspect exact command approvals, native execution evidence, and rec
 ```
 
 Architect gathers repository evidence, delegates edits to Coder, then calls
-Verifier's native `execute_command` tool. Each command requires a separate
+Verifier's `run_check(check_id, phase)` tool, prepared as native `execute_command`.
+Check IDs and specifications are captured from the project before model execution
+(see [Task Workflow](../core/task-workflow.md)). Each command requires a separate
 `process.execute` approval. Press **V** to inspect its argv, absolute working
 directory, explicit environment, timeout, output limit and host execution
 boundary. Scroll with arrows or PageUp/PageDown; return and press **Y** to
@@ -27,9 +29,13 @@ approve or **N/Esc** to deny. The one-shot CLI prints the same preview.
 ```
 
 Arguments receive no implicit shell expansion. `env: {}` means an **empty
-environment**, not inherited credentials or PATH. Use an absolute executable
-or explicitly supply the PATH needed by the command. ProtoLink resolves and
-freezes the execution specification before approval. Registration runs nothing.
+environment**, not inherited credentials or PATH. Relative `cwd` resolves from
+the selected project. Bare program names resolve through explicit `env.PATH`
+or a fixed application system search path; `python`/`python3` without PATH use
+project/runtime interpreter selection. This resolves only the executable and
+does not add PATH to the child. Supply any environment required by the program.
+The exact absolute executable, directory, environment and limits enter native
+preparation and approval. Registration runs nothing.
 
 The local backend executes on the host, with the user's permissions. It can
 write outside the project or use the network, including with Scout disabled.
@@ -40,6 +46,18 @@ stdout/stderr**. Architect is instructed to pass all limits explicitly, usually
 stop execution sooner. Truncation, timeout, cancellation and duration remain in
 the structured result.
 
+ProtoAgent's command adapter defaults to 60 seconds and 8192 output bytes, below
+its native ceilings. Unknown executables, invalid limits or nonexistent working
+directories receive no-change feedback before dispatch in the small local
+interface, allowing bounded input correction. Denied approvals and failures
+after dispatch remain stops.
+
+Moving root unittest tests into a folder requires an `__init__.py` package marker
+for the existing root runner to recurse into it. Approved `mkdir`/`mv` commands
+prepare the layout; Coder applies any package/import edits with their own diffs.
+These host commands have no automatic recovery or file diff. Final verification
+must still execute the selected check and find real tests.
+
 Esc/Ctrl-C goes through `RunHandle.cancel()`. ProtoLink cleans up POSIX process
 groups on cancellation, timeout and normal parent exit. Deliberately detached
 processes can escape this cleanup. Command effects have no automatic rollback.
@@ -48,23 +66,48 @@ processes can escape this cleanup. Command effects have no automatic rollback.
 
 A write task needs an **executed native file change at its current revision**.
 A proposed diff, approval, delegation or model claim cannot satisfy that check.
-A requested verification needs an actual executed command.
+Code changes and verification requests need all selected repository checks.
+Unrelated successful commands do not qualify. Explicit documentation-only requests can
+complete with `applied=true` and `verified=false`.
 
 | Verification status | Meaning |
 | --- | --- |
 | `passed` | Latest recorded executions passed and their recorded resource revisions are current. |
 | `failed` | A recorded command failed or its execution evidence cannot be accepted. |
 | `stale` | A resource referenced by a check changed. |
-| `unverified` | No test/build command was executed. |
+| `unverified` | No qualifying final repository check was executed. |
+| `deferred` | You explicitly chose to handle verification. Any previous failure remains recorded in `last_attempt_status` and command receipts. |
 
-Checks reference the native revisions of files changed by this run, captured
-when a command is proposed. An external edit to those files also invalidates
+Checks reference native revisions of changed files, worker-read sources and
+configured dependencies, bounded to 512 files and captured at preparation.
+An external edit to those files also invalidates
 the check. This does not track every repository input, dependency or file a
 command can modify. A passing exit status is evidence for that command, not a
 proof that all behavior is correct. A write can be applied but remain unverified.
 
-All edits happen before checking within an attempt. Once a command is proposed,
-further file mutations are denied for that attempt. A native **Graph** permits
+If a verification question offers dependency installation or a retry, you may
+answer **"don't run it, I'll do it"** or **"I'll verify it myself; stop here"**.
+After edits or final checking have begun, this stops immediately with no further
+commands, model calls or repairs. The application status is `unverified`, and
+the response lists applied files separately from the last check's result.
+Checks are neither deleted from the frozen plan nor relabeled as passed;
+`satisfied=false` and `verified=false`. Uncertain effects, denial and stale
+revisions still require inspection. Esc skips the question without creating a
+manual verification decision.
+
+For Python projects with no checks, a predefined `python-tests` runner can execute
+new root `test_*.py` unittest regressions. Architect includes test creation in
+Coder's scope; Verifier runs the captured command with approval. Zero tests
+reports missing verification, even if Python exits successfully. Invalid planning
+IDs receive native no-change feedback for correction within the shared allowance
+(default two per inference). Rejected plans or check requests cannot provide
+verification evidence. Explicit project
+check configuration takes precedence. See [Task Workflow](../core/task-workflow.md).
+
+Baseline and preparation commands permit subsequent edits. Final verification
+closes the edit phase, and further file mutations are denied for that attempt.
+The plan freezes at the first write or final check. A known empty unittest suite
+is rejected; zero exit status alone does not establish useful coverage. A native **Graph** permits
 one initial attempt and at most **two repair attempts** after completed nonzero
 checks. Its limits are enforced in code and share native workflow budgets.
 Denials, stale revisions, timeouts, interrupted effects and missing evidence

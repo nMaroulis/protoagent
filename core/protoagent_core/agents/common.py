@@ -20,16 +20,22 @@ DEFAULT_AGENT_URLS = {
     "coder": "http://127.0.0.1:9130",
     "scout": "http://127.0.0.1:9140",
     "verifier": "http://127.0.0.1:9150",
+    "tester": "http://127.0.0.1:9160",
+    "mcp": "http://127.0.0.1:9170",
 }
 
 RUNTIME_SCOPES = (
     "agent.delegate",
+    "task.manage",
+    "user.interact",
     "workspace.read",
     "filesystem.read",
     "filesystem.write",
     "filesystem.restore",
     "process.execute",
     "network.read",
+    "mcp.connect",
+    "mcp.invoke",
 )
 
 QUIET_LOGGER = QuietLogger(name="protoagent-quiet")
@@ -109,17 +115,24 @@ def create_configured_transport(
     )
 
 
-def with_workspace_contract(system_prompt: str, workspace: str | None, role: str) -> str:
+def with_workspace_contract(
+    system_prompt: str, workspace: str | None, role: str, *, read_only=False
+) -> str:
     """Attach the active project contract to an agent system prompt."""
     project = workspace or os.getenv("PROTOAGENT_WORKSPACE") or os.getcwd()
+    operation = (
+        "- This request permits inspection, not file changes.\n"
+        if read_only
+        else "- If a user asks to create or modify a file, produce an approval-gated file action rather than only explaining code.\n"
+        "- If no path is specified, choose a conservative project-relative path only when the request is obvious; otherwise ask one concise clarification.\n"
+    )
     return (
         f"{system_prompt.rstrip()}\n\n"
         "Active project contract:\n"
         f"- Current project root: {project}\n"
         "- Treat every relative path as relative to that project root.\n"
         "- Never invent or use a random folder outside the project root.\n"
-        "- If a user asks to create or modify a file, produce an approval-gated file action rather than only explaining code.\n"
-        "- If no path is specified, choose a conservative project-relative path only when the request is obvious; otherwise ask one concise clarification.\n"
+        f"{operation}"
         f"- You are the {role}; identify your role when handing work to another agent or producing the final response.\n"
     )
 

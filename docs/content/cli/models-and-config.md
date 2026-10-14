@@ -27,6 +27,15 @@ Legacy home override:
 export PROTOAGENT_HOME=/tmp/protoagent-config
 ```
 
+## Project approval preferences
+
+`/approvals` opens the TUI picker. `/approvals ask` reviews edits and commands;
+`/approvals edits` automatically accepts file edits; `/approvals auto` also
+accepts commands with normal host permissions. Shell: `proto-cli approvals MODE`.
+Ask is the default. The private `approval_modes` map saves choices per canonical
+project path for subsequent runs. MCP access and restoration still ask, and
+verification remains a separate workflow. See [approval modes and applied review](safety-tracing.md).
+
 ## Default Provider Schema
 
 The config contains:
@@ -56,6 +65,78 @@ without manual migration.
 | Cloud APIs | Static curated model choices plus optional lightweight key validation. |
 
 The CLI renders provider cards and compact provider strips from this inventory.
+
+## Ollama Tool Calling
+
+Tool calling defaults to `auto`. For small-profile Gemma 4 on Ollama, automatic
+selection uses ProtoLink's JSON action protocol: these models can advertise
+tools but return narration plus a channel marker and action text instead of a
+structured call. JSON mode constrains output and uses the engine's existing
+single-action parser, validation and execution. Explicit `native` or `json`
+settings are honored. Other models pass automatic selection to ProtoLink;
+the engine reads Ollama's `/api/show` metadata when resolving the protocol.
+If the model advertises `tools`, ProtoLink sends
+native tool declarations and consumes structured calls. Models without that
+capability, or servers without usable metadata, keep the JSON action protocol.
+The authenticated metadata request uses the exact model tag and endpoint.
+ProtoLink caches evidence for five minutes, invalidates it when configuration
+changes, and exposes `refresh_capabilities()` to explicit API callers. Discovery
+does not generate text or execute tools. Each inference keeps its selected
+protocol consistent through prompting and correction.
+
+To override the choice, set `providers.ollama.tool_calling` in `config.json` to
+`auto`, `native` or `json`. Without that config field, the environment can set it:
+
+```bash
+PROTOAGENT_OLLAMA_TOOL_CALLING=json proto-cli run "Explain this project"
+```
+
+Native support is an advertised capability, not a guarantee of model accuracy.
+Recognizable malformed action envelopes enter ProtoLink's parse correction
+loop in JSON/native modes. Completed observations remain available; there is
+no run restart or application parser executing displayed answers. Explanatory
+prose and examples inside explicit `final.content` remain data. Use `/trace`
+to inspect correction and actual execution receipts.
+
+## Small-model generation
+
+Small-profile Ollama requests default to `num_predict=4096`. Small Gemma 4
+variants also default to `think=false`, using their supported boolean thinking
+control for short coding actions. The harness keeps model sampling defaults;
+explicit `model_params.num_predict`, `max_tokens` and `think` values take priority.
+Other profiles retain engine generation defaults. For example:
+
+```json
+{"providers":{"ollama":{"model_params":{"think":true,"num_predict":8192}}}}
+```
+
+These are request settings; they do not recreate or download the model. They can
+reduce generation latency and avoid optional thinking loops, but cannot guarantee
+generation quality. If Ollama reports `token repeat limit reached`, it aborted
+generation before a complete action was returned. The error is distinct from a
+worker's inference-turn cap. Partial proposals are discarded; previously applied
+edits remain recorded. Inspect `/trace` and the applied paths before continuing.
+
+## Request correction limits
+
+`providers.PROVIDER.max_tool_corrections` in `config.json` sets the native
+allowance, default two corrective turns per inference. For example:
+
+```json
+{"providers":{"ollama":{"tool_calling":"auto","max_tool_corrections":2}}}
+```
+
+Unknown tools, invalid argument schemas, no-change application rejections and
+invalid worker requests share the allowance. Successful actions do not replenish
+it. Subsequent model calls and actual tools also consume existing run budgets;
+the limit is a runtime setting, never a generation parameter. Parse failures use
+a separate native circuit breaker. `/trace` and `/timeline` show rejected requests
+and correction exhaustion separately from executed tools and permission denials.
+Denials, execution failures and uncertain effects do not receive blind retries.
+
+Other providers accept an explicit `tool_calling` policy through the same config
+field and otherwise retain adapter defaults. With `fallback_models`, RoutedLLM
+uses its portable JSON protocol and retains the configured correction allowance.
 
 ## Agent Prompt Profile
 

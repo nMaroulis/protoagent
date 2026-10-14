@@ -6,7 +6,8 @@ import inspect
 import os
 from typing import Any
 
-from .config import normalize_provider, provider_config
+from .config import load_config, normalize_provider, provider_config
+from .prompt_profiles import infer_prompt_profile
 
 DEFAULT_OLLAMA_CONTEXT_WINDOW = 8_192
 
@@ -24,7 +25,8 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
     provider request payload.
     """
     provider = normalize_provider(provider)
-    cfg = provider_config(provider)
+    settings = load_config()
+    cfg = provider_config(provider, settings)
     selected_model = model or cfg.get("model")
     kwargs: dict[str, Any] = {}
 
@@ -33,7 +35,10 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
 
     api_key = cfg.get("api_key")
     if api_key:
-        kwargs["api_key"] = api_key
+        if provider == "ollama":
+            kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+        else:
+            kwargs["api_key"] = api_key
 
     base_url = cfg.get("base_url")
     if (
@@ -45,10 +50,42 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
     if provider == "lmstudio" and "api_key" not in kwargs:
         kwargs["api_key"] = "lm-studio"
 
+    # These are native runtime policies, not model generation parameters.
+    # Ollama retains ProtoAgent's automatic default; other adapters keep their
+    # engine defaults unless the user explicitly selects a mode.
+    if provider == "ollama":
+        kwargs["tool_calling"] = cfg.get(
+            "tool_calling", os.getenv("PROTOAGENT_OLLAMA_TOOL_CALLING", "auto")
+        )
+    elif "tool_calling" in cfg:
+        kwargs["tool_calling"] = cfg["tool_calling"]
+    if "max_tool_corrections" in cfg:
+        kwargs["max_tool_corrections"] = cfg["max_tool_corrections"]
+
     if provider == "ollama":
         context_window = ollama_context_window(cfg)
         model_params = dict(cfg.get("model_params") or {})
         model_params["num_ctx"] = context_window
+        profile = settings.get("agent_prompt_profile", "auto")
+        if profile == "auto":
+            profile = infer_prompt_profile(provider, selected_model, str(base_url or ""))
+        if profile == "small":
+            # Bounded coding actions do not need the engine's 8192-token default.
+            # Explicit limits (including the engine's max_tokens alias) win.
+            if "max_tokens" not in model_params:
+                model_params.setdefault("num_predict", 4096)
+            if "gemma4" in str(selected_model or "").lower():
+                # Advertised tool support does not ensure a usable structured
+                # call: small Gemma can emit narration + <channel|> + action
+                # text instead. Select the engine's constrained JSON protocol
+                # for automatic mode; explicit native/json preferences win.
+                if kwargs["tool_calling"] == "auto":
+                    kwargs["tool_calling"] = "json"
+                # Gemma 4 exposes a boolean thinking control. For its small
+                # variants, avoid a separate hidden thinking generation before
+                # a short tool action. Keep the model's recommended sampling and
+                # any explicit user thinking preference.
+                model_params.setdefault("think", False)
         kwargs["model_params"] = model_params
 
     return kwargs
@@ -129,7 +166,34 @@ def create_llm_from_config(provider: str | None = None, model: str | None = None
     from protolink.llms.factory import create_llm
 
     llm = create_llm(protolink_provider(requested), **llm_kwargs(requested, model))
-    llm.configure_metrics(llm_model_profile(requested, model))
+    profile = llm_model_profile(requested, model)
+    llm.configure_metrics(profile)
+    fallbacks = cfg.get("fallback_models", [])
+    if (
+        not isinstance(fallbacks, list)
+        or len(fallbacks) > 2
+        or any(not isinstance(name, str) or not name.strip() for name in fallbacks)
+    ):
+        raise ValueError("fallback_models must contain at most two nonblank model names")
+    selected = str(model or cfg.get("model") or "")
+    if len(set(fallbacks)) != len(fallbacks) or selected in fallbacks:
+        raise ValueError("Fallback models must be unique and different from the selected model")
+    if fallbacks:
+        from protolink import RoutedLLM
+
+        models = {"selected": llm}
+        for index, name in enumerate(fallbacks, start=1):
+            candidate = create_llm(protolink_provider(requested), **llm_kwargs(requested, name))
+            candidate.configure_metrics(llm_model_profile(requested, name))
+            models[f"fallback-{index}"] = candidate
+        llm = RoutedLLM(
+            models,
+            fallbacks=[key for key in models if key != "selected"],
+            retries_per_model=0,
+        )
+        llm.configure_metrics(profile)
+        # The router owns the infer loop; candidate limits alone do not bound it.
+        llm.max_tool_corrections = models["selected"].max_tool_corrections
     return llm
 
 
@@ -139,11 +203,13 @@ def validate_protolink() -> dict[str, Any]:
         import protolink
         from protolink import (
             AgentGroup,
+            AgentHooks,
             ApprovalBroker,
             ApprovalScope,
             CompletionCheck,
             CompletionValidator,
             ContextManifest,
+            ContextPolicy,
             HistoryCompactor,
             LLMModelProfile,
             RedactionPolicy,
@@ -152,18 +218,22 @@ def validate_protolink() -> dict[str, Any]:
             RunRecorder,
             StateOperationResult,
             StorageCheckpointStore,
+            SubagentLimits,
+            ToolCorrectionLimitError,
+            ToolRejectedError,
             TransportConfig,
             TransportLimits,
             TransportMetricsSnapshot,
         )
         from protolink.agents import Agent
         from protolink.client import AgentClient
+        from protolink.core.agent_card import AgentCapabilities
         from protolink.llms.base import LLM
         from protolink.llms.factory import create_llm  # noqa: F401
         from protolink.logging import QuietLogger
         from protolink.security.auth import APIKeyAuth
         from protolink.storage import SQLiteRunStore
-        from protolink.tools.builtins import filesystem_tools, process_tool
+        from protolink.tools.builtins import ask_user_tool, filesystem_tools, process_tool
         from protolink.transport import Transport, TransportCapabilities, TransportRequestContext
         from protolink.transport.http_transport import HTTPTransport
         from protolink.transport.runtime_transport import RuntimeTransport
@@ -201,10 +271,35 @@ def validate_protolink() -> dict[str, Any]:
                 StorageCheckpointStore,
                 filesystem_tools,
                 process_tool,
+                ask_user_tool,
             )
         )
         logging_ready = QuietLogger is not None
+        user_input_ready = callable(ask_user_tool)
         agent_parameters = inspect.signature(Agent).parameters
+        subagents_ready = (
+            "subagents" in agent_parameters
+            and "subagent_limits" in agent_parameters
+            and callable(SubagentLimits)
+            and callable(getattr(RunHandle, "spawn", None))
+        )
+        context_policy_ready = (
+            "context_policy" in agent_parameters
+            and "hooks" in agent_parameters
+            and callable(ContextPolicy)
+            and callable(AgentHooks)
+        )
+        action_validation_ready = all(
+            (
+                callable(ToolRejectedError),
+                callable(ToolCorrectionLimitError),
+                hasattr(LLM, "max_tool_corrections"),
+                hasattr(LLM, "tool_calling"),
+                callable(getattr(LLM, "resolve_tool_calling", None)),
+                callable(getattr(LLM, "refresh_capabilities", None)),
+                "supports_inference" in AgentCapabilities.__dataclass_fields__,
+            )
+        )
         http_transport_parameters = inspect.signature(HTTPTransport.__init__).parameters
         runtime_transport_parameters = inspect.signature(RuntimeTransport.__init__).parameters
         transport_ready = all(
@@ -243,6 +338,15 @@ def validate_protolink() -> dict[str, Any]:
             )
         except Exception:
             web_tools_ready = False
+        try:
+            from protolink.tools.adapters.mcp_adapter import MCPToolAdapter
+
+            mcp_ready = all(
+                hasattr(MCPToolAdapter, name)
+                for name in ("session", "get_tools_async", "list_tools_async")
+            )
+        except ImportError:
+            mcp_ready = False
         agent_ready = all(
             (
                 streaming_ready,
@@ -256,6 +360,10 @@ def validate_protolink() -> dict[str, Any]:
                 auth_ready,
                 transport_ready,
                 execution_ready,
+                subagents_ready,
+                context_policy_ready,
+                user_input_ready,
+                action_validation_ready,
             )
         )
 
@@ -274,7 +382,12 @@ def validate_protolink() -> dict[str, Any]:
             "auth_ready": auth_ready,
             "transport_ready": transport_ready,
             "web_tools_ready": web_tools_ready,
-            "error": "",
+            "mcp_ready": mcp_ready,
+            "subagents_ready": subagents_ready,
+            "context_policy_ready": context_policy_ready,
+            "user_input_ready": user_input_ready,
+            "action_validation_ready": action_validation_ready,
+            "error": "" if agent_ready else "ProtoLink 0.8.1 runtime APIs are required",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
         try:
@@ -295,6 +408,7 @@ def validate_protolink() -> dict[str, Any]:
                 "auth_ready": False,
                 "transport_ready": False,
                 "web_tools_ready": False,
+                "action_validation_ready": False,
                 "error": str(exc),
             }
         except Exception:
@@ -313,6 +427,7 @@ def validate_protolink() -> dict[str, Any]:
                 "auth_ready": False,
                 "transport_ready": False,
                 "web_tools_ready": False,
+                "action_validation_ready": False,
                 "error": str(exc),
             }
 

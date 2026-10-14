@@ -1,0 +1,375 @@
+---
+title: Task Workflow
+description: Runtime task records, focused worker packets, check plans and small-model execution.
+---
+
+ProtoAgent 0.3.0 gives each model a focused job and keeps progress in application
+state. `TaskRecord` owns the objective, acceptance criteria, allowed file paths,
+available and selected check IDs, source references and worker reports. It
+survives conversation compaction and request-level observation eviction.
+
+RunContract first selects a per-turn surface. Recognized conversation bypasses
+Context Loom, source tags and check discovery and uses Architect without tools.
+Repository questions retain evidence and clarification state without coding
+criteria, check plans or Coder/Verifier tools. Explicit verification exposes
+Verifier and discovers checks while denying file writes. Editing requests use
+the workflow below. Native permissions preserve these limits even if the model
+tries an unsupported route. Optional-agent settings enable availability within
+the appropriate route; they do not force a worker onto every turn.
+
+## Worker responsibilities
+
+The small profile's owned local runs offer direct typed worker calls:
+
+| Call | Executing worker |
+| --- | --- |
+| `read_file(path, start_line, end_line)`, `list_directory(path)`, `search_regex(pattern, path, file_filter)` | Explorer; no inference needed for these reads. |
+| `coder(task)` | Coder inference; runs the edit assignment immediately. |
+| `tester(task)` | Optional Tester inference; focused read-only test design. |
+| `run_check(check_id, phase)`, `execute_command(argv, cwd, env, ...)` | Verifier; native command approval and execution. |
+| `web_search(...)`, `fetch_url(...)` | Enabled Scout; public-web evidence. |
+| `list_mcp_tools(...)`, `mcp_tool_schema(...)`, `call_mcp_tool(...)` | Enabled MCP broker; external evidence and native approvals. |
+
+JSON mode uses an ordinary local action, for example
+`{"type":"tool_call","tool":"run_check","args":{"check_id":"python-tests","phase":"baseline"}}`.
+Native mode exposes `run_check` with those normal arguments. No worker/action
+selection or `args_json` string is needed for these calls. These are fixed
+registered routes, not guessed aliases: invented names are still rejected.
+The prepared operation reaches the original worker through ProtoLink's native
+owned child supervisor. The worker keeps its policy, inherited constraints,
+approvals, cancellation, budgets and execution receipts.
+
+Other profiles and explicit transport meshes retain native `agent_call` routing:
+JSON actions use separate `agent`, `action`, `tool` and `args` fields; native
+providers use `protolink_call_agent_tool` or `protolink_delegate_agent`.
+The low-level protocol remains valid for compatibility. Small-profile prompts
+omit repeated child tool schemas and the separate packet preparation step.
+
+Baseline precedes editing; Coder returns after applying its assignment;
+Architect runs final verification through Verifier. Small-profile Coder requests
+omit redundant `task_status` and `list_files` tools: state is already injected,
+and source discovery belongs to Explorer. Coder can still read assigned files,
+apply scoped edits and report missing context.
+
+ProtoLink bounds each inference invocation to ten turns, independently of the
+shared run budget. Coder stops before the tenth provider call. If that work window
+made new native writes and their revisions remain current, the harness can start
+another native inference window in the same assignment, preserving its original
+scope, conversation and execution context. It admits at most three windows
+(27 model calls), with all work charged to the same aggregate budget. Each window
+must earn another through its own fresh writes; earlier edits cannot justify an
+unproductive window. Explicit missing-context reports prevent this continuation.
+`worker.continuing` records normal ongoing work, without a new Architect call or
+repeated approvals. `PROTOAGENT_CODER_MAX_WINDOWS=1` restores one-window behavior;
+values are clamped to 1–3, with invalid values using the default three.
+
+After the last progressing window, an unfinished assignment returns
+`needs_context`/`worker_turn_limit`. A window with no new edits returns
+`blocked`/`worker_no_progress`, retaining any earlier partial edits. Neither proves
+completion, and native action/provider failures are never retried as new windows.
+Architect can inspect current source and issue a smaller assignment for the
+unfinished edits, within the same frozen plan and shared budget. Already applied
+edits are not replayed. A normal subsequent outcome resolves the limit handoff;
+explicit missing-context/blocker reports remain unresolved until addressed.
+Final checks follow the finished assignment, rather than closing editing while
+the worker still has unfinished work. The handoff consumes only a typed
+application control signal raised by the before-model hook. Denials, native
+execution failures, cancellation, uncertainty and shared-budget exhaustion retain
+their original stop behavior and are never converted into this handoff.
+
+When Coder exhausts a progressing assignment, Architect yields before another
+model request; it does not ask the user whether to continue already requested work.
+The native Graph may continue the edit phase at most twice. It
+supplies the current task state and an explicit instruction to inspect and finish
+one remaining part. The plan stays frozen, no repair phase is opened, applied
+actions are not replayed and all work shares the original run budget. This path
+requires stable applied-file evidence and an open edit phase. No-progress
+handoffs, denied/failed/uncertain actions, stale revisions, manual verification
+stops and completed final checking do not qualify. Exhausting the two
+continuations leaves the task incomplete with its actual edits and check results.
+`workflow.work_yielded` records the direct return; `workflow.continuing` records a
+qualifying new focused assignment. Previous handoffs do not interrupt that assignment.
+
+A completed failing final check returns control to the native repair Graph before
+Architect's next model request. The Graph evaluates the actual receipts and may
+open a fresh edit phase for at most two repairs; Architect cannot start that phase
+itself. A repair receives the measured failure and frozen task plan. Missing
+Python runners/external modules instead yield a `verification.unavailable` event
+before another model request. The run ends with applied edits unverified and a
+short setup note, without installation questions, automatic setup or code repairs.
+Missing existing project modules remain code/import-path problems eligible for
+repair. An unavailable baseline does not revoke already requested edits.
+Denied or interrupted execution is
+never converted into a repair. Failures remaining after two repairs are incomplete.
+
+| Role | Responsibility |
+| --- | --- |
+| Architect | Choose focused tasks and explain the final outcome. |
+| Explorer | Gather bounded repository evidence. |
+| Tester | Propose regression cases, select existing check IDs and diagnose failures; read-only. |
+| Coder | Read assigned spans and prepare approved file changes. |
+| Verifier | Execute approved commands without an LLM. |
+| Scout | Optional public-web evidence, disabled by default. |
+| MCP | Optional tool-only external evidence, disabled by default; [setup](mcp.md). |
+
+Tester is optional, enabled by default, and is not a mandatory model call for every task. Disable it with `agents tester off` or `/agents tester off`; Architect/Coder then handle criteria and regressions while Verifier stays required.
+Architect is instructed to use it for behavior changes. Tester cannot write tests
+or execute commands; Coder implements proposed regression tests and Verifier
+measures the results. A Tester report is advice, never completion evidence.
+
+## Task tools
+
+Architect's `task_status()` reads the record. `plan_task(paths, criteria, check_ids)`
+selects checks and a write scope before effects. The default record uses the
+original objective and all discovered checks when no narrower plan is submitted.
+Omitting `check_ids`, or supplying an empty list for code, preserves the current
+selection. Documentation-only plans can explicitly select no checks. Invalid IDs
+raise native `ToolRejectedError`, with a reason
+and `details.available_check_ids`. The native inference loop can correct the
+plan within its shared allowance (default two per inference). Rejection does
+not change criteria, file scope or selected checks. The admitted task record
+always includes compact `available_check_ids` and `bootstrap_checks`, even when
+full command specifications are omitted to save context.
+For bootstrap coding without existing tests, a narrowed write scope must include
+a root `test_*.py` regression file. An incomplete scope is rejected before any
+plan mutation or file approval, so Coder is not trapped by a plan that excludes
+the required tests. Owner-configured empty checks remain authoritative.
+Once a write or final check is proposed the plan is frozen for the run, including
+repairs. A plan cannot remove checks after observing a failure.
+
+The low-level `worker_packet(role, objective, paths)` remains available to
+application callers and other profiles; small owned-local inference hides it
+in favor of `coder(task)` and `tester(task)`. It accepts the exact roles `explorer`, `coder`
+and `tester`, not descriptive job titles. Its schema advertises those choices.
+It resolves up to eight real source references
+into bounded source spans (6000 source characters shared across references),
+criteria and check IDs. Source reads may include supporting files outside the
+write scope; writes remain restricted. Architect supplies this packet
+through normal ProtoLink delegation. The packet returns `executed: false` and a
+dispatch reminder: preparing it does not execute a worker or apply changes.
+After preparing a packet, delegate inference to its worker with that context;
+do not repeatedly prepare it or start final verification before Coder applies edits.
+Workers can reread source directly and use
+`report_task(status, summary, missing_paths)` with `done`, `needs_context` or
+`blocked`. The runtime record is exposed in run output and refreshed in admitted
+model requests. Reports never replace executed receipts. An unresolved `needs_context` or `blocked`
+report prevents completion until the worker reports a resolved outcome. Explicit
+read-only user requests deny file writes.
+
+## Repository check configuration
+
+Before inference the application snapshots `.protoagent/project.json` if present.
+Its checks take precedence over discovery. Coder cannot edit that configuration
+inside the run. Each command still requires native approval.
+
+```json
+{
+  "checks": [
+    {
+      "id": "regression",
+      "argv": [".venv/bin/python", "-m", "pytest", "tests", "-q"],
+      "cwd": ".",
+      "env": {},
+      "paths": ["tests", "src"]
+    }
+  ]
+}
+```
+
+Executables must be absolute, workspace-relative paths, or discoverable through
+an explicitly configured `env.PATH`. Environments are not inherited. No provider
+credentials are copied. Keep dependency paths focused; dependency inventory is
+limited to 512 files. Relative paths resolve beneath the selected workspace.
+
+Without a project configuration, the runtime discovers Python suites, root Cargo tests, and npm `test`, `typecheck`, `lint` and
+`build` scripts. Discovery reads manifests and paths without importing project
+code or executing commands. Root `test_*.py` suites and `tests/`, `test/` and
+`core/tests/` directories are inspected with bounded static reads. Top-level
+test functions, pytest imports and non-unittest test classes select `python -m pytest`; unittest-only suites keep the stdlib runner. Mixed suites use pytest,
+which also collects unittest cases. Missing pytest is an environment failure
+reported by the approved command; discovery does not install it or substitute
+an empty unittest run. Root pytest discovery retains moved tests and conftest/
+pytest configuration as revision dependencies. For custom commands, monorepos and
+required environment settings, use explicit project configuration.
+
+If no checks are found in a Python project, the application captures a fixed
+`python-tests` command before inference:
+
+```text
+<project Python> -m unittest discover -s . -p test_*.py -q
+```
+
+This ID appears in `bootstrap_checks`: it is a runner for tests that Coder must
+create, not existing coverage. Architect/Tester propose behavioral regressions
+in root `test_*.py` files and include those files in the write scope. This avoids
+requiring a test directory or another dependency. The runner still requires
+native process approval. `baseline_check_ids` identifies checks with an available
+baseline. For a bootstrap runner with no root test files, coding tasks inspect
+source and create the requested change and regressions first; an empty bootstrap
+baseline proposal receives native no-change feedback before command preparation
+or approval. Once regression files exist, a baseline can run. Explicit diagnostic
+requests may still measure an empty suite; zero tests never verify a code change.
+Final verification cannot pass until actual tests run successfully. Other discovered checks and
+explicit configuration take precedence; the model cannot replace this command.
+Discovery does not import application code or install dependencies.
+
+Automatic Python checks prefer the project's `.venv` interpreter, then the
+active Python environment. When the Rust CLI loads a virtual environment's
+packages into embedded CPython, checks also use that environment's interpreter
+before falling back to bare runtime Python or PATH lookup. Selection reads
+executable paths and `pyvenv.cfg`; it runs no discovery commands and does not
+install missing dependencies. A project-specific environment or explicit check
+configuration remains the way to select the project's own dependencies.
+The Rust CLI embeds CPython, so `sys.executable`
+can name `proto-cli`; that host binary is excluded. Interpreter symlink spelling
+is retained to preserve virtual environments. Check argv and the explicit
+environment are still captured before inference and reviewed through native
+process approval. Coding evaluation scripts use the same interpreter selection.
+
+After editing or starting final checks, an explicit answer such as "don't run
+it, I'll do it" to a verification question stops execution immediately. The
+application reports `unverified`, verification is `deferred`, and no new model
+call or repair is needed to honor the handoff. Applied file receipts and previous
+failed checks remain in the report; `verified` and `satisfied` stay false.
+Uncertain effects, denied actions and stale revisions still take precedence.
+
+If no check can be configured, an empty plan may still scope approved edits.
+Such code changes remain `unverified` and `incomplete` at completion. An explicit
+`.protoagent/project.json` with `checks: []` disables automatic discovery and
+bootstrap selection. Configure a real check outside the run for verified work.
+
+## Baseline, editing and final verification
+
+1. Inspect source and choose criteria/check IDs.
+2. For `baseline_check_ids`, call `run_check(check_id, phase="baseline")` to reproduce existing behavior.
+   Baseline failure is evidence and does not close the edit phase.
+3. Perform approved edits. `execute_command` preparation, such as creating a
+   directory, also permits later edits unless it exactly matches a selected
+   repository check (use `run_check(..., phase="baseline")` for that case).
+4. Call `run_check(check_id, phase="verify")` for every selected check.
+   Final verification closes the edit phase for this attempt.
+5. After completed failing final checks, Graph may start at most two repairs.
+   Canceled, denied, timed-out and uncertain effects stop autonomous repair.
+
+### Command preparation and moving tests
+
+`execute_command` accepts an argv array, project-relative `cwd` (default `.`),
+`env` (default empty), a 60-second default timeout and an 8192-byte default output
+limit. Bare programs such as `mkdir` resolve through an explicit `env.PATH` or
+the application's fixed system search path. Without PATH, `python` and `python3`
+use project/runtime interpreter selection. Resolution does not copy PATH or
+credentials into the child: the native preview contains the exact absolute
+executable, directory, environment and limits before approval.
+
+The small local worker interface validates native command preparation before
+dispatch. An unknown executable, nonexistent cwd or invalid limit returns typed
+no-change feedback to ProtoLink's bounded correction loop. There is no child,
+approval or command execution for that rejected request. Policy denial and
+errors after dispatch remain stopping conditions.
+
+For root unittest tests moving into `test/` or `tests/`, inspect the existing
+runner, use separately approved argv calls to create the folder and move the
+files, then have Coder add `__init__.py` and any necessary import changes.
+The frozen root discovery command can then recurse into the package. It is
+not replaced with an arbitrary successful command; zero tests still cannot
+verify the move. Current test files and package markers enter bounded revision
+capture, so a later edit to a moved test invalidates its check. Explicit owner
+check configuration stays authoritative; a runner fixed to another folder may
+need configuration outside the run. Host `mv` has no native file checkpoint or
+automatic rollback; command approval is separate from Coder's file diffs.
+
+Commands have the same approval, cancellation, environment and output limits as
+native ProtoLink execution. `run_check` expands a check ID into its exact frozen
+command before approval; the model does not regenerate argv and environment.
+An unrelated exit-zero command does not count as verification.
+
+## Completion evidence
+
+Run output separates `applied`, `verified` and `criteria_supported`:
+
+- Applied requires an executed native file change at its current revision.
+- Verified requires successful final executions of all selected checks, tied to
+  this run's changed files, read sources and declared check dependencies.
+- Criteria supported means the application's required evidence is satisfied.
+  Passing the configured checks does not prove every requested semantic property.
+
+Code changes without a qualifying verification plan remain incomplete. Explicit documentation-only requests whose writes are
+limited to `.md`, `.rst` and `.txt` files may complete with verification reported
+`unverified`. Baseline results cannot satisfy final verification. Source changes
+after a final check make evidence stale. Dependency coverage is explicit, not a
+snapshot of every resource in the repository.
+
+## Small-model source editing and context
+
+`read_file(path, start_line, end_line)` returns one source span, a full-file SHA-256
+revision, and pagination metadata. Small-profile workers return at most 4000
+characters per read; other workers default to 8192. Coder receives source without
+line-number prefixes so copied old text can match exactly. Explorer and Tester
+retain numbered evidence. Large files can be read in
+spans, up to an 8 MiB file ceiling. A partial long line is marked explicitly.
+
+`edit_file(path, old, new, expected_revision)` replaces exactly one occurrence.
+Ambiguous source, a stale revision or identical `old`/`new` text produces no-change feedback before write
+approval. ProtoLink 0.8.1 corrects execution-time `ToolRejectedError`; preparation
+exceptions otherwise end inference. The adapter therefore prepares a read-only
+validation action for these source-selection errors and raises the typed
+rejection when that action executes. It never prepares a write, freezes the plan
+or creates a recovery record for invalid source. The native inference loop owns
+the correction limit; direct invocation still returns rejection without retrying.
+A valid proposal adds native `filesystem.write` authority and requires its exact
+diff approval, preserving the original preimage and recovery guards. Ordinary
+errors, denied actions and interrupted effects retain their stop behavior.
+
+Coder copies a short unique `old` span literally from `read_file.content`, using
+the returned revision. Successful exact edits also return `source_revision`, the
+SHA-256 digest of the approved afterimage, for the next edit of known source.
+This avoids a read solely to refresh the digest; the next edit still checks the
+live bytes and rejects intervening changes. Native `resource.version` is a
+different recovery identity and must not be passed as `expected_revision`.
+Truncated source is paginated before changing unseen code.
+It preserves other
+source and line endings, then uses native ProtoLink replacement for its diff,
+preimage, approval, cancellation and recovery. New files still use `create_file`;
+whole-file `replace_file` remains available for necessary complete replacements.
+
+Coder's create/replace interface accepts project-relative paths for model input
+and joins them to the selected root before native preparation. Absolute inputs
+retain their spelling. The adapter does not resolve symlinks or remove parent
+traversal; ProtoLink's original root, path and symlink checks still run. The
+approved operation and diff contain the absolute path. This matches the
+project-relative reads and exact-edit interface without adding a file executor.
+
+Per-request admission estimates instructions, tool declarations, agent cards,
+history and evidence together and reserves output space. Older observations are
+evicted as complete messages, preserving native tool exchanges and the current
+task. The runtime record is reinserted. If mandatory input cannot fit, the request
+fails explicitly. These are estimates, not exact provider-token guarantees.
+For small profiles without a known model window, the runtime uses an 8192-token
+application admission cap. Configure the provider's `context_window` when its
+actual limit is known; the fallback is not a measurement of model capacity.
+
+The default architecture is sequential. This release does not claim a measured
+performance advantage over a single agent; use the coding evals to test that
+hypothesis on your selected model.
+
+## Compact protocol for the small profile
+
+The small profile prepares ProtoLink's model-facing protocol through a native
+before-model hook. It keeps a short action-format guide, role instructions,
+agent identity, exact tool input schemas and compact worker cards. Large output
+schemas, repeated examples and long descriptions are omitted from the prompt.
+Native providers continue to receive native tool declarations. Native validation,
+approval, process execution and recovery are unchanged.
+
+Agent cards already appear in the system message, so admission does not count a
+second copy. JSON tool schemas are counted in their prompt text; native schemas
+are counted as the additional provider payload. Integration tests exercise actual
+JSON/native streaming and delegation under an 8192-token admission cap. This is
+mechanical context validation, not a live-model coding quality result.
+
+ProtoLink 0.8.1 also bounds each individual inference loop to ten model actions;
+shared run budgets are separate. Focused jobs can use the default task record and
+Coder's direct reads to avoid redundant planning/status calls. For a project with
+many mandatory commands, a project-owned check script captured as one check ID
+can run the combined validation. The model cannot invent that script or change its
+specification during the run. Larger automatic check stages remain future work.

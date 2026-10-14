@@ -24,8 +24,9 @@ const manuals = [
 
 const runPath = [
   ['Context Loom', 'Collect bounded, source-cited evidence.'],
-  ['Architect', 'Plan the task. Delegate narrow roles.'],
-  ['Explorer / Coder', 'Read the workspace. Prepare a change.'],
+  ['TaskRecord / Architect', 'Keep criteria and checks. Delegate narrow tasks.'],
+  ['Explorer / optional Tester / Coder', 'Read source. Design regressions. Apply exact edits.'],
+  ['Optional MCP', 'Discover one tool schema. Call a model-free broker.'],
   ['Verify & recover', 'Approve real checks. Undo a Coder change.'],
 ];
 
@@ -44,6 +45,7 @@ function TerminalPreview() {
         <Link to="/docs/cli/projects-and-sessions">/project</Link>
         <Link to="/docs/cli/models-and-config">/models</Link>
         <Link to="/docs/core/agents" className={styles.selectedTab}>/agents</Link>
+        <Link to="/docs/core/mcp">/mcp</Link>
         <Link to="/docs/cli/verification-and-recovery">/undo</Link>
       </div>
       <div className={styles.transcript}>
@@ -68,7 +70,7 @@ export default function Home() {
       <main className={styles.workspace}>
         <div className={styles.pathBar}>
           <span><span className={styles.pathRoot}>~/protoagent</span> / docs</span>
-          <span className={styles.version}>v0.2.3 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
+          <span className={styles.version}>v0.3.0 <span aria-hidden="true">/</span> OPERATOR MANUAL</span>
         </div>
         <section className={styles.hero} aria-labelledby="home-title">
           <div className={styles.heroCopy}>

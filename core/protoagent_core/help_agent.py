@@ -12,8 +12,10 @@ from typing import Any
 
 from protolink import Agent, AgentGroup, CapabilityPolicy, RunBudget, RunContext, Task
 
+from .agents.common import QUIET_LOGGER
 from .config import CONFIG_DIR, optional_agent_enabled, visible_config
 from .llm import create_llm_from_config
+from .models import model_startup_problem
 from .prompt_profiles import prompt_profile_status
 from .runtime import _content_to_text, _run_event_summary, _streaming_enabled
 from .runtime_bridge import RuntimeBridge
@@ -32,12 +34,28 @@ Manual:
 - ProtoAgent is a local-first coding-agent console. The Rust CLI/TUI embeds the
   Python core through PyO3. ProtoLink is the agent runtime engine.
 - Main fullscreen UI: `proto-cli start`, `proto-cli tui`, or `proto-cli cli`.
+- The TUI and static `/help` work without a running LLM. Coding and
+  `/help QUESTION` require the selected model. For an unavailable Ollama server,
+  start `ollama serve`, ensure the chosen model is installed, then retry.
+  `/config` shows the URL; `/model` changes the selection. Setup errors stay
+  inline; `/trace` shows captured diagnostics. A configured model is not proof
+  that its server is reachable. Model discovery uses metadata, not inference.
+- Ctrl-L redraws the UI. Wheel/PageUp/PageDown and resize work during replies;
+  Ctrl-End returns to live output. Esc/Ctrl-C dismisses model discovery or
+  `/check`; an already-started read-only probe may finish in the background.
+  Small windows show a resize hint and retain the draft and conversation.
 - One-shot task: `proto-cli run "task"`.
 - The TUI streams answers under AGENT / architect or AGENT / guide with a
   steady mint cursor on the text background and animated thinking dots. Bold,
   italic, headings and highlighted inline/fenced code render while streaming;
   saved answers retain their original Markdown. JSON-action wrappers stay hidden.
-  Runtime activity appears only in the bottom status area; /trace shows
+  This includes native-capable models sending tool calls as JSON text. Actual
+  calls appear as muted activity; /trace keeps their full arguments. Requested
+  JSON answer data is preserved. A tool selection clears provisional narration.
+  Before answer text arrives, one muted line in the response shows current work
+  such as file reads, coding, approvals or checks. New activity replaces it;
+  streaming, completion and failure remove it. It is not saved in the answer.
+  Runtime activity also appears in the bottom status area; /trace shows
   detailed events and worker output. Empty input has a dim keyboard-hint
   placeholder and a slow-blinking cursor. Two muted horizontal borders frame the
   input, which expands upward for up to three visible lines. Slash-command
@@ -45,6 +63,21 @@ Manual:
   Final task status determines completion. Guide also streams via /help QUESTION.
   `PROTOAGENT_STREAM=0` hides live previews without changing execution.
   Ctrl-C in shell mode requests native cancellation and waits for cleanup.
+- Architect can call ProtoLink's native ask_user tool for missing requirements
+  or preferences and continue the same task with your answer. In the question
+  overlay, type any answer or press Tab to use a suggestion, then Enter to send.
+  No suggestion is selected by default. Esc skips the question; Ctrl-C cancels
+  the run. PageUp/PageDown scroll long questions in the TUI. A question waits at
+  most 300 seconds and is also bounded by the run's remaining runtime budget.
+  Answers are limited to 4096 characters. A headless/noninteractive frontend
+  declines rather than inventing an answer. Questions and answers appear in the
+  native trace; do not supply secrets. Feedback never grants execution approval.
+  This is live continuation, not restartable execution after closing the app.
+  After edits, answer a verification question with "don't run it, I'll do it" or
+  "I'll verify it myself; stop here" to stop without another model call or repair.
+  Applied files remain, the application status is unverified and verification is
+  deferred to you. A previous failed check remains failed in the native evidence;
+  this does not mark the task satisfied. Uncertain effects still need inspection.
 - In the TUI, type a normal message to run a task. Use `/run <task>` to force a
   task command. Enter submits; Ctrl-J adds a newline. Shift/Alt-Enter adds a
   newline when the terminal reports the modifier. Bracketed paste inserts
@@ -59,17 +92,59 @@ Manual:
   Recovery needs no model, preserves original bytes/mode, and refuses changed
   native revisions. Older checkpoints can conflict after a later restoration.
   Legacy records are inspection-only; they cannot be natively restored.
+- `/approvals` opens the project approval picker. `/approvals ask` asks for each
+  file edit and command (default); `/approvals edits` auto-accepts file edits but
+  asks before commands; `/approvals auto` auto-accepts both edits and commands.
+  Auto commands use normal host permissions. `/approvals status` reports the
+  mode; shell equivalents are `proto-cli approvals [ask|edits|auto|status]`.
+  Preferences are saved per canonical project path, apply to subsequent runs,
+  and appear in the TUI status/config. MCP connections/calls and file restoration
+  always ask. Native policies, revisions, budgets and recovery still apply.
+  Auto-accept does not disable verification or mark failed checks passed.
+- Write runs end with a deterministic applied-file summary and line counts.
+  The Edits card uses green additions, red removals, bold literal file names and
+  a muted /diff hint. Verification is one line; command logs stay in /trace.
+  Missing Python runners/external modules at final checking finish with unavailable
+  verification, retaining applied edits unverified. No installation question,
+  automatic setup or code repair is triggered for that setup error. Existing
+  local-module import failures and genuine regressions retain bounded repair;
+  cancellation, denial, stale revisions and uncertainty still take precedence.
+  `/diff` reviews the combined applied diff; `/diff raw` prints it. Incremental
+  edits to one file combine from this run's first preimage to last applied
+  snapshot, excluding denied/unexecuted proposals and pre-existing changes.
+  `/diff proposed` separately shows approval previews, possibly unapplied.
+  Partial changes remain reviewable after failure or manual verification handoff.
+  External changes and uncertain effects are marked. Binary/oversized files get
+  a summary; process/MCP effects outside native file tools are not included.
 - Verifier runs test/build/lint argv through ProtoLink execute_command, with
   process.execute approval of argv, absolute cwd, explicit env and limits.
-  Use V to inspect the native JSON preview. No environment is inherited.
+  V views details or a file diff and does not approve execution. Y explicitly
+  runs a command or applies a file change; N/Esc denies from the approval screen.
+  Inside a review, Y/N decides and Enter/Esc returns without deciding. Native
+  expiry/cancellation closes approval and review modals automatically. Command
+  approvals have command details; Coder proposals have separate file diffs.
+  Baseline measures existing behavior; verification checks edited/current files.
+  No environment is inherited.
   Commands run on the host without sandbox isolation and may write files or
   use the network. The ceilings are 600 seconds and 32 KiB combined output.
+  execute_command accepts project-relative cwd (default '.') and env (default
+  empty), with defaults of 60 seconds and 8192 output bytes. Bare programs resolve
+  through explicit env.PATH or a fixed application search path; python/python3
+  prefer project/runtime Python without PATH. The preview shows exact absolute
+  paths. No parent environment is inherited. In the small local interface,
+  preparation mistakes produce no-change correction feedback before dispatch.
+  To move root unittest tests into test/ or tests/, use approved mkdir/mv commands
+  and ask Coder for __init__.py and necessary imports, retaining the frozen runner.
+  Moves are host commands, with no automatic file recovery. Zero tests never verifies.
 - Completion requires executed native changes and current resource revisions;
   approval or preview alone cannot prove execution. Checks report passed,
   failed, stale or unverified. Graph permits at most two repairs after completed
   nonzero checks. Edits precede checks within each attempt; denial, timeouts,
   stale evidence and uncertain effects stop repairs.
-- Recoverable file tools require POSIX, absolute project paths without symlinks
+- Coder accepts project-relative or absolute file paths. Relative create/replace
+  paths are joined to the selected project before native preparation; native
+  traversal, symlink and root restrictions still apply. Approved paths are absolute.
+  Recoverable file tools require POSIX, project paths without symlinks
   and existing parent directories. New files default to mode 0600. Directory
   creation needs an approved host command and a later edit run.
 - `/model` opens the provider/model picker. `/models` opens model inventory.
@@ -78,7 +153,7 @@ Manual:
   the configuration in the shell. Both are read-only, not configuration editors.
   Use `/model` to select a model, `/key PROVIDER` to store a key,
   `/context window 16k` for Ollama context, and `/agents profile MODE` or
-  `/agents scout on|off` for agent settings. Never suggest a nonexistent
+  `/agents tester|scout|mcp on|off` for agent settings. Never suggest a nonexistent
   `config set` command. Paths below use the configured directory when overridden.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
   or OpenAI-compatible providers. From the shell, use `proto-cli key openai`.
@@ -100,11 +175,33 @@ Manual:
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
 - `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  RunContract, stateful Architect, stateless Explorer/Coder/Verifier workers, optional
+  TaskRecord and RunContract, stateful Architect, task-local Explorer/Tester/Coder workers, tool-only Verifier, optional
   Scout, policy gate, completion guard, and current prompt profile.
+- Each turn exposes only the workers its original request needs. Greetings and
+  thanks use Architect alone, with no project scan, tests, tools or questions.
+  Repository questions use read-only evidence; explicit verification adds
+  Verifier; editing requests enable the coding workflow. Skipped questions never
+  invent requirements. Feedback cannot expand the original native permission
+  ceilings. The agents panel shows the available catalog, not mandatory workers
+  for every turn. Read-only MCP calls require owner-declared read_only_tools.
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
+- `/agents tester on|off` toggles optional test design (default on). Architect
+  defines criteria and Coder adds regressions when it is off; Verifier remains
+  required. Shell: `proto-cli agents tester on|off`.
+  Architect, Explorer, Coder and Verifier cannot be disabled. Tester, Scout and
+  MCP settings persist user-wide and apply to the next run; a running task keeps
+  its original settings. Use `/agents` to inspect their current ON/OFF states.
+- `/mcp` shows model-free MCP setup/status. `/mcp add NAME FILE.json` imports a
+  stdio, SSE or Streamable HTTP server with explicit allow_tools. `/mcp on|off`
+  toggles the optional model-free broker (default off). `/agents mcp on|off` and
+  `proto-cli agents mcp on|off` toggle the same setting. `/mcp test NAME` discovers
+  only; `/mcp tools NAME TOOL` reads one schema. Both explicitly connect and never
+  invoke a server tool. `/mcp remove NAME` removes configuration. Shell equivalents
+  start with `proto-cli mcp`. Broker calls require approval, have no infer loop
+  and cannot certify workspace checks. Workers request external evidence through
+  Architect. Secrets for HTTP headers use headers_env environment references.
 - Scout exposes ProtoLink's first-party `web_search` and `fetch_url`
   tools under the explicit `network.read` policy. Brave search is the default
   and needs `BRAVE_SEARCH_API_KEY`; DuckDuckGo is keyless best-effort search,
@@ -155,12 +252,142 @@ Manual:
   `PROTOAGENT_RUN_MAX_TOOL_CALLS`, `PROTOAGENT_RUN_MAX_SECONDS`,
   `PROTOAGENT_RUN_MAX_INPUT_TOKENS`, `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS`,
   `PROTOAGENT_CONTEXT_CHARS`, and `PROTOAGENT_OLLAMA_NUM_CTX`.
+- The coding harness defaults to owned local ProtoLink children: no Registry
+  server or loopback sockets. One child runs at a time, nesting depth is one,
+  and PROTOAGENT_MAX_CHILDREN caps children per attempt (default 32).
+  Children share the workflow budget and satisfy ancestor policies. Explicit
+  PROTOAGENT_AGENT_TRANSPORT=sse|runtime|http retains the transport mesh.
+- Native ContextPolicy and before-model hooks reserve output space, retain
+  the runtime task record and make large results retrievable in small pages.
+  Context estimates do not establish the provider's exact token limit.
+- Ollama tool calling defaults to auto: advertised tools capability enables
+  ProtoLink's native provider tool channel; unavailable metadata keeps the JSON
+  action fallback. providers.ollama.tool_calling accepts auto, native or json;
+  PROTOAGENT_OLLAMA_TOOL_CALLING supplies the mode when config does not set it.
+  ProtoLink owns authenticated metadata discovery, its five-minute cache and
+  task-local mode selection. Other providers retain adapter defaults unless
+  providers.PROVIDER.tool_calling is explicitly configured.
+  For small-profile Gemma 4, auto selects ProtoLink's JSON action protocol because
+  advertised native support can return narration/channel/action text without a
+  structured call. Explicit native/json settings win. The same engine validates
+  and dispatches actions; no new agent or executor is added.
+  Small-profile Ollama requests bound generation to 4096 tokens by default;
+  small Gemma 4 variants default to think=false. Explicit model_params settings
+  win, including max_tokens/num_predict and think; model sampling is preserved.
+  Ollama's token-repeat abort is a generation failure, separate from worker
+  turn limits. Incomplete streamed tool proposals are discarded, never executed.
+  Recognizable malformed action envelopes receive native parse correction;
+  explanatory prose and explicit final.content remain application data.
+  /trace shows actual execution receipts, rejections and correction exhaustion.
+- If a model stops before executing edits, the final answer says no files changed.
+  Required checks that were never executed are labeled not run, not failed tests.
+  A completed command missing a Python runner/external module ends as unavailable,
+  with its original exit status kept in the trace. It never counts as a passed check.
+- Python create/replace/exact edits reject introduced syntax errors before write
+  approval via native no-change feedback. This catches literal double-escaped
+  newline code without silently unescaping anything or running/importing source.
+  Pre-existing malformed Python can still be repaired incrementally. Syntax
+  validation does not prove correct imports, names or behavior; checks still matter.
+- Invalid plans, stale/ambiguous edit proposals and invalid check requests use
+  native no-change rejection feedback. Correct them from details/suggestion in
+  the same run. Verifier/Scout/MCP accept tool calls, not inference; ProtoLink
+  validates advertised worker capabilities before dispatch.
+  Coder copies short unique old spans literally from read_file.content. Stale
+  revisions, non-unique/missing matches and identical old/new text prepare only read validation feedback;
+  the native inference loop can correct them without a file approval. Valid edits
+  still require native filesystem.write authorization and exact diff approval.
+  Successful exact edits return source_revision for the next edit of known
+  source. Native resource.version is a different recovery identity, not the
+  expected_revision for edit_file. Reread missing source or a rejected selection.
+  Each native inference has a ten-turn limit separate from the shared run budget.
+  The harness stops Coder before the tenth provider call in each work window.
+  Fresh native writes with current revisions permit up to three windows within
+  the same assignment, scope, history and aggregate budget (at most 27 calls).
+  /trace records worker.continuing; approvals and applied edits are not replayed.
+  PROTOAGENT_CODER_MAX_WINDOWS lowers this bound, clamped to 1-3, default three.
+  Without new writes in the current window, earlier edits cannot justify another.
+  Exhaustion reports needs_context/worker_turn_limit for progressing partial work;
+  a stalled window reports blocked/worker_no_progress, retaining earlier edits.
+  An exhausted partial assignment returns directly to the native Graph before
+  another Architect model request; it does not ask whether to continue an already
+  requested task. Up to two qualifying Graph continuations preserve the frozen
+  plan/edit phase/shared budget. /trace records workflow.work_yielded.
+  No-progress handoffs, stale evidence, native failures/denials/uncertainty and
+  manual verification stops do not qualify. /trace records workflow.continuing.
+  A completed failing final check yields before another Architect model request.
+  The native Graph alone can open a new edit phase, with at most two repairs;
+  /trace records workflow.repair.requested. Missing dependencies can still be
+  deferred to manual verification through ask_user in that repair attempt.
+  An unresolved handoff prevents completion. Native failures retain their stop behavior and show applied
+  paths; inspect /diff, current files and /trace before continuing.
+  Check discovery selects pytest for function-style/mixed Python suites and
+  unittest for unittest-only suites through bounded static reads, not imports.
+  Missing pytest is an environment error; it is never silently replaced with an
+  empty unittest run or installed automatically. Project check configuration wins.
+  providers.PROVIDER.max_tool_corrections sets the native correction allowance
+  (default two per inference), shared by unknown tools, schemas, application
+  rejections and delegation mistakes. Success does not reset it; all model calls
+  and actual tool invocations consume the existing budgets. There is no extra
+  retry agent. Denials, execution failures and uncertain effects are terminal.
+- Optional provider fallback_models in config.json lists at most two same-provider
+  models. Empty/absent means off. ProtoLink RoutedLLM falls back on eligible
+  transient requests before exposed output; it never replays tools or switches
+  providers automatically. There is no dedicated fallback setup command.
+- `proto-cli eval harness [--json]` runs four offline native integration samples
+  using scripted actions and disposable read-only fixtures, with no live model.
+  It measures engine contracts. `eval coding --live` measures coding outcomes.
+- ProtoLink durable execution, RunManager, Docker execution and additional
+  presets are engine capabilities; the current coding Graph has no restart/resume
+  or container integration. Saved reports and file restoration are separate.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
-  and builds context as a stateless worker; Coder prepares approval-gated file
+  and builds context as a stateless worker; Tester designs regressions read-only;
+  Coder reads bounded source and prepares revision-checked, approval-gated file
   changes as a stateless worker; Verifier executes approved checks without an
   LLM; optional Scout exposes bounded public-web
   tools without another model loop. Guide is separate and only answers help
   questions.
+- Code changes require all selected repository checks captured before execution.
+- Manual project inspection needs no model: /ls [PATH] lists one folder including
+  hidden files; /browse or /files navigates folders with filtering and Enter to
+  open files; /open FILE uses the scrollable read-only viewer. /open without a
+  path opens the file browser. /project selects the workspace.
+  /cat FILE prints a bounded text preview in the transcript. Shell equivalents:
+  proto-cli ls, browse, open and cat. Paths are project-relative or absolute
+  inside the selected project; quote paths with spaces. Viewing does not send
+  source to an LLM; @file tags add source to a task. The viewer loads at most
+  1 MiB, cat shows at most 32768 characters, and each directory list is capped
+  at 2000 entries. Binary/non-UTF8 files show an error; previews identify truncation.
+  Viewer controls: Up/Down, PgUp/PgDn, Home/End, Left/Right pan, Esc or q back.
+- Task planning exposes available_check_ids and bootstrap_checks. plan_task can
+  omit check_ids or use an empty list for code to retain defaults; invalid selections return corrective feedback
+  and leave the plan unchanged. Python projects with no discovered/configured
+  checks receive a predefined python-tests unittest runner. Coder adds focused
+  root test_*.py regressions; a zero-test run cannot verify changes. A
+  narrowed bootstrap coding scopes must include a root test_*.py file before
+  the plan is accepted. Documentation-only plans can select no checks. Owner
+  project check configuration takes precedence, including an empty checks list.
+  baseline_check_ids lists checks with an available baseline. For a bootstrap
+  runner with no test files, inspect the requested source and create the change
+  and regressions first; do not request an empty baseline command approval.
+  Automatic Python checks prefer the project .venv, then active/runtime Python,
+  including the venv whose packages the embedded CLI loads, before bare Python;
+  the embedding CLI executable is never used as the Python command.
+  worker_packet prepares context for an exact explorer/coder/tester role; the
+  Architect must then delegate inference to execute that worker.
+  Small-profile owned local runs instead offer direct typed read_file,
+  list_directory, search_regex, coder(task), optional tester(task), and run_check
+  calls. coder(task) actually runs Coder, so no separate packet step is needed.
+  Verifier still owns commands; Coder returns after edits and Architect verifies.
+  These calls use native ProtoLink child supervision, inherited policies,
+  approvals and shared budgets. Enabled Scout/MCP operations use the same direct
+  surface; disabled agents expose no route. Other profiles/transports retain
+  normal native worker delegation. /agents shows the profile's call surface.
+  A project with no usable runner can receive approved edits, but remains
+  unverified/incomplete. There is no automatic dependency installation.
+  Configure unusual checks in .protoagent/project.json. run_check baseline permits
+  later editing; final verify closes the edit phase. Documentation-only changes
+  can complete unverified. eval coding --plan shows disposable same-model deck and
+  single-agent exercises; --live runs them on the host with narrow fixture approvals.
 """
 
 
@@ -210,6 +437,10 @@ def _settings_context(config: dict[str, Any]) -> str:
     lines.append(
         f"- Optional Scout: {'enabled' if optional_agent_enabled('scout', config) else 'disabled'}"
     )
+    for name in ("tester", "mcp"):
+        lines.append(
+            f"- Optional {name}: {'enabled' if optional_agent_enabled(name, config) else 'disabled'}"
+        )
     label = str(active.get("label") or "")
     if label and label != provider:
         lines.append(f"- Provider label: {label}")
@@ -277,8 +508,40 @@ def answer_help_question(question: str, progress_path: str | None = None) -> dic
 
 
 async def _answer_help_question(question: str, progress_path: str | None = None) -> dict[str, Any]:
-    started = time.monotonic()
     bridge = RuntimeBridge(progress_path)
+    started = time.monotonic()
+    try:
+        with bridge.capture_console():
+            if progress_path and (problem := model_startup_problem()):
+                return {
+                    **problem,
+                    "agent": "guide",
+                    "responder": "guide",
+                    "elapsed_ms": round((time.monotonic() - started) * 1000),
+                }
+            return await _run_help_question(question, bridge)
+    except Exception as exc:
+        if not progress_path:
+            raise
+        detail = f"Guide failed: {exc}"
+        bridge.emit(detail)
+        return bridge.redaction.redact(
+            {
+                "agent": "guide",
+                "responder": "guide",
+                "status": "failed",
+                "answer": "Guide could not answer. Check /config and /check, then retry. Static /help remains available; /trace shows diagnostics.",
+                "warning": str(exc),
+                "events": [detail],
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+            }
+        )
+    finally:
+        bridge.cleanup()
+
+
+async def _run_help_question(question: str, bridge: RuntimeBridge) -> dict[str, Any]:
+    started = time.monotonic()
     config = visible_config()
     provider = str(config.get("active_provider", "ollama"))
     active = config.get("providers", {}).get(provider, {})
@@ -318,6 +581,7 @@ async def _answer_help_question(question: str, progress_path: str | None = None)
         state=[],
         policy=CapabilityPolicy({}, default_effect="deny"),
         expose_chat=False,
+        logger=QUIET_LOGGER,
         verbosity=0,
     )
     task = Task.create_infer(prompt=bridge.redaction.redact(_build_help_prompt(question, config)))

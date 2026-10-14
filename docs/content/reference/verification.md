@@ -10,9 +10,12 @@ Use this page before publishing changes.
 Style, lint, and type-check the Python surface:
 
 ```bash
+python -m pip install -r requirements-dev.txt
 ruff format --check .
 ruff check .
 ty check --extra-search-path core
+python -m pip check
+python -m build core
 ```
 
 Ty is currently scoped to the core runtime and the CLI compatibility shim in the
@@ -50,6 +53,9 @@ cargo fmt --manifest-path cli/Cargo.toml -- --check
 cargo clippy --locked --manifest-path cli/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path cli/Cargo.toml
 cargo check --locked --manifest-path cli/Cargo.toml
+cargo build --release --locked --manifest-path cli/Cargo.toml
+cargo build --locked --manifest-path cli/Cargo.toml
+PROTOAGENT_TEST_CLI="$PWD/cli/target/debug/proto-cli" .venv/bin/python cli/tests/tui_smoke.py
 ```
 
 If formatting or Clippy are missing from a local Rust toolchain, install them
@@ -83,14 +89,19 @@ Prompt-profile eval smoke:
 cargo run --locked --manifest-path cli/Cargo.toml -- eval profiles --limit 3
 ```
 
-Use `--live` only when a model is configured. Live evals auto-deny workspace
-write approvals so Coder behavior can be measured without applying changes.
+Use `--live` only when a model is configured. Routing evals (`eval profiles`)
+auto-deny writes; coding evals (`eval coding`) use disposable fixtures and narrowly
+approve fixture edits and their exact test command. They execute on the host.
+
+```bash
+cargo run --locked --manifest-path cli/Cargo.toml -- eval coding --plan --json
+```
 
 ## Docusaurus Docs
 
 ```bash
 cd docs
-npm install
+npm ci
 npm run build
 ```
 

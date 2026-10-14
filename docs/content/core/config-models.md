@@ -34,6 +34,14 @@ Architect, Explorer, and Coder. Valid values are `auto`, `small`, `medium`,
 such as 14B/27B resolve to `medium`; 30B+ or `large` model names resolve to
 `large`.
 
+Project approval preferences live under `approval_modes`, a map from canonical
+absolute project paths to `edits` or `auto`. Missing or invalid values resolve
+to `ask`. `configure_approvals(value, workspace)` validates and saves a choice;
+`approval_mode(workspace)` reads it. Selecting `ask` removes that project's
+override. Run setup freezes the preference so later configuration changes do
+not change a live run. This private setting is not a model tool or project file.
+See [approval modes and review](../cli/safety-tracing.md).
+
 Optional agents live under a separate top-level key:
 
 ```json
@@ -51,6 +59,32 @@ Optional agents live under a separate top-level key:
 those helpers through `get_agent_settings()` and
 `configure_optional_agent()`. Scout is not constructed or registered while
 disabled.
+
+## Explicit model fallback
+
+Provider settings may include `fallback_models`, with at most two distinct
+same-provider names. This advanced setting is edited in the existing
+`~/.protoagent/config.json`; no setup command is added:
+
+```json
+{
+  "providers": {
+    "ollama": {
+      "model": "your-selected-small-model",
+      "fallback_models": ["your-installed-backup-model"]
+    }
+  }
+}
+```
+
+An absent or empty list disables routing. The selected model remains primary.
+ProtoLink's `RoutedLLM` uses the portable JSON action protocol, tries each configured
+candidate once per eligible request failure, and charges every attempt to the
+shared budget. Exposed stream content, validation/policy errors and authentication
+failures prevent fallback. Completed tools are never repeated. All candidates use
+the same provider endpoint, credentials and configured context window; no cloud
+provider or stronger model is selected implicitly. Ensure local backups are installed.
+Routing changes the request contract, so record it when comparing eval results.
 
 ## Provider Aliases
 
@@ -95,8 +129,8 @@ hint, key metadata, and normalized model records.
 
 Validation strategy:
 
-1. Try ProtoLink validation through the configured LLM when possible.
-2. Fall back to provider model-list endpoint.
+1. Use the provider model-list endpoint without constructing an LLM or calling inference.
+2. Leave unsupported or inconclusive authentication checks unverified.
 3. Cache valid results longer than uncertain results.
 4. Mark a provider as recently valid after a successful live run.
 
@@ -108,6 +142,13 @@ Cache TTLs:
 | Invalid or unverified | 30 seconds |
 
 The cache key hashes the API key so raw secrets are not stored in memory keys.
+
+Model inventory probes run in a bounded pool, preserving provider order. CLI
+requests also perform a short selected-model readiness check before indexing:
+missing selection, local GGUF file, local server or Ollama model is reported
+inline. This check does not run for direct library callers without a frontend
+progress bridge. Cloud connectivity is determined by the actual native request.
+See the [TUI guide](../cli/tui.md) for offline behavior and probe timeouts.
 
 ## LLM Construction
 
@@ -127,6 +168,31 @@ model_params["num_ctx"] = ollama_context_window(cfg)
 The same value is written into `LLMModelProfile.context_window`, so request
 parameters and UI metrics do not drift apart.
 
+For the small profile, Ollama requests also default to `num_predict=4096`.
+Small Gemma 4 variants default to `think=false`; user-specified values, including
+the `max_tokens` alias, remain authoritative. Other profiles keep engine defaults.
+Model-recommended sampling is preserved. ProtoLink puts `think` at the request
+level and `num_predict` in generation options; neither changes the action protocol
+or grants execution authority. Generation controls reduce unnecessary output,
+but are not a guarantee against a model or runner error.
+
+Ollama receives `tool_calling="auto"` by default, except automatic small-profile
+Gemma 4 selection uses the engine's `json` protocol. An advertised tool capability
+can coexist with leaked narration/channel/action text; JSON action acquisition
+lets the existing engine parse and validate one action rather than treating
+that output as an ordinary native final answer. Explicit `native` or `json`
+configuration remains authoritative. No application action parser or dispatcher
+is added. For other automatic models, ProtoLink owns the
+authenticated `/api/show` request, five-minute capability cache and task-local
+protocol choice; missing/unsupported metadata selects JSON. Optional
+`providers.ollama.tool_calling` selects `auto` (default), `native` or `json`;
+`PROTOAGENT_OLLAMA_TOOL_CALLING` supplies the mode when the config field is absent.
+Both channels use the engine's typed action validation and dispatch.
+Other adapters retain engine defaults unless `providers.PROVIDER.tool_calling`
+is explicitly configured. `providers.PROVIDER.max_tool_corrections` forwards the
+native runtime allowance (default two per inference), including to RoutedLLM's
+outer loop. Neither setting is sent as a generation parameter.
+
 ## ProtoLink Readiness
 
 `validate_protolink()` checks that the installed ProtoLink exposes the runtime
@@ -144,6 +210,7 @@ features ProtoAgent expects:
 | `logging_ready` | the shared no-output `QuietLogger` exists for embedded agent runs. |
 | `auth_ready` | `APIKeyAuth` plus agent and HTTP transport credential hooks exist. |
 | `transport_ready` | shared transport configuration, limits, capabilities, health, request context, and metrics APIs exist. |
+| `action_validation_ready` | native rejection/limit errors, tool-calling policy/resolution/refresh APIs and inference-support metadata exist. |
 | `web_tools_ready` | ProtoLink's `web_search` and `fetch_url` factories return first-party `network.read` tools. |
 
 `agent_ready` is true only when all required baseline runtime capabilities are

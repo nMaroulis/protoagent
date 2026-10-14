@@ -8,6 +8,7 @@ pub(crate) struct ProgressFile {
     path: PathBuf,
     offset: u64,
     seen_approvals: HashSet<String>,
+    seen_questions: HashSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -35,6 +36,7 @@ pub(crate) struct ProgressBatch {
     pub(crate) events: Vec<String>,
     pub(crate) context_samples: Vec<ContextSample>,
     pub(crate) output: Vec<OutputUpdate>,
+    pub(crate) loading_activity: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -127,7 +129,51 @@ pub(crate) struct RuntimeApproval {
     pub(crate) target: String,
     pub(crate) diff: String,
     pub(crate) preview: String,
+    pub(crate) check_id: String,
+    pub(crate) check_phase: String,
+    control_stamp: Option<(std::time::SystemTime, u64)>,
     request: Value,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct RuntimeQuestion {
+    pub(crate) request_id: String,
+    pub(crate) run_id: String,
+    pub(crate) task_id: Option<String>,
+    pub(crate) action_id: String,
+    pub(crate) question: String,
+    pub(crate) options: Vec<String>,
+    pub(crate) max_answer_chars: usize,
+    pub(crate) presentation_id: u64,
+}
+
+impl RuntimeQuestion {
+    fn from_value(value: Value) -> Option<Self> {
+        let question: Self = serde_json::from_value(value).ok()?;
+        if question.request_id.is_empty()
+            || question.run_id.is_empty()
+            || question.action_id.is_empty()
+            || question.question.trim().is_empty()
+            || question.question.chars().count() > 8000
+            || question.options.len() > 10
+            || question
+                .options
+                .iter()
+                .any(|option| option.trim().is_empty() || option.chars().count() > 500)
+            || question.max_answer_chars == 0
+            || question.max_answer_chars > 16384
+        {
+            return None;
+        }
+        Some(question)
+    }
+
+    fn same_request(&self, other: &Self) -> bool {
+        self.request_id == other.request_id
+            && self.run_id == other.run_id
+            && self.task_id == other.task_id
+            && self.action_id == other.action_id
+    }
 }
 
 impl ProgressFile {
@@ -153,11 +199,15 @@ impl ProgressFile {
         let approval_request_path = control_path(&path, "approval-request");
         let approval_decision_path = control_path(&path, "approval-decision");
         let cancel_path = control_path(&path, "cancel");
+        let input_request_path = control_path(&path, "input-request");
+        let input_response_path = control_path(&path, "input-response");
         for candidate in [
             &path,
             &approval_request_path,
             &approval_decision_path,
             &cancel_path,
+            &input_request_path,
+            &input_response_path,
         ] {
             let _ = fs::remove_file(candidate);
         }
@@ -165,6 +215,7 @@ impl ProgressFile {
             path,
             offset: 0,
             seen_approvals: HashSet::new(),
+            seen_questions: HashSet::new(),
         }
     }
 
@@ -210,6 +261,18 @@ impl ProgressFile {
                 break;
             };
             let run_event = value.get("run_event");
+            if let Some(activity) =
+                run_event
+                    .and_then(loading_activity_from_run_event)
+                    .or_else(|| {
+                        value
+                            .get("event")
+                            .and_then(Value::as_str)
+                            .and_then(loading_activity_from_summary)
+                    })
+            {
+                batch.loading_activity = Some(activity);
+            }
             if let Some(output) = value.get("live_output") {
                 if let Ok(update) = serde_json::from_value::<OutputUpdate>(output.clone()) {
                     batch.output.push(update);
@@ -240,9 +303,16 @@ impl ProgressFile {
     }
 
     pub(crate) fn take_approval_request(&mut self) -> Option<RuntimeApproval> {
+        let before_stamp = control_stamp(&self.approval_request_path());
         let text = fs::read_to_string(self.approval_request_path()).ok()?;
         let request = serde_json::from_str::<Value>(&text).ok()?;
-        let approval = RuntimeApproval::from_value(request)?;
+        let mut approval = RuntimeApproval::from_value(request)?;
+        let after_stamp = control_stamp(&self.approval_request_path());
+        approval.control_stamp = if before_stamp == after_stamp {
+            after_stamp
+        } else {
+            None
+        };
         let presentation = format!(
             "{}:{}",
             approval.request_id,
@@ -257,7 +327,14 @@ impl ProgressFile {
         Some(approval)
     }
 
-    pub(crate) fn decide(&self, approval: &RuntimeApproval, approved: bool) -> std::io::Result<()> {
+    pub(crate) fn decide(
+        &self,
+        approval: &RuntimeApproval,
+        approved: bool,
+    ) -> std::io::Result<bool> {
+        if !self.approval_pending(approval) {
+            return Ok(false);
+        }
         let decision = serde_json::json!({
             "approved": approved,
             "request_id": approval.request_id,
@@ -266,7 +343,31 @@ impl ProgressFile {
             "decided_by": "protoagent-user",
             "metadata": {"interface": "rust-cli"}
         });
-        write_json_atomic(&self.approval_decision_path(), &decision)
+        write_json_atomic(&self.approval_decision_path(), &decision)?;
+        Ok(true)
+    }
+
+    pub(crate) fn approval_pending(&self, approval: &RuntimeApproval) -> bool {
+        // Native control files are replaced atomically. Avoid reparsing a large
+        // diff on every input poll while the exact presentation is unchanged.
+        let current_stamp = control_stamp(&self.approval_request_path());
+        if current_stamp.is_none() {
+            return false;
+        }
+        if approval.control_stamp.is_some() && current_stamp == approval.control_stamp {
+            return true;
+        }
+        fs::read_to_string(self.approval_request_path())
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(RuntimeApproval::from_value)
+            .is_some_and(|current| {
+                current.request_id == approval.request_id
+                    && current.run_id == approval.run_id
+                    && current.fingerprint == approval.fingerprint
+                    && current.request.get("presentation_id")
+                        == approval.request.get("presentation_id")
+            })
     }
 
     pub(crate) fn request_cancel(&self, reason: &str) -> std::io::Result<()> {
@@ -276,12 +377,58 @@ impl ProgressFile {
         )
     }
 
+    fn read_question(&self) -> Option<RuntimeQuestion> {
+        let text = fs::read_to_string(self.input_request_path()).ok()?;
+        RuntimeQuestion::from_value(serde_json::from_str(&text).ok()?)
+    }
+
+    pub(crate) fn take_question(&mut self) -> Option<RuntimeQuestion> {
+        let question = self.read_question()?;
+        let presentation = format!("{}:{}", question.request_id, question.presentation_id);
+        self.seen_questions.insert(presentation).then_some(question)
+    }
+
+    pub(crate) fn question_pending(&self, question: &RuntimeQuestion) -> bool {
+        self.read_question()
+            .is_some_and(|current| current.same_request(question))
+    }
+
+    pub(crate) fn answer_question(
+        &self,
+        question: &RuntimeQuestion,
+        answer: Option<&str>,
+    ) -> std::io::Result<()> {
+        if !self.question_pending(question) {
+            return Ok(()); // The native wait expired or was canceled while the UI was open.
+        }
+        if answer.is_some_and(|text| {
+            text.trim().is_empty() || text.chars().count() > question.max_answer_chars
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Answer must be nonblank and within the question limit",
+            ));
+        }
+        write_json_atomic(
+            &self.input_response_path(),
+            &serde_json::json!({
+                "request_id": question.request_id,
+                "run_id": question.run_id,
+                "task_id": question.task_id,
+                "action_id": question.action_id,
+                "answer": answer,
+            }),
+        )
+    }
+
     pub(crate) fn cleanup(&self) {
         for candidate in [
             self.path.clone(),
             self.approval_request_path(),
             self.approval_decision_path(),
             self.cancel_path(),
+            self.input_request_path(),
+            self.input_response_path(),
         ] {
             let _ = fs::remove_file(candidate);
         }
@@ -300,6 +447,14 @@ impl ProgressFile {
 
     fn cancel_path(&self) -> PathBuf {
         control_path(&self.path, "cancel")
+    }
+
+    fn input_request_path(&self) -> PathBuf {
+        control_path(&self.path, "input-request")
+    }
+
+    fn input_response_path(&self) -> PathBuf {
+        control_path(&self.path, "input-response")
     }
 }
 
@@ -427,6 +582,9 @@ impl RuntimeApproval {
             target,
             diff,
             preview,
+            check_id: value_string(metadata, &["check_id"]),
+            check_phase: value_string(metadata, &["check_phase"]),
+            control_stamp: None,
             request,
         })
     }
@@ -445,6 +603,45 @@ impl RuntimeApproval {
             })
             .unwrap_or_default()
     }
+
+    pub(crate) fn is_command(&self) -> bool {
+        self.action_name == "execute_command"
+    }
+
+    pub(crate) fn approval_title(&self) -> &str {
+        match self.check_phase.as_str() {
+            "baseline" => "Run baseline check?",
+            "verify" => "Run verification check?",
+            _ if self.is_command() => "Run command?",
+            _ if !self.diff.is_empty() => "Apply file change?",
+            _ => "Allow action?",
+        }
+    }
+
+    pub(crate) fn purpose(&self) -> &str {
+        match self.check_phase.as_str() {
+            "baseline" => "Measure existing tests before edits; file changes come separately.",
+            "verify" => "Run a check against the current files after editing.",
+            _ if self.is_command() => "Execute the shown command in the project folder.",
+            _ if !self.diff.is_empty() => "Apply the proposed file change shown in the diff.",
+            _ => "Execute the shown action after approval.",
+        }
+    }
+
+    pub(crate) fn approve_label(&self) -> &str {
+        if self.is_command() {
+            "[Y] RUN"
+        } else if !self.diff.is_empty() {
+            "[Y] APPLY"
+        } else {
+            "[Y] ALLOW"
+        }
+    }
+}
+
+fn control_stamp(path: &std::path::Path) -> Option<(std::time::SystemTime, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.modified().ok()?, metadata.len()))
 }
 
 trait EmptyString {
@@ -500,6 +697,23 @@ fn run_event_summary(value: &Value) -> Option<String> {
     let metadata = payload.get("metadata").unwrap_or(&Value::Null);
 
     match (event_type.as_str(), llm_type.as_str()) {
+        ("action.rejected", _) => {
+            let rejection = payload
+                .get("rejection")
+                .or_else(|| metadata.get("rejection"))
+                .unwrap_or(&Value::Null);
+            let reason = value_string(rejection, &["message"]);
+            return Some(if reason.is_empty() {
+                format!("{agent}: Request rejected; nothing changed in that request.")
+            } else {
+                format!("{agent}: Request rejected; nothing changed in that request. {reason}")
+            });
+        }
+        ("tool.correction.exhausted", _) => {
+            return Some(format!(
+                "{agent}: Request correction limit reached; run stopped."
+            ));
+        }
         ("action.started", "agent_call_start") => {
             let target = display_agent(&value_string(metadata, &["agent"]));
             let action = value_string(metadata, &["action"]);
@@ -569,6 +783,13 @@ fn run_event_summary(value: &Value) -> Option<String> {
                 if approved { "approved" } else { "denied" }
             ));
         }
+        ("user_input.requested", _) => return Some(format!("{agent}: Waiting for your answer.")),
+        ("user_input.answered", _) => return Some(format!("{agent}: User answer received.")),
+        ("user_input.declined", _) => return Some(format!("{agent}: User skipped the question.")),
+        ("user_input.timed_out", _) => {
+            return Some(format!("{agent}: Question timed out without an answer."))
+        }
+        ("user_input.canceled", _) => return Some(format!("{agent}: Question canceled.")),
         ("action.policy", _) => {
             let effect = value_string(payload, &["decision", "effect"]);
             if !effect.is_empty() {
@@ -629,6 +850,151 @@ fn run_event_agent(value: &Value) -> String {
         &value_string(value, &["agent_name"])
             .if_empty_then(|| value_string(payload, &["agent_name"]))
             .if_empty_then(|| "ProtoLink".to_string()),
+    )
+}
+
+/// One transient work label, independent of noisy trace/policy bookkeeping.
+fn loading_activity_from_run_event(value: &Value) -> Option<String> {
+    let kind = value.get("type")?.as_str()?;
+    let payload = value.get("payload").unwrap_or(&Value::Null);
+    let metadata = payload.get("metadata").unwrap_or(&Value::Null);
+    let agent = run_event_agent(value);
+    let llm = value_string(payload, &["llm_event_type"]);
+    if kind == "llm.call.started" || (kind == "llm.stream" && llm == "llm_step") {
+        return Some(match agent.as_str() {
+            "Coder" => "Coder: Working on the requested changes...".into(),
+            "Explorer" => "Explorer: Examining the project...".into(),
+            "Tester" => "Tester: Designing regression tests...".into(),
+            "Guide" => "Guide: Preparing your answer...".into(),
+            _ => "Architect: Planning the next step...".into(),
+        });
+    }
+    match kind {
+        "worker.continuing" => return Some("Coder: Continuing the applied changes...".into()),
+        "workflow.work_yielded" | "workflow.continuing" => {
+            return Some("Architect: Focusing on the remaining work...".into())
+        }
+        "workflow.repair.requested" => {
+            return Some("Architect: Reviewing the failed check...".into())
+        }
+        "action.requested" | "action.started" => {
+            let action = payload.get("action").filter(|a| a.is_object());
+            let tool = action
+                .map(|a| {
+                    value_string(a, &["payload", "tool"])
+                        .if_empty_then(|| value_string(a, &["name"]))
+                })
+                .unwrap_or_else(|| {
+                    value_string(metadata, &["tool"])
+                        .if_empty_then(|| value_string(metadata, &["agent"]))
+                });
+            let args = action
+                .and_then(|a| a.get("payload"))
+                .and_then(|p| p.get("args").or_else(|| p.get("arguments")))
+                .or_else(|| metadata.get("args"))
+                .unwrap_or(&Value::Null);
+            let executing = kind == "action.started"
+                && action.is_some_and(|a| value_string(a, &["kind"]) == "tool.call");
+            if executing && tool == "execute_command" {
+                let check = action
+                    .map(|a| value_string(a, &["metadata", "check_id"]))
+                    .unwrap_or_default();
+                if !check.is_empty() {
+                    return Some(format!("Verifier: Running {check}..."));
+                }
+            }
+            return loading_tool_activity(&tool, args, &agent, executing);
+        }
+        "approval.required" => return Some("Waiting for your approval...".into()),
+        "user_input.requested" => return Some("Waiting for your answer...".into()),
+        "user_input.answered" | "user_input.declined" => {
+            return Some("Architect: Continuing with your feedback...".into())
+        }
+        "action.rejected" => return Some(format!("{agent}: Correcting the request...")),
+        "process.finished" => return Some("Verifier: Reviewing the command result...".into()),
+        "verification.deferred" => return Some("Finishing your verification handoff...".into()),
+        "verification.unavailable" => {
+            return Some("Verification unavailable; preparing the edit summary...".into())
+        }
+        "action.failed" | "workflow.blocked" | "tool.correction.exhausted" => {
+            return Some("Preparing the run report...".into())
+        }
+        "task.status"
+            if value.get("final").and_then(Value::as_bool) == Some(true)
+                && agent == "Architect" =>
+        {
+            return Some("Finishing your response...".into())
+        }
+        _ => {}
+    }
+    None
+}
+
+fn loading_tool_activity(tool: &str, args: &Value, agent: &str, executing: bool) -> Option<String> {
+    let path = value_string(args, &["path"]);
+    let file = Path::new(&path)
+        .file_name()
+        .and_then(|p| p.to_str())
+        .unwrap_or("the file");
+    Some(match tool {
+        "read_file" => format!(
+            "{}: Reading {file}...",
+            if matches!(agent, "Coder" | "Tester" | "Explorer") {
+                agent
+            } else {
+                "Explorer"
+            }
+        ),
+        "list_directory" | "list_files" => "Explorer: Browsing project files...".into(),
+        "search_regex" | "search_files" => "Explorer: Searching the project...".into(),
+        "coder" => "Coder: Working on the requested changes...".into(),
+        "tester" => "Tester: Designing regression tests...".into(),
+        "create_file" if executing => format!("Coder: Creating {file}..."),
+        "replace_file" | "edit_file" if executing => format!("Coder: Editing {file}..."),
+        "create_file" | "replace_file" | "edit_file" => {
+            format!("Coder: Preparing changes to {file}...")
+        }
+        "run_check" => {
+            let check = value_string(args, &["check_id"]);
+            format!(
+                "Verifier: Preparing {}...",
+                if check.is_empty() {
+                    "the check"
+                } else {
+                    &check
+                }
+            )
+        }
+        "execute_command" => if executing {
+            "Verifier: Running the approved command..."
+        } else {
+            "Verifier: Preparing the command..."
+        }
+        .into(),
+        "plan_task" | "worker_packet" => "Architect: Preparing the work plan...".into(),
+        "ask_user" => "Architect: Preparing a question for you...".into(),
+        "web_search" | "fetch_url" => "Scout: Looking up external information...".into(),
+        "list_mcp_tools" | "mcp_tool_schema" | "call_mcp_tool" => {
+            "MCP: Working with the external service...".into()
+        }
+        _ => return None,
+    })
+}
+
+fn loading_activity_from_summary(summary: &str) -> Option<String> {
+    Some(
+        if summary.starts_with("CLI accepted") {
+            "Preparing your request..."
+        } else if summary.starts_with("Resolving tagged") {
+            "Loading the files you tagged..."
+        } else if summary.starts_with("Weaving Context Loom") {
+            "Gathering relevant project context..."
+        } else if summary.starts_with("Runtime:") {
+            "Starting the agent runtime..."
+        } else {
+            return None;
+        }
+        .into(),
     )
 }
 
@@ -969,6 +1335,82 @@ fn clip_activity(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn loading_activity_replaces_work_without_being_overwritten_by_bookkeeping() {
+        let mut progress = super::ProgressFile::new("loading-phase");
+        let events = [
+            serde_json::json!({"event":"Weaving Context Loom pack from the active workspace."}),
+            serde_json::json!({"run_event":{"type":"action.started","agent_name":"architect","payload":{"metadata":{"tool":"read_file","args":{"path":"src/server.py"}}}}}),
+            serde_json::json!({"run_event":{"type":"action.policy","agent_name":"architect","payload":{"decision":{"effect":"allow"}}}}),
+        ];
+        std::fs::write(
+            &progress.path,
+            events.iter().map(|e| format!("{e}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let first = progress.read_ui_batch();
+        assert_eq!(
+            first.loading_activity.as_deref(),
+            Some("Explorer: Reading server.py...")
+        );
+        use std::io::Write;
+        let mut output = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&progress.path)
+            .unwrap();
+        writeln!(output, "{}", serde_json::json!({"run_event":{"type":"llm.call.started","agent_name":"coder","payload":{}}})).unwrap();
+        assert_eq!(
+            progress.read_ui_batch().loading_activity.as_deref(),
+            Some("Coder: Working on the requested changes...")
+        );
+        assert!(progress.read_ui_batch().loading_activity.is_none());
+        writeln!(output, "{}", serde_json::json!({"run_event":{"type":"worker.continuing","agent_name":"coder","payload":{"window":2}}})).unwrap();
+        assert_eq!(
+            progress.read_ui_batch().loading_activity.as_deref(),
+            Some("Coder: Continuing the applied changes...")
+        );
+        assert!(progress.read_ui_batch().loading_activity.is_none());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn command_activity_distinguishes_preparation_from_authorized_execution() {
+        let action = serde_json::json!({"kind":"tool.call","name":"execute_command","payload":{"arguments":{}},"metadata":{"check_id":"python-tests"}});
+        let mut event = serde_json::json!({"type":"action.requested","agent_name":"verifier","payload":{"action":action}});
+        assert_eq!(
+            super::loading_activity_from_run_event(&event).as_deref(),
+            Some("Verifier: Preparing the command...")
+        );
+        event["type"] = serde_json::json!("action.started");
+        assert_eq!(
+            super::loading_activity_from_run_event(&event).as_deref(),
+            Some("Verifier: Running python-tests...")
+        );
+    }
+
+    #[test]
+    fn rejection_is_visible_without_claiming_execution_or_retry() {
+        let event = serde_json::json!({
+            "type": "action.rejected", "agent_name": "architect",
+            "payload": {"llm_event_type": "tool_rejected", "metadata": {
+                "tool": "plan_task", "recoverable": true,
+                "rejection": {"message": "Select python-tests", "changes_made": false}
+            }}
+        });
+        let summary = super::run_event_summary(&event).unwrap();
+        assert!(summary.contains("Request rejected"));
+        assert!(summary.contains("nothing changed in that request"));
+        assert!(summary.contains("Select python-tests"));
+        assert!(!summary.contains("returned"));
+        assert!(!summary.contains("failed"));
+        let exhausted = serde_json::json!({
+            "type": "tool.correction.exhausted", "agent_name": "architect"
+        });
+        assert!(super::run_event_summary(&exhausted)
+            .unwrap()
+            .contains("run stopped"));
+    }
+
     #[test]
     fn architect_answer_is_separate_complete_and_replaced_on_a_new_attempt() {
         let mut output = super::LiveOutput::default();
@@ -1396,6 +1838,110 @@ mod tests {
         assert_eq!(decision["fingerprint"], "exact-file-fingerprint");
         assert_eq!(decision["approved"], true);
         assert_eq!(cancellation["reason"], "test cancellation");
+        progress.cleanup();
+    }
+
+    #[test]
+    fn questions_correlate_answers_and_close_when_native_wait_ends() {
+        let mut progress = ProgressFile::new("question-test");
+        let mut request = json!({
+            "request_id": "input_123", "run_id": "run_123", "task_id": "task_123",
+            "action_id": "action_123", "question": "Which format?", "options": ["JSON", "CSV"],
+            "max_answer_chars": 4096, "presentation_id": 0,
+        });
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        let question = progress.take_question().unwrap();
+        assert!(progress.question_pending(&question));
+        assert!(progress.take_question().is_none());
+        progress
+            .answer_question(&question, Some("custom format"))
+            .unwrap();
+        let answer: Value =
+            serde_json::from_slice(&fs::read(progress.input_response_path()).unwrap()).unwrap();
+        for field in ["request_id", "run_id", "task_id", "action_id"] {
+            assert_eq!(answer[field], request[field]);
+        }
+        assert_eq!(answer["answer"], "custom format");
+        assert!(answer.get("approved").is_none());
+        assert!(progress.answer_question(&question, Some(" ")).is_err());
+        assert!(progress
+            .answer_question(&question, Some(&"x".repeat(4097)))
+            .is_err());
+        progress.answer_question(&question, None).unwrap();
+        let declined: Value =
+            serde_json::from_slice(&fs::read(progress.input_response_path()).unwrap()).unwrap();
+        assert!(declined["answer"].is_null());
+        request["presentation_id"] = json!(1);
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(progress.take_question().is_some());
+        fs::remove_file(progress.input_request_path()).unwrap();
+        fs::remove_file(progress.input_response_path()).unwrap();
+        assert!(!progress.question_pending(&question));
+        progress
+            .answer_question(&question, Some("late answer"))
+            .unwrap();
+        assert!(!progress.input_response_path().exists());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn approval_lifetime_tracks_the_exact_presentation_and_drops_late_decisions() {
+        let mut progress = ProgressFile::new("approval-lifetime");
+        let mut request = json!({
+            "request_id": "approval", "run_id": "run", "fingerprint": "fingerprint",
+            "presentation_id": 0,
+            "action": {"name": "execute_command", "capabilities": ["process.execute"],
+                "metadata": {"check_id": "python-tests", "check_phase": "baseline"},
+                "payload": {"arguments": {"argv": ["/python", "-m", "unittest"], "cwd": "/project"}},
+                "artifacts": [{"kind": "preview", "parts": [{"type": "json", "content": {"argv": ["/python", "-m", "unittest"]}}]}]
+            }
+        });
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        let approval = progress.take_approval_request().unwrap();
+        assert!(progress.approval_pending(&approval));
+        assert!(approval.is_command());
+        assert_eq!(approval.approval_title(), "Run baseline check?");
+        assert_eq!(approval.approve_label(), "[Y] RUN");
+        assert_eq!(approval.check_id, "python-tests");
+        assert!(approval.diff.is_empty());
+        assert!(!approval.preview.is_empty());
+        assert!(
+            !progress.approval_decision_path().exists(),
+            "Reading details must not approve"
+        );
+        request["fingerprint"] = json!("different-fingerprint-longer");
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        assert!(!progress.approval_pending(&approval));
+        assert!(!progress.decide(&approval, true).unwrap());
+        assert!(!progress.approval_decision_path().exists());
+        let current = super::RuntimeApproval::from_value(request.clone()).unwrap();
+        assert!(progress.approval_pending(&current));
+        request["presentation_id"] = json!(123);
+        fs::write(progress.approval_request_path(), request.to_string()).unwrap();
+        assert!(!progress.approval_pending(&current));
+        fs::remove_file(progress.approval_request_path()).unwrap();
+        assert!(!progress.approval_pending(&approval));
+        assert!(!progress.decide(&approval, false).unwrap());
+        progress.cleanup();
+    }
+
+    #[test]
+    fn question_lifetime_does_not_match_a_foreign_run_or_action() {
+        let mut progress = ProgressFile::new("stale-question-test");
+        let mut request = json!({
+            "request_id": "input", "run_id": "run", "task_id": "task",
+            "action_id": "action", "question": "Format?", "options": [],
+            "max_answer_chars": 4096, "presentation_id": 0,
+        });
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        let question = progress.take_question().unwrap();
+        request["action_id"] = json!("other action");
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(!progress.question_pending(&question));
+        request["action_id"] = json!("action");
+        request["run_id"] = json!("other run");
+        fs::write(progress.input_request_path(), request.to_string()).unwrap();
+        assert!(!progress.question_pending(&question));
         progress.cleanup();
     }
 }

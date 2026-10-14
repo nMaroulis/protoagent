@@ -1,13 +1,14 @@
 use anyhow::Result;
-use crossterm::event::{read, Event, KeyCode, KeyModifiers};
+use crossterm::event::{poll, read, Event, KeyCode, KeyModifiers};
 use crossterm::style::Color;
-use std::io::{stdout, Write};
+use std::io::Write;
+use std::time::Duration;
 
 use crate::diff::{
     compact_diff_stats, format_file_heading, format_guttered_line, parse_diff, DiffLineKind,
     DiffReview,
 };
-use crate::progress::RuntimeApproval;
+use crate::progress::{ProgressFile, RuntimeApproval};
 
 use super::modal::{draw_modal_backdrop, draw_modal_shadow, draw_modal_sides, modal_title};
 use super::state::TerminalApp;
@@ -54,18 +55,65 @@ pub(super) fn show_diff_modal(
     title: &str,
     diff: &str,
 ) -> Result<()> {
+    show_diff_review(terminal, app, title, diff, None).map(|_| ())
+}
+
+pub(super) fn show_approval_diff(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    approval: &RuntimeApproval,
+    progress: &ProgressFile,
+) -> Result<Option<bool>> {
+    show_diff_review(
+        terminal,
+        app,
+        "File change — Y apply · N deny · Enter/Esc back",
+        &approval.diff,
+        Some((progress, approval)),
+    )
+}
+
+fn show_diff_review(
+    terminal: &mut TerminalSurface,
+    app: &TerminalApp,
+    title: &str,
+    diff: &str,
+    lifetime: Option<(&ProgressFile, &RuntimeApproval)>,
+) -> Result<Option<bool>> {
     let review = parse_diff(diff);
     let mut scroll = 0usize;
+    let mut modal_dimensions = None;
+    let mut dirty = true;
+    let mut max_scroll = 0;
     loop {
-        terminal.render(app, None)?;
-        let max_scroll = draw_diff_modal(title, &review, scroll)?;
-        scroll = scroll.min(max_scroll);
+        if lifetime.is_some_and(|(progress, approval)| !progress.approval_pending(approval)) {
+            return Ok(None);
+        }
+        if dirty || modal_dimensions != Some(size()) {
+            terminal.prepare_modal(app, &mut modal_dimensions)?;
+            max_scroll = draw_diff_modal(title, &review, scroll)?;
+            scroll = scroll.min(max_scroll);
+            dirty = false;
+        }
+        if !poll(Duration::from_millis(super::INPUT_POLL_MS))? {
+            continue;
+        }
         let Event::Key(key) = read()? else {
+            dirty = true;
             continue;
         };
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') | KeyCode::Char('Q') => {
-                return Ok(())
+                return Ok(None)
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') if lifetime.is_some() => return Ok(Some(true)),
+            KeyCode::Char('n') | KeyCode::Char('N') if lifetime.is_some() => {
+                return Ok(Some(false))
+            }
+            KeyCode::Char('c')
+                if lifetime.is_some() && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                return Ok(Some(false))
             }
             KeyCode::Up => scroll = scroll.saturating_sub(1),
             KeyCode::Down => scroll = (scroll + 1).min(max_scroll),
@@ -75,11 +123,15 @@ pub(super) fn show_diff_modal(
             KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => scroll = max_scroll,
             _ => {}
         }
+        dirty = true;
     }
 }
 
 pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(());
+    }
     let modal_width = width
         .saturating_mul(4)
         .saturating_div(5)
@@ -88,7 +140,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
     let modal_height = 14u16.min(height.saturating_sub(4)).max(11);
     let x = width.saturating_sub(modal_width) / 2;
     let y = height.saturating_sub(modal_height) / 2;
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
 
@@ -107,7 +159,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 1,
         modal_width,
-        &modal_title("Policy Approval", modal_width),
+        &modal_title(approval.approval_title(), modal_width),
         black(),
         modal_border(),
         true,
@@ -117,7 +169,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 2,
         modal_width,
-        " Protolink paused this action before execution.",
+        " Waiting for approval. Viewing details does not execute.",
         text(),
         modal_bg(),
         false,
@@ -127,7 +179,19 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 3,
         modal_width,
-        &format!(" Action    : {}", approval.action_name),
+        &format!(
+            " Action    : {}{}",
+            crate::project_files::display_label(&approval.action_name),
+            if approval.check_id.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " · {} ({})",
+                    crate::project_files::display_label(&approval.check_id),
+                    crate::project_files::display_label(&approval.check_phase)
+                )
+            }
+        ),
         muted(),
         modal_bg(),
         false,
@@ -152,12 +216,17 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 5,
         modal_width,
-        &format!(" Target    : {target}"),
+        &format!(
+            " Target    : {}",
+            crate::project_files::display_label(target)
+        ),
         text(),
         modal_bg(),
         false,
     )?;
-    let diff_summary = if approval.diff.trim().is_empty() {
+    let diff_summary = if approval.is_command() {
+        "command details; file changes are reviewed separately".to_string()
+    } else if approval.diff.trim().is_empty() {
         "no diff payload attached".to_string()
     } else {
         compact_diff_stats(&parse_diff(&approval.diff))
@@ -167,7 +236,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + 6,
         modal_width,
-        &format!(" Diff      : {diff_summary}"),
+        &format!(" Review    : {diff_summary}"),
         yellow(),
         modal_bg(),
         true,
@@ -190,10 +259,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         modal_width,
         &format!(
             " Intent    : {}",
-            clip_plain(
-                &approval.description,
-                modal_width.saturating_sub(14) as usize
-            )
+            clip_plain(approval.purpose(), modal_width.saturating_sub(14) as usize)
         ),
         muted(),
         modal_bg(),
@@ -207,7 +273,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         button_x,
         button_y,
         14,
-        "[Y] APPLY",
+        approval.approve_label(),
         black(),
         green(),
     )?;
@@ -218,7 +284,7 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
             button_x,
             button_y,
             18,
-            "[V] NO DIFF",
+            "NO DETAILS",
             muted(),
             surface_bg(),
         )?;
@@ -228,7 +294,11 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
             button_x,
             button_y,
             18,
-            "[V] PREVIEW",
+            if approval.diff.is_empty() {
+                "[V] DETAILS"
+            } else {
+                "[V] DIFF"
+            },
             black(),
             yellow(),
         )?;
@@ -241,18 +311,21 @@ pub(super) fn draw_approval_modal(approval: &RuntimeApproval) -> Result<()> {
         x,
         y + modal_height - 1,
         modal_width,
-        " Esc back denies without applying",
+        " Y approves execution · V only views · N/Esc denies",
         modal_border(),
         modal_bg(),
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(())
 }
 
 fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<usize> {
     let (width, height) = size();
+    if width < 40 || height < 16 {
+        return Ok(scroll);
+    }
     let modal_width = width
         .saturating_mul(9)
         .saturating_div(10)
@@ -272,7 +345,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
     let max_scroll = lines.len().saturating_sub(body_rows);
     let start = scroll.min(max_scroll);
 
-    let mut out = stdout();
+    let mut out = Vec::new();
     draw_modal_backdrop(&mut out, width, height)?;
     draw_modal_shadow(&mut out, x, y, modal_width, modal_height)?;
     write_at(
@@ -381,7 +454,7 @@ fn draw_diff_modal(title: &str, review: &DiffReview, scroll: usize) -> Result<us
         true,
     )?;
     draw_modal_sides(&mut out, x, y, modal_width, modal_height)?;
-    out.flush()?;
+    super::theme::present_overlay(&out)?;
     Ok(max_scroll)
 }
 
@@ -444,7 +517,7 @@ fn diff_kind_label(kind: DiffLineKind) -> &'static str {
 }
 
 fn draw_button(
-    out: &mut std::io::Stdout,
+    out: &mut impl Write,
     x: u16,
     y: u16,
     width: u16,

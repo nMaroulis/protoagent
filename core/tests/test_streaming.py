@@ -10,12 +10,42 @@ from protolink.llms.server.ollama_client import OllamaLLM
 from runtime_support import NativeRuntimeCase
 
 from protoagent_core.help_agent import _answer_help_question
-from protoagent_core.runtime import _run_agent_deck
+from protoagent_core.runtime import _append_event, _run_agent_deck
 from protoagent_core.runtime_storage import output_redaction
 from protoagent_core.streaming import LiveOutput, _final_content_prefix
 
 
 class StreamingTests(NativeRuntimeCase):
+    def test_trace_preview_cap_keeps_late_decisions_and_terminal_events_live(self):
+        events = []
+        with patch.dict("os.environ", {"PROTOAGENT_STREAM_TRACE_LIMIT": "20"}):
+            for number in range(30):
+                _append_event(
+                    events, f"Model step {number}", self.bridge, run_event={"type": "llm.started"}
+                )
+            for event_type in (
+                "llm.call.started",
+                "action.started",
+                "user_input.answered",
+                "verification.deferred",
+                "task.status",
+            ):
+                _append_event(
+                    events,
+                    event_type,
+                    self.bridge,
+                    run_event={"type": event_type, "final": event_type == "task.status"},
+                )
+        self.assertEqual(len(events), 21)
+        self.assertIn("The run continues", events[-1])
+        self.assertIn("/trace", events[-1])
+        live = [json.loads(line) for line in self.bridge.progress_path.read_text().splitlines()]
+        self.assertEqual(len(live), 26)
+        self.assertEqual(live[-1]["run_event"]["type"], "task.status")
+        self.assertTrue(live[-1]["run_event"]["final"])
+        self.assertIn("verification.deferred", json.dumps(live))
+        self.assertEqual(live[21]["run_event"]["type"], "llm.call.started")
+
     async def exercise_stream(self, *, native=True, cancel=False, enabled=True, guide=False):
         release, delivered, closed = asyncio.Event(), asyncio.Event(), asyncio.Event()
         calls = []
@@ -67,6 +97,7 @@ class StreamingTests(NativeRuntimeCase):
             with (
                 patch("protoagent_core.agents.architect.create_selected_llm", return_value=llm),
                 patch("protoagent_core.help_agent.create_llm_from_config", return_value=llm),
+                patch("protoagent_core.help_agent.model_startup_problem", return_value=None),
                 patch(
                     "protoagent_core.help_agent.visible_config",
                     return_value={
@@ -228,7 +259,7 @@ class StreamingTests(NativeRuntimeCase):
 
     def test_native_json_answer_is_preserved_and_workers_keep_their_own_channel(self):
         output = LiveOutput(self.bridge, output_redaction())
-        answer = '{"type":"final","content":"genuine JSON answer"}'
+        answer = '{"type":"receipt","content":"genuine JSON answer"}'
         for agent in ("architect", "coder"):
             output.emit(
                 RunEvent(
@@ -246,6 +277,98 @@ class StreamingTests(NativeRuntimeCase):
         ]
         self.assertEqual([item["text"] for item in records], [answer, answer])
         self.assertEqual([item["channel"] for item in records], ["answer", "generation"])
+
+    def test_native_fallback_tool_envelopes_never_enter_preview_at_any_split(self):
+        envelopes = (
+            '{"type":"tool_call","tool":"coder","args":{"task":"Change server.py to Starlette"}}',
+            '```json\n{"type":"agent_call","agent":"coder","action":"infer","prompt":"Edit server.py"}\n```',
+            '{"tool_call":{"name":"coder","args":{"task":"Edit server.py"}}}',
+        )
+        for raw in envelopes:
+            for split in range(1, len(raw)):
+                bridge = type(
+                    "OutputSink",
+                    (),
+                    {"emit_output": lambda self, output: self.outputs.append(output)},
+                )()
+                bridge.outputs = []
+                output = LiveOutput(bridge, output_redaction())
+                for chunk in (raw[:split], raw[split:]):
+                    output.emit(
+                        RunEvent(
+                            "llm.stream",
+                            agent_name="architect",
+                            step=1,
+                            payload={"llm_event_type": "llm_chunk", "content": chunk},
+                        )
+                    )
+                self.assertEqual(bridge.outputs, [], (raw, split))
+
+    def test_native_fallback_final_streams_content_and_typed_json_data_remains_exact(self):
+        output = LiveOutput(self.bridge, output_redaction())
+        raw = json.dumps({"type": "final", "content": "A readable answer."})
+        for char in raw:
+            output.emit(
+                RunEvent(
+                    "llm.stream",
+                    agent_name="architect",
+                    step=1,
+                    payload={"llm_event_type": "llm_chunk", "content": char},
+                )
+            )
+        records = [
+            json.loads(line)["live_output"]
+            for line in self.bridge.progress_path.read_text().splitlines()
+        ]
+        self.assertEqual("".join(item["text"] for item in records), "A readable answer.")
+        example = '{"type":"tool_call","tool":"example","args":{}}'
+        output.emit(
+            RunEvent(
+                "llm.stream",
+                agent_name="architect",
+                step=2,
+                payload={"llm_event_type": "llm_final", "content": example},
+            )
+        )
+        last = json.loads(self.bridge.progress_path.read_text().splitlines()[-1])["live_output"]
+        self.assertEqual(last["text"], example)
+        self.assertTrue(last["replace"])
+
+    def test_native_tool_selection_clears_provisional_narration_before_next_step(self):
+        output = LiveOutput(self.bridge, output_redaction())
+        output.emit(
+            RunEvent(
+                "llm.stream",
+                agent_name="architect",
+                step=1,
+                payload={"llm_event_type": "llm_chunk", "content": "I'll inspect the file."},
+            )
+        )
+        output.emit(
+            RunEvent(
+                "llm.stream",
+                agent_name="architect",
+                step=1,
+                payload={"llm_event_type": "llm_action", "content": None, "action": "tool_call"},
+            )
+        )
+        output.emit(
+            RunEvent(
+                "llm.stream",
+                agent_name="architect",
+                step=2,
+                payload={"llm_event_type": "llm_chunk", "content": "The final answer."},
+            )
+        )
+        records = [
+            json.loads(line)["live_output"]
+            for line in self.bridge.progress_path.read_text().splitlines()
+        ]
+        self.assertEqual(
+            [r["text"] for r in records], ["I'll inspect the file.", "", "The final answer."]
+        )
+        self.assertTrue(records[1]["replace"])
+        self.assertEqual(records[0]["id"], records[1]["id"])
 
     def test_json_escaped_secret_split_between_chunks_stays_redacted(self):
         output = LiveOutput(self.bridge, output_redaction("abcab"), json_agents={"architect"})

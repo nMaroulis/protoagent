@@ -24,11 +24,14 @@ This folder contains the fullscreen ProtoAgent terminal interface. The code is s
 | `input.rs` | Single-line editor, cursor movement, input history |
 | `modal.rs` | Shared modal primitives, text prompt, searchable picker |
 | `project.rs` | `/project` flow, project folder selection, `@file` tagging |
+| `files.rs` | Directory browser and read-only scrollable file viewer |
 | `model_picker.rs` | `/model` provider/model selection flow |
 | `diff_view.rs` | Diff parsing, diff review modal, approval diff summary |
 | `approval.rs` | Protolink approval-request presentation and decisions |
 
 Shared task-progress parsing lives in `../progress.rs` so the fullscreen TUI and `proto-cli run` use the same live trace behavior.
+Bounded directory/text inspection lives in `../project_files.rs`, shared by
+the browser and model-free shell/TUI ls/cat commands.
 Session history lives in `../sessions.rs`; timeline parsing lives in `../timeline.rs`.
 
 ## Data Flow

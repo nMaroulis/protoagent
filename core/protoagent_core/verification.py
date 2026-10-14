@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from protolink import CompletionCheck, CompletionValidator, ResourceRevision, ValidationResult
+from protolink import (
+    CompletionCheck,
+    CompletionValidator,
+    ResourceRevision,
+    RunContext,
+    ValidationResult,
+)
 from protolink.tools.builtins.filesystem import FilesystemResource
 
 
@@ -17,6 +24,51 @@ class Acceptance:
     completion: dict[str, Any]
     verification: dict[str, Any]
     repairable: bool = False
+    continuable: bool = False
+
+
+def verification_setup_issue(result, arguments, workspace):
+    """Identify missing Python setup from a completed check, not a test failure.
+
+    A missing project module is still a code/import-path problem eligible for
+    repair. Never downgrade canceled, timed-out or uncertain execution.
+    """
+    from pathlib import Path
+
+    if result.get("exit_code") in {None, 0} or any(
+        result.get(flag) for flag in ("timed_out", "canceled", "budget_exceeded")
+    ):
+        return None
+    match = re.search(
+        r"(?:^|\n)(?:[^\n]*: )?No module named ['\"]?([a-zA-Z_][\w.]*)",
+        str(result.get("stderr", "")),
+    )
+    if not match:
+        # Pytest writes collection tracebacks to stdout. Require the actual
+        # exception line so ordinary printed test text is not a setup signal.
+        match = re.search(
+            r"(?:^|\n)\s*(?:E\s+)?ModuleNotFoundError: No module named ['\"]?([a-zA-Z_][\w.]*)",
+            str(result.get("stdout", "")),
+        )
+    if not match:
+        return None
+    module = match.group(1).rstrip(".")
+    argv = arguments.get("argv", [])
+    runner = (
+        argv[argv.index("-m") + 1] if "-m" in argv and argv.index("-m") + 1 < len(argv) else None
+    )
+    base = module.split(".")[0]
+    root = Path(workspace)
+    if module != runner and any(
+        (directory / f"{base}.py").is_file() or (directory / base).is_dir()
+        for directory in (root, root / "src")
+    ):
+        return None
+    return {
+        "code": "runner_unavailable" if module == runner else "dependency_unavailable",
+        "module": module,
+        "message": f"Missing {module} in the selected Python environment.",
+    }
 
 
 async def validate_completion(contract, task, report, attempt, broker) -> Acceptance:
@@ -53,7 +105,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         result = event.payload.get("result")
         if isinstance(result, dict) and result.get("state") == "applied" and result.get("resource"):
             latest_writes[result["resource"]["resource_id"]] = event
-    if contract.requires_write:
+    if contract.requires_write or latest_writes:
         if not latest_writes:
             checks.append(CompletionCheck("applied workspace change", lambda evidence: False))
         for path, event in latest_writes.items():
@@ -78,24 +130,68 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             continue
         args = action.get("payload", {}).get("arguments", {})
         command = shlex.join(args.get("argv", []))
-        item = {
+        item: dict[str, Any] = {
             **result,
             "action_id": event.action_id,
             "command": command,
             "cwd": args.get("cwd", ""),
             "attempt": attempt.command_attempts.get(event.action_id, 0),
+            "phase": attempt.command_phases.get(event.action_id, "prepare"),
+            "check_id": attempt.command_checks.get(event.action_id),
         }
+        if issue := verification_setup_issue(result, args, attempt.workspace):
+            item["setup_issue"] = issue
         commands.append(item)
         # A newer execution of the same command replaces its failed older evidence.
         key = (command, item["cwd"], tuple(sorted(args.get("env", {}).items())))
-        latest_commands[key] = item
-    if contract.task_kind == "workspace-verification" and not commands:
-        checks.append(CompletionCheck("executed verification", lambda evidence: False))
+        if item["phase"] == "verify" and item["check_id"]:
+            latest_commands[key] = item
+    record = attempt.record
+    docs_only = (
+        contract.allows_unverified_docs
+        and bool(latest_writes)
+        and all(str(path).lower().endswith((".md", ".rst", ".txt")) for path in latest_writes)
+    )
+    needs_checks = contract.task_kind == "workspace-verification" or (
+        (contract.requires_write or bool(latest_writes)) and not docs_only
+    )
+    required_ids = set(record.selected) if record and needs_checks else set()
+    if record:
+        for role, worker in record.reports.items():
+            if worker["status"] != "done":
+                checks.append(
+                    CompletionCheck(
+                        f"unresolved worker: {role} ({worker['status']})",
+                        lambda evidence: False,
+                        require_execution=False,
+                    )
+                )
+    observed_ids = {item["check_id"] for item in latest_commands.values()}
+    if needs_checks and not required_ids:
+        checks.append(
+            CompletionCheck(
+                "repository verification plan", lambda evidence: False, require_execution=False
+            )
+        )
+    for check_id in sorted(required_ids - observed_ids):
+        checks.append(
+            CompletionCheck(
+                f"required check: {check_id}",
+                lambda evidence: ValidationResult(
+                    "check", "blocked", "check_not_run", "This required check was not run."
+                ),
+                require_execution=False,
+            )
+        )
     for index, item in enumerate(latest_commands.values()):
         action_id = item["action_id"]
         successful = item["exit_code"] == 0 and not any(
             item.get(key) for key in ("timed_out", "canceled", "budget_exceeded")
         )
+        output = str(item.get("stdout", "")) + str(item.get("stderr", ""))
+        if re.search(r"\bRan 0 tests\b", output):
+            successful = False
+            item["empty_test_suite"] = True
         if action_id not in attempt.command_revisions:
 
             def predicate(evidence):
@@ -146,11 +242,48 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     missing = [
         f"{result.name}: {result.code or result.status}" for result in results if not result.passed
     ]
+    stop_reason = ""
     if stopped:
-        missing.append("A native denial, blocker or failed action requires a new instruction.")
-    if uncertain_changes:
+        runtime_expired = any(
+            event.type in {"workflow.blocked", "budget.exceeded"}
+            and event.payload.get("blocker", {}).get("code") == "budget_exceeded"
+            and (
+                event.payload.get("blocker", {}).get("limit") == "max_runtime_seconds"
+                or event.payload.get("blocker", {}).get("decision", {}).get("limit_name")
+                == "max_runtime_seconds"
+            )
+            for event in report.events
+        )
+        unanswered = any(
+            record.decision is None and record.status in {"pending", "expired", "canceled"}
+            for record in broker.records(attempt.authorization.scope)
+        )
+        if runtime_expired and unanswered:
+            stop_reason = (
+                "Run time limit reached while waiting for your approval. "
+                "Viewing details does not approve execution. Start a new run to continue."
+            )
+        elif runtime_expired:
+            waiting_for_answer = any(
+                event.type == "action.failed"
+                and isinstance(event.payload.get("action"), dict)
+                and event.payload["action"].get("name") == "ask_user"
+                for event in report.events
+            )
+            stop_reason = (
+                "Run time limit reached while waiting for your answer. "
+                "Start a new run to continue; already applied edits may be partial."
+                if waiting_for_answer
+                else "Run time limit reached. Inspect current files before starting a new run."
+            )
         missing.append(
-            "A recovery record has an uncertain effect; inspect it before requesting new work."
+            stop_reason or "A native denial, blocker or failed action requires a new instruction."
+        )
+    if uncertain_changes:
+        # Keep inspection guidance visible even if a later approval timed out.
+        stop_reason = ""
+        missing.append(
+            "A file or external effect is uncertain; inspect it before requesting new work."
         )
     current_results = [item for item in latest_commands.values()]
     command_validations = [value for value in validations if value["name"].startswith("command ")]
@@ -159,7 +292,7 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         item["stale"] = validation["status"] == "stale"
     verification_status = (
         "unverified"
-        if not commands
+        if not latest_commands or bool(required_ids - observed_ids)
         else (
             "stale"
             if any(item.get("stale") for item in current_results)
@@ -169,10 +302,73 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             else "failed"
         )
     )
+    last_attempt_status = verification_status
+    handoff = record.verification_handoff if record else None
+    # The validated user answer lowers execution authority. Preserve measured
+    # failures and native cancellation, but do not label an intentional handoff
+    # as a successful verification or an ordinary workflow failure. Uncertain
+    # effects, denied actions and stale resource evidence still take precedence.
+    deferred = (
+        bool(handoff)
+        and not uncertain_changes
+        and not attempt.denied
+        and not any(status == "stale" for status in statuses)
+        and all(item.status == "approved" for item in broker.records(attempt.authorization.scope))
+        and not any(event.type in {"action.denied", "action.failed"} for event in report.events)
+    )
+    if deferred:
+        outcome = "unverified"
+        verification_status = "deferred"
+        stop_reason = "Verification deferred to you; no further execution will be requested."
+        missing = [
+            f"{result.name}: {result.code or result.status}"
+            for result in results
+            if not result.passed
+        ]
+    setup_items = [
+        item for item in current_results if item.get("setup_issue") and not item.get("stale")
+    ]
+    setup_actions = {item["action_id"] for item in setup_items}
+    unavailable = (
+        bool(setup_items)
+        and native_status == "completed"
+        and not RunContext.from_task(task).canceled
+        and not deferred
+        and not stopped
+        and not uncertain_changes
+        and (not contract.requires_write or bool(latest_writes))
+        and all(
+            result.passed
+            or result.code == "check_not_run"
+            or (result.status == "failed" and bool(set(result.action_ids) & setup_actions))
+            for result in results
+        )
+    )
+    if unavailable:
+        outcome = "unverified"
+        verification_status = "unavailable"
+        stop_reason = "Verification unavailable: " + setup_items[0]["setup_issue"]["message"]
+    missing_checks = sorted(required_ids - observed_ids)
+    unfinished_message = ""
+    if outcome == "incomplete":
+        if contract.requires_write and not latest_writes:
+            unfinished_message = "No file changes were applied. The model stopped before executing the requested edits."
+        elif missing_checks:
+            unfinished_message = (
+                "Changes were applied, but verification is incomplete."
+                if latest_writes
+                else "Verification is incomplete."
+            )
+        if missing_checks:
+            unfinished_message += (
+                " Required checks were not run: " + ", ".join(missing_checks) + "."
+            )
     repairable = (
         contract.requires_write
+        and not (record and any(worker["status"] != "done" for worker in record.reports.values()))
         and outcome == "incomplete"
         and not stopped
+        and not setup_items
         and all(status in {"passed", "failed"} for status in statuses)
         and bool(current_results)
         and any(
@@ -185,14 +381,39 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             for flag in ("timed_out", "canceled", "budget_exceeded", "stale")
         )
     )
+    continuable = (
+        contract.requires_write
+        and outcome == "incomplete"
+        and not stopped
+        and not attempt.checking
+        and bool(latest_writes)
+        and all(
+            result.status in {"passed", "failed"} or result.code == "check_not_run"
+            for result in results
+        )
+        and bool(record)
+        and record.reports.get("coder", {}).get("reason") == "worker_turn_limit"
+        and record.reports["coder"]["status"] == "needs_context"
+        and all(
+            worker["status"] == "done" for role, worker in record.reports.items() if role != "coder"
+        )
+    )
     return Acceptance(
         {
             "outcome": outcome,
             "satisfied": outcome == "satisfied",
+            "applied": bool(latest_writes),
+            "applied_paths": sorted(latest_writes),
+            "verified": verification_status == "passed",
+            "criteria_supported": outcome == "satisfied"
+            and (not needs_checks or verification_status == "passed"),
+            "acceptance_criteria": list(record.criteria) if record else [],
+            "required_checks": sorted(required_ids),
+            "evidence_limit": "Passing configured checks supports criteria; it does not prove all requested semantics.",
             "checks": validations,
             "message": "Execution evidence satisfies the application checks."
             if outcome == "satisfied"
-            else " ".join(missing) or f"Run is {outcome}.",
+            else stop_reason or unfinished_message or " ".join(missing) or f"Run is {outcome}.",
             "missing": missing,
         },
         {
@@ -200,18 +421,33 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "results": commands,
             "latest": current_results,
             "attempts": attempt.attempt,
+            "setup_issues": [item["setup_issue"] for item in setup_items],
+            **({"last_attempt_status": last_attempt_status, "handoff": handoff} if handoff else {}),
         },
         repairable,
+        continuable,
     )
 
 
 def verification_summary(report: dict[str, Any]) -> str:
-    """Render native exit statuses and resource-dependent acceptance results."""
-    lines = [f"Verification: {report['status']}."]
-    if not report["results"]:
-        return lines[0] + " No test/build command was executed."
-    for item in report.get("latest", report["results"]):
-        outcome = "timeout" if item.get("timed_out") else f"exit {item['exit_code']}"
-        stale = " (resource changed since this check)" if item.get("stale") else ""
-        lines.append(f"- {item['command']}: {outcome}{stale}")
-    return "\n".join(lines)
+    """One compact result; native command details remain in /trace."""
+    status = report["status"]
+    latest = report.get("latest") or []
+    if status == "deferred":
+        return "Verification: deferred to you. Previous check details: /trace."
+    if status == "unavailable":
+        module = report["setup_issues"][0]["module"]
+        return f"Verification: unavailable (missing {module}). Details: /trace."
+    if status == "passed":
+        count = len(latest)
+        return f"Verification: passed ({count} {'check' if count == 1 else 'checks'})."
+    if status == "stale":
+        return "Verification: stale — files changed after checking. Details: /trace."
+    if any(item.get("timed_out") for item in latest):
+        return "Verification: timed out. Details: /trace."
+    if any(item.get("empty_test_suite") for item in latest):
+        return "Verification: unverified — no tests were discovered. Details: /trace."
+    if status == "failed":
+        count = sum(item.get("exit_code") not in {None, 0} for item in latest)
+        return f"Verification: failed ({count} {'check' if count == 1 else 'checks'}). Details: /trace."
+    return "Verification: unverified — no final checks were run."

@@ -2,6 +2,275 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.3.0] - 2026-09-26
+
+### Dependency maintenance
+
+- Refresh Rust dependencies, including PyO3 0.29.3, Crossterm 0.29,
+  Inquire 0.9.4, Indicatif 0.18.6, Console 0.16.6 and Tokio 1.53.3.
+  Update the Cargo lockfile and validate with stable Rust 1.99.
+- Pin Ruff 0.17.0, ty 0.0.87 and build 1.6.1 in `requirements-dev.txt`
+  for consistent contributor and CI checks. Update installed Python runtime
+  integrations, retaining ProtoLink 0.8.1 as the engine.
+  Bound Anthropic below 1.0 because its new Messages API removes generation
+  parameters still sent by ProtoLink's adapter.
+- Update Docusaurus to 3.10.2, React to 19.3.1 and the docs lockfile.
+  Retain ELK 0.1.9 as required by the Docusaurus Mermaid theme.
+- Refresh GitHub Actions and use Node 24 for documentation CI.
+
+### Added
+
+- Compact styled Edits cards in CLI/TUI, with green additions, red removals,
+  bold literal file names and muted diff hints. Verification summaries fit one
+  line, with full logs retained in `/trace`.
+- Missing Python runners/external dependencies end final verification quietly
+  before another model request, preserving applied edits as unverified without
+  install questions or code-repair loops. Genuine regressions retain bounded
+  repair; native failed receipts and stop conditions remain authoritative.
+
+- Small-profile Gemma 4 automatic action acquisition uses ProtoLink's JSON
+  protocol when advertised native tooling emits narration/channel/action text.
+  Explicit native/json settings remain authoritative. Missing verification
+  receipts are labeled not run, stopped-before-edit results report no changes,
+  and Python dependency/runner failures get environment/setup explanations.
+- Parse-only Python afterimage guards for create, replace and exact edits reject
+  introduced syntax errors before approval through native no-change feedback.
+  Literal escapes remain unchanged; already malformed sources can be repaired
+  incrementally, and valid proposals retain native write authorization/recovery.
+
+- Per-project `/approvals` picker and `proto-cli approvals` controls: Ask (default),
+  automatic file edits, or automatic edits and commands. Exact native broker
+  decisions retain policies, revision checks, checkpoints and audit records;
+  MCP access and restoration still ask. The TUI displays the active mode.
+- Deterministic end-of-run applied-file summaries and combined diffs from native
+  snapshots, including partial failures. `/diff` shows applied changes and
+  `/diff proposed` labels proposal previews separately. Pre-existing work,
+  rejected proposals, external edits and uncertain effects are distinguished.
+
+- Model-free project inspection in shell/TUI: ls, browse/files, open and cat.
+  Folder browsing supports filtering, parent navigation and Enter to view text;
+  the read-only viewer has line numbers, paging and horizontal panning. Listings,
+  source loading and transcript previews are bounded; paths remain in the active
+  project, and terminal control characters are displayed inertly. `/open` now
+  views files; `/project` selects a workspace. Guide and completion share the catalog.
+
+- Runtime-owned TaskRecord with criteria, check selection, scoped worker packets
+  and explicit done/needs_context/blocked worker reports.
+- Stateless, read-only Tester for regression planning and failure analysis.
+- Persistent optional-agent controls for Tester (default on), Scout and MCP
+  (default off). Disabled workers are not constructed or registered; required
+  Architect/Explorer/Coder/Verifier roles cannot be disabled.
+- `mcp` and `/mcp` setup, explicit discovery probes, server/tool allowlists and
+  environment-referenced HTTP authentication. Model-free MCP broker with three
+  fixed discovery/schema/call tools, native approvals and bounded model handoffs.
+- Repository check discovery, `.protoagent/project.json` configuration, and
+  Verifier `run_check(check_id, phase)` with baseline and final verification.
+- Coder bounded source reads and exact single-occurrence `edit_file` with a
+  source revision guard, native diff approval and native recovery.
+- Compact small-profile protocol prompts and worker cards with exact input
+  schemas, omitting repetitive examples and large output schemas.
+- Per-request context admission through native ProtoLink policies and hooks,
+  reserving output tokens and retaining the current task and runtime record.
+  Small profiles with unknown capacity receive an 8192-token application cap.
+- Disposable coding evals with independent acceptance scripts and a same-model
+  single-agent baseline: `proto-cli eval coding --plan|--live`.
+- Owned local subagents through ProtoLink 0.8: independent conversations,
+  inherited policies, shared Graph budgets, sequential dispatch, depth one and
+  configurable per-attempt child limits. Default execution needs no Registry
+  server or loopback sockets; explicit transport meshes remain available.
+- Native ContextPolicy and AgentHooks for current task state, complete-turn
+  pruning and scoped progressive retrieval of large tool/child observations.
+- Optional explicit same-provider `fallback_models` through native RoutedLLM,
+  with bounded transient request fallback, shared accounting and no tool replay.
+- `eval harness [--json]`: native evaluate() runs repeated offline application
+  read/task-state cases with fresh factories and linked child receipt checks.
+- Architect-only native `ask_user` for clarification and same-task continuation.
+  TUI/shell question input supports explicit suggestions, free text, skip and
+  cancellation, correlated replies, native deadlines and no implicit approval.
+
+### Changed
+
+- Admit up to three progressing native Coder work windows in one assignment,
+  rather than interrupting every nine calls. Each continuation requires fresh
+  applied writes, current revisions and no native stop or explicit missing-context
+  report. Scope, history, receipts, approvals and aggregate budgets are preserved.
+  A stalled window cannot borrow earlier progress. `PROTOAGENT_CODER_MAX_WINDOWS`
+  lowers the application ceiling (1–3, default three); `worker.continuing` updates
+  the transient TUI activity. Native inference limits remain unchanged.
+- Return exhausted partial Coder assignments directly to the bounded Graph
+  before another Architect model call, avoiding routine continuation questions
+  that spend the run deadline. `workflow.work_yielded` records the transition;
+  fresh Graph nodes can still inspect and narrow remaining work.
+- Explain native runtime expiry, including expiry while awaiting a user answer,
+  rather than presenting it only as an unresolved worker/check failure.
+- Return completed failing final checks directly to the native repair Graph
+  before another Architect model request. This prevents edits in a closed check
+  phase from turning an eligible repair into a policy denial. After two repairs,
+  remaining failures finish incomplete. Missing dependency failures can still
+  prompt for a manual verification handoff in the repair attempt.
+- Deduplicate live native events across the whole workflow, so continuation and
+  enclosing handles do not replay old activity, answer chunks or command output.
+  Complete native reports retain their execution evidence.
+- Continue stable, applied partial Coder work when Architect returns too early:
+  the native Graph permits at most two continuations before final verification,
+  preserving the frozen plan, edit phase and shared budget. Execution failures,
+  denials, uncertainty, no-progress handoffs and manual verification stops do not
+  qualify. Exhausted continuations report incomplete work without retaining
+  unfinished tool-call prose as the final answer.
+
+- Small-profile Ollama requests default to at most 4096 generated tokens; small
+  Gemma 4 variants default to `think=false` for short coding actions. Explicit
+  `num_predict`/`max_tokens` and thinking settings win; sampling is preserved.
+  Generation-repeat aborts now explain the provider failure separately from
+  agent turn limits; partial streamed tool proposals are never executed/replayed.
+- Statically recognize pytest functions/imports/test classes when selecting a
+  Python runner, including `test/` directories. Preserve unittest for its own
+  suites and owner-declared checks. Root pytest checks retain current moved test
+  files/configuration as dependencies; discovery never imports project code or
+  installs a missing test runner.
+
+- Enforce Coder's work-slice handoff before the last native inference turn,
+  without requiring a final model reply. A public Agent extension consumes only
+  the harness's pre-model stop signal, preserving native execution and stop
+  conditions. Return recorded partial edits, or a blocked no-progress report.
+  Architect can assign only unfinished work within the shared run budget;
+  unresolved handoffs never satisfy completion. Reject identical exact edits
+  before approval and return the approved source digest after successful edits
+  to avoid redundant reads. Failed runs show applied paths and readable causes
+  while retaining the complete native error and receipts in the trace.
+
+- Hide fallback tool/delegation JSON from native-capable model streams, reusing
+  ProtoLink normalization for display classification. Preserve JSON answer data
+  and typed final content; clear provisional narration at native tool selection
+  so the muted work status returns instead of retaining an action as an answer.
+
+- Show one muted, transient activity line while an answer is loading. Native
+  work phases replace it in place, distinguish command preparation from running,
+  and disappear when text streams or the run ends. Saved answers retain no
+  loading labels; phase updates survive the live trace preview cap.
+
+- Resolve bare command programs and project-relative working directories before
+  native approval, preserving explicit environments and interpreter identity.
+  Default output limits fit the configured ceiling. Small local calls return
+  native no-change correction feedback for invalid preparation before dispatch.
+- Preserve root unittest discovery when tests move into packages; capture moved
+  tests and package markers as current check dependencies without changing the
+  frozen runner. Agent/Guide prompts explain layout preparation and discovery.
+
+- Honor explicit manual verification answers immediately through native
+  cancellation, without another model call or repair. Report applied files as
+  unverified with verification deferred to the user, preserving failed checks
+  and native transport status. Uncertain effects and stale/denied work still stop.
+- Prefer the embedded CLI's injected virtual environment over bare framework
+  Python when a project has no local environment. Embedded regression coverage
+  requires subprocess and coding-oracle imports to see ProtoLink dependencies.
+- Clarify the 120-message live trace preview cap and continue delivering later
+  decisions and execution outcomes. Full stored native traces remain complete.
+
+- Return stale/non-unique exact-edit selections through read-only validation
+  feedback so ProtoLink's native correction loop can recover before a write is
+  prepared. Valid edits retain native write approval and recovery; ordinary
+  failures, denial and uncertain effects still stop. Coder copies short observed
+  source spans and paginates truncated reads.
+- Preserve default checks for an empty code plan selection and reject narrowed
+  bootstrap scopes that omit the required regression test files before mutation.
+- Size each turn's worker roster, tools, prompts and native permission ceilings
+  to its original request. Conversation skips project/check discovery and uses
+  Architect alone; repository questions cannot invoke Coder or commands;
+  explicit verification enables Verifier without editing authority. Recognize
+  verification clauses attached to questions and keep skipped clarification
+  from becoming an invented implementation requirement.
+- Distinguish command/check approvals from file-change approvals in the TUI.
+  V views details/diffs without approving; Y runs/applies, including from reviews.
+  Native expiry/cancellation closes both views and stale decisions are dropped.
+  Approval wait expiry reports a clear reason instead of missing-evidence jargon.
+- Expose available baseline IDs and avoid empty bootstrap baseline approvals
+  during coding tasks. Source inspection, changes and focused regressions precede
+  final checking when a project has no tests yet.
+- Expand Coder's project-relative create/replace paths before native preparation,
+  preserving native traversal, symlink, root, preimage, diff and approval checks.
+
+- Simplify the small-profile local worker interface with typed Explorer reads,
+  Coder/Tester assignments and Verifier calls. Fixed prepared routes use native
+  owned-child supervision and retain each worker's policies, approvals, budgets,
+  cancellation and receipts. Optional Scout/MCP routes follow enabled settings.
+  Hide redundant packet preparation and repeated child schemas from this profile;
+  narrow Coder's tool list and make its return-after-edit boundary explicit.
+  Other profiles and transport meshes retain native delegation.
+
+- Clarify worker routing for small models after user questions: worker tools
+  require separate worker/tool fields rather than invented combined names.
+  Compact prompts include the selected check's exact baseline call and distinguish
+  preparing a worker packet from executing Coder. Native correction limits remain.
+- Restrict worker-packet roles to explicit schema choices, return an unexecuted
+  status and dispatch reminder, and show an exact Coder inference example.
+- Resolve external Python for discovered checks and coding evals when CPython is
+  embedded in the Rust CLI. Preserve project venv identity and exclude the CLI
+  host executable; embedded-runtime tests cover discovery and oracle execution.
+
+- ProtoLink 0.8.1 owns action normalization/correction, Ollama automatic capability
+  discovery and task-local protocol selection. Remove the application metadata
+  probe/cache and final-answer rejection hook; retain compact coding context and
+  legacy history preparation through the native parser.
+- Native `ToolRejectedError` replaces custom planning feedback and handles
+  invalid worker packets/reports, stale or ambiguous exact-edit proposals and
+  invalid check requests before effects. Rejections have distinct events and
+  inference artifacts, never completion evidence. Provider `max_tool_corrections`
+  defaults to two per inference; native tools/schema/delegation errors share it,
+  including the outer RoutedLLM loop. Successful actions do not reset it.
+- Compact worker cards retain native `supports_inference`; the engine rejects
+  unsupported inference, unknown worker tools and invalid schemas before dispatch.
+  CLI progress, timeline and trace distinguish rejection and correction exhaustion
+  from execution and denial. `check` includes native action-validation readiness.
+
+- Python projects without repository checks receive a predefined unittest
+  runner for new root regression tests. Compact task records expose valid and
+  bootstrap check IDs; empty suites still cannot verify changes. Planning
+  mistakes return corrective feedback without changing the plan, and omitted
+  check IDs preserve defaults. Explicit project configuration stays authoritative.
+
+- Ollama models advertising `tools` use ProtoLink's native tool channel, with
+  native cached metadata discovery and explicit auto/native/json overrides.
+  Small JSON prompts include an Explorer README delegation example. Earlier
+  malformed proposals become notes in model context while valid historical
+  actions, explicit final data and original reports remain intact.
+
+- Code changes require selected repository checks executed at current revisions.
+  Preparation and unrelated successful commands do not satisfy verification.
+  Applied, verified and criteria-supported states are reported separately.
+- Baseline and preparation commands allow subsequent edits; final checks close
+  the edit phase and preserve the two-repair ceiling.
+- Source tools return one bounded source span with line range and SHA-256 revision;
+  the duplicated `raw_content` field is removed.
+- Explicit small-model hints take priority over provider hosting location.
+- Intent classification handles polite requests and explicit no-write instructions.
+- CLI/core/docs coordinated versions advance to 0.3.0; ProtoLink floor advances
+  to 0.8.1 with the HTTP, LLM and MCP extras.
+- Replace model acquisition wrappers with native context policies and lifecycle
+  hooks. The small profile retains compact declarations and exact input schemas.
+- Present local child output from native task records before join, deduplicated
+  against the parent stream, preserving live model/process previews.
+
+### Migration and limits
+
+- Existing code-change runs without a repository check now remain incomplete.
+  Configure explicit argv, cwd, env and dependency paths for uncommon projects.
+- `execute_command` remains approved host execution; only frozen repository checks
+  qualify as verification. Passing checks supports criteria, not arbitrary semantics.
+- Tester is enabled by default and can be disabled with `agents tester off`.
+  Architect/Coder then handle criteria and regressions; required checks remain.
+- MCP tool access is optional and off by default. Calls use managed ProtoLink
+  sessions without automatic retries. Failed started invocations mark external
+  effects uncertain and block further effectful work in the run.
+  Approvals/allowlists do not sandbox server
+  effects; remote receipts cannot satisfy repository verification. Resources,
+  prompts, OAuth and server installation are not part of this integration.
+- Request admission uses token estimates. Runtime-held task state survives observation
+  eviction within a live run. Live model performance remains to be measured with coding evals.
+- Native execution restart/resume, Docker check execution and background model
+  supervision are not integrated into the custom coding Graph. Saved conversations,
+  reports and file recovery are distinct from execution continuation.
+
 ## [0.2.3] - 2026-09-15
 
 ### Added

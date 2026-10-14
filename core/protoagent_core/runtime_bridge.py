@@ -1,19 +1,26 @@
-"""Application-owned approval and cancellation bridge for the Rust CLI."""
+"""Application UI for native approvals, questions and cancellation."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import sys
 import threading
 import time
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from io import TextIOBase
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import Any
 
 from protolink import ApprovalBroker, ApprovalDecision
+from protolink.tools.builtins.user_input import UserInputRequest
 
 from .runtime_policy import RunAuthorization
 from .runtime_storage import output_redaction
+from .user_input import MAX_ANSWER_CHARS
 
 
 class RuntimeBridge:
@@ -24,7 +31,9 @@ class RuntimeBridge:
         self.broker: ApprovalBroker | None = None
         self.authorization: RunAuthorization | None = None
         self.redaction = output_redaction()
+        self.approval_mode = "ask"
         self._write_lock = threading.Lock()
+        self._input_lock = asyncio.Lock()
         # Rust owns stale-control cleanup before the worker starts. Preserve a
         # cancellation that may arrive while Python is still assembling context.
         self._clear_controls(include_cancel=False)
@@ -39,6 +48,54 @@ class RuntimeBridge:
     def emit_output(self, output: dict[str, Any]) -> None:
         """Send provisional text independently of the bounded trace-summary channel."""
         self._append({"ts": time.time(), "live_output": output})
+
+    @contextmanager
+    def capture_console(self):
+        """Keep Python diagnostics off the frontend terminal during a CLI run.
+
+        The embedded CLI runs one Python task at a time. Capture complete text
+        before redaction so secrets split across writes remain protected.
+        Native process tools retain their own output capture and receipts.
+        """
+        if self.progress_path is None:
+            yield
+            return
+        streams = {channel: _ConsoleBuffer() for channel in ("stdout", "stderr")}
+        try:
+            with (
+                _capture_console_handlers(streams),
+                redirect_stdout(streams["stdout"]),
+                redirect_stderr(streams["stderr"]),
+            ):
+                yield
+        finally:
+            for channel, stream in streams.items():
+                text = stream.getvalue()
+                if stream.truncated:
+                    # A truncation boundary can split a configured secret.
+                    tail = max(
+                        (
+                            length
+                            for secret in self.redaction.sensitive_values
+                            for length in range(1, min(len(secret), len(text) + 1))
+                            if text.endswith(secret[:length])
+                        ),
+                        default=0,
+                    )
+                    if tail:
+                        text = text[:-tail] + "[REDACTED]"
+                    text += "\n[Console diagnostics truncated]"
+                if text:
+                    self.emit_output(
+                        {
+                            "id": f"console-{channel}",
+                            "agent": "runtime",
+                            "channel": channel,
+                            "text": text,
+                            "replace": False,
+                        }
+                    )
+                stream.close()
 
     def _append(self, record: dict[str, Any]) -> None:
         if self.progress_path is None:
@@ -57,9 +114,17 @@ class RuntimeBridge:
         except OSError:
             pass
 
-    def bind(self, broker: ApprovalBroker, authorization: RunAuthorization, redaction=None) -> None:
+    def bind(
+        self,
+        broker: ApprovalBroker,
+        authorization: RunAuthorization,
+        redaction=None,
+        *,
+        approval_mode="ask",
+    ) -> None:
         """Attach the native broker and the application's trusted authorization scope."""
         self.broker, self.authorization = broker, authorization
+        self.approval_mode = approval_mode
         if redaction is not None:
             self.redaction = redaction
 
@@ -89,6 +154,64 @@ class RuntimeBridge:
             if record.decision is not None
         ]
 
+    async def ask_user(self, request: UserInputRequest) -> str | None:
+        """Display one native question; ProtoLink owns its wait and continuation.
+
+        Responses must match the exact run/task/action/question currently shown.
+        Private per-run controls cannot grant execution approval. Native timeout,
+        cancellation and runtime-budget expiry cancel this callback and clear UI
+        state in finally; a missing frontend explicitly declines the question.
+        """
+        if self.progress_path is None:
+            return None
+        async with self._input_lock:
+            self._unlink(self.input_response_path)
+            correlation = {
+                key: value
+                for key, value in request.to_dict().items()
+                if key in {"request_id", "run_id", "task_id", "action_id"}
+            }
+            generation = 0
+
+            def present():
+                self._write_json(
+                    self.input_request_path,
+                    {
+                        **self.redaction.redact(request.to_dict()),
+                        "max_answer_chars": MAX_ANSWER_CHARS,
+                        "presentation_id": generation,
+                    },
+                )
+
+            try:
+                present()
+                while True:
+                    data = self._read_json(self.input_response_path)
+                    if data is not None:
+                        self._unlink(self.input_response_path)
+                        answer = data.get("answer")
+                        valid = (
+                            all(data.get(key) == value for key, value in correlation.items())
+                            and "answer" in data
+                            and (
+                                answer is None
+                                or (
+                                    isinstance(answer, str)
+                                    and bool(answer.strip())
+                                    and len(answer) <= MAX_ANSWER_CHARS
+                                )
+                            )
+                        )
+                        if valid:
+                            return answer
+                        self.emit("User answer rejected: stale question or invalid answer.")
+                        generation += 1
+                        present()
+                    await asyncio.sleep(0.04)
+            finally:
+                self._unlink(self.input_request_path)
+                self._unlink(self.input_response_path)
+
     async def serve(self, handle) -> None:
         """Present pending requests one at a time; native broker owns their waits.
 
@@ -112,6 +235,10 @@ class RuntimeBridge:
             record = pending[0] if pending else None
             if record is None:
                 self._unlink(self.request_path)
+                presented = None
+            elif self._auto_accept(record):
+                self._unlink(self.request_path)
+                self._unlink(self.decision_path)
                 presented = None
             elif self.progress_path is None:
                 self.broker.resolve(
@@ -159,6 +286,33 @@ class RuntimeBridge:
                     generation += 1
             await asyncio.sleep(0.08)
 
+    def _auto_accept(self, record):
+        from urllib.parse import unquote, urlparse
+
+        from .approvals import can_auto_accept
+
+        if self.authorization is None or self.broker is None:
+            return False
+        workspace = urlparse(self.authorization.context.workspace_uri or "")
+        if workspace.scheme != "file" or workspace.netloc not in {"", "localhost"}:
+            return False
+        if not can_auto_accept(record.request.action, self.approval_mode, unquote(workspace.path)):
+            return False
+        resolution = self.broker.resolve(
+            ApprovalDecision(
+                True,
+                record.request.request_id,
+                reason=f"Project auto-accept mode: {self.approval_mode}",
+                decided_by="protoagent-auto",
+            ),
+            scope=self.authorization.scope,
+            fingerprint=record.fingerprint,
+        )
+        self.emit(
+            f"Auto-accepted {record.request.action.name} ({self.approval_mode}): {resolution.status}."
+        )
+        return resolution.status == "approved"
+
     def cancel_reason(self) -> str | None:
         """Return the application cancellation reason when one was requested."""
         data = self._read_json(self.cancel_path)
@@ -178,6 +332,14 @@ class RuntimeBridge:
     def cancel_path(self) -> Path | None:
         return self._control_path("cancel")
 
+    @property
+    def input_request_path(self) -> Path | None:
+        return self._control_path("input-request")
+
+    @property
+    def input_response_path(self) -> Path | None:
+        return self._control_path("input-response")
+
     def cleanup(self) -> None:
         """Remove control files after a run while leaving progress to Rust."""
         self._clear_controls()
@@ -188,7 +350,12 @@ class RuntimeBridge:
         return Path(f"{self.progress_path}.{suffix}.json")
 
     def _clear_controls(self, *, include_cancel: bool = True) -> None:
-        paths = [self.request_path, self.decision_path]
+        paths = [
+            self.request_path,
+            self.decision_path,
+            self.input_request_path,
+            self.input_response_path,
+        ]
         if include_cancel:
             paths.append(self.cancel_path)
         for path in paths:
@@ -227,3 +394,88 @@ class RuntimeBridge:
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def _console_handlers():
+    loggers = [logging.getLogger(), *logging.root.manager.loggerDict.copy().values()]
+    handlers = {
+        handler
+        for logger in loggers
+        if isinstance(logger, logging.Logger)
+        for handler in logger.handlers
+        if isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
+    }
+    return handlers
+
+
+@contextmanager
+def _capture_console_handlers(streams):
+    """Route pre-bound SDK log streams too; preserve file logging and restore on exit.
+
+    Redirecting sys.stdout alone misses StreamHandlers created at import time.
+    Also detach handlers created during the call before closing capture buffers.
+    Like redirect_stdout, this scope is for the CLI's single embedded core call.
+    """
+    previous = {"stdout": sys.stdout, "stderr": sys.stderr}
+    originals = {}
+    try:
+        for handler in _console_handlers():
+            for channel, candidates in (
+                ("stdout", (previous["stdout"], sys.__stdout__)),
+                ("stderr", (previous["stderr"], sys.__stderr__)),
+            ):
+                if any(
+                    handler.stream is candidate for candidate in candidates if candidate is not None
+                ):
+                    originals[handler] = handler.stream
+                    handler.setStream(streams[channel])
+                    break
+        yield
+    finally:
+        for handler in _console_handlers() | originals.keys():
+            if handler in originals:
+                handler.setStream(originals[handler])
+            else:
+                for channel, stream in streams.items():
+                    if handler.stream is stream:
+                        handler.setStream(previous[channel])
+
+
+class _ConsoleBuffer(TextIOBase):
+    """Bound console capture without blocking a provider's writes."""
+
+    LIMIT = 32_768
+    encoding = "utf-8"
+
+    def __init__(self):
+        super().__init__()
+        # MCP's stdio SDK passes sys.stderr as a subprocess descriptor. A
+        # private temporary file captures that output too, unlike StringIO.
+        self._file = TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+        self.truncated = False
+
+    def fileno(self):
+        return self._file.fileno()
+
+    def write(self, text: str) -> int:
+        self._file.seek(0, os.SEEK_END)
+        kept = text[: max(0, self.LIMIT - self._file.tell())]
+        self._file.write(kept)
+        self._file.flush()
+        self.truncated |= len(kept) < len(text)
+        return len(text)
+
+    def getvalue(self):
+        self._file.seek(0)
+        text = self._file.read(self.LIMIT + 1)
+        self.truncated |= len(text) > self.LIMIT
+        return text[: self.LIMIT]
+
+    def flush(self):
+        if not self._file.closed:
+            self._file.flush()
+
+    def close(self):
+        super().close()
+        self._file.close()

@@ -57,13 +57,67 @@ Fix:
 
 ```bash
 source .venv/bin/activate
-pip install "protolink[http,llms]>=0.7.1"
+pip install --upgrade -e core
 proto-cli check
 ```
 
 `check` should report streaming, metrics, compaction, context, state, reports,
 cancellation, logging, auth, transport, and web tools as ready. Web-tool
 readiness is separate from baseline `agent_ready` because Scout is optional.
+
+## Tool Request Appears As The Answer
+
+A reply such as `{"tool_call":{"name":"explorer",...}}` is an unfinished
+action, not a project explanation. ProtoLink now sends recognizable malformed
+wrappers through its native parse correction loop in JSON/native modes. The
+agent can correct the request in the same run; repeated malformed proposals
+stop at the engine limit. Check `/trace` for actual tool receipts; printed JSON
+proves no read. There is no application final-answer rejection hook.
+
+Ollama models advertising `tools` now use ProtoLink's native tool channel
+automatically. If your server's metadata is unavailable but you know the model
+supports native tools, use `PROTOAGENT_OLLAMA_TOOL_CALLING=native`. If its native
+template is unreliable, use `json` to retain the strict JSON action protocol.
+The small profile provides a concrete Explorer README delegation example.
+An advertised capability does not guarantee the model follows the protocol.
+Failed/interrupted runs are not automatically replayed.
+
+When asking for action-protocol examples, include explanatory prose or return
+them inside explicit `final.content`. A standalone action object, even inside
+one JSON fence, is an action proposal. Other JSON application answers remain valid.
+
+## Planning Fails Because There Are No Check IDs
+
+The selected project may have no tests or check configuration, even when its
+README lists a test folder. `plan_task` rejects invalid selections through native
+no-change feedback and includes valid IDs in `details.available_check_ids`.
+Omitting `check_ids` keeps defaults.
+The compact task record shows `available_check_ids` without requiring another
+status call or a large command catalog.
+
+Python projects with no existing checks receive a predefined `python-tests`
+unittest runner. Architect/Tester should ask Coder for focused root `test_*.py`
+regressions. A zero-test baseline means missing coverage, and a final empty suite
+cannot pass verification. There is no automatic dependency installation.
+
+Explicit `.protoagent/project.json` checks take precedence, including an empty
+list. Unsupported projects need a project-owned command configured outside the
+run. Approved edits without a usable check remain unverified/incomplete.
+See [Task Workflow](../core/task-workflow.md).
+
+## Request Correction Limit Reached
+
+ProtoLink allows two corrective turns per inference by default. Local unknown
+tools, invalid schemas, no-change tool rejections and worker capability mistakes
+share that allowance; a successful action does not reset it. `tool.correction.exhausted`
+and structured blockers explain the final rejection. `/trace` and `/timeline`
+retain prior execution receipts alongside distinct rejection records.
+
+Inspect the rejected request and advertised IDs/tools first. Configure
+`providers.PROVIDER.max_tool_corrections` only when a larger allowance is useful;
+existing model-call and runtime budgets still apply. Rejection made no changes
+in that request, but earlier approved work may already be applied. Denials,
+partial effects and disconnections do not qualify for automatic correction.
 
 ## Scout Is Off Or Search Fails
 
@@ -80,7 +134,7 @@ Enable Scout for the next run:
 proto-cli agents scout on
 ```
 
-If `web_tools_ready` is unavailable, install ProtoLink 0.7.1 or newer. Brave is
+If `web_tools_ready` is unavailable, install ProtoLink 0.8.1 or newer. Brave is
 the default search engine and needs:
 
 ```bash
@@ -93,7 +147,7 @@ factual search. Architect can pass either to `web_search`. Wikipedia only suppor
 nonstandard ports, unsafe redirects, binary content, and oversized responses.
 These rejections are safety behavior, not general network failures.
 
-ProtoLink 0.7.1 applies native budget checks to direct tool tasks. If a call
+ProtoLink 0.8.1 applies native budget checks to direct tool tasks. If a call
 stops at a budget boundary, inspect `/trace` and the configured run budget.
 Verifier also has a separate per-command timeout.
 

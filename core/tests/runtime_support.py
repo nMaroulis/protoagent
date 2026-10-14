@@ -15,6 +15,7 @@ from protoagent_core.checkpoints import checkpoint_store, private_file
 from protoagent_core.runtime_bridge import RuntimeBridge
 from protoagent_core.runtime_policy import AttemptState, RunAuthorization
 from protoagent_core.runtime_storage import output_redaction
+from protoagent_core.task_record import TaskRecord
 
 
 class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
@@ -35,6 +36,7 @@ class NativeRuntimeCase(unittest.IsolatedAsyncioTestCase):
         self.authorization = RunAuthorization(self.context)
         self.checkpoints = checkpoint_store(str(self.root))
         self.attempt = AttemptState(str(self.root), self.checkpoints, self.authorization)
+        self.attempt.record = TaskRecord.create(str(self.root), "test task")
         self.attempt.begin()
         self.broker = ApprovalBroker(timeout_seconds=3)
         self.redaction = output_redaction()

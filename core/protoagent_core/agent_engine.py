@@ -35,7 +35,7 @@ from .context import (
     context_status as loom_status,
 )
 from .llm import ollama_context_window_details, validate_protolink
-from .models import discover_models, remember_valid_provider
+from .models import discover_models, model_startup_problem, remember_valid_provider
 from .prompt_profiles import prompt_profile_status
 from .tools import build_context_map, list_directory, read_file, safe_path, workspace_root
 
@@ -54,6 +54,13 @@ def list_models(validate_api_keys: bool = False) -> str:
 def get_config() -> str:
     """Return redacted provider configuration JSON for display."""
     return _json(visible_config())
+
+
+def configure_approvals(value: str | None = None, workspace: str | None = None) -> str:
+    """Show or set the current project's explicit approval preference without an LLM."""
+    from .approvals import configure_approvals as configure
+
+    return _json(configure(value, workspace))
 
 
 def component_versions(cli_version: str | None = None) -> str:
@@ -135,13 +142,19 @@ def get_agent_settings() -> str:
     active = config.get("providers", {}).get(provider, {})
     profile = prompt_profile_status(config, provider=provider, model=str(active.get("model", "")))
     scout_enabled = optional_agent_enabled("scout", config)
-    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
+    tester_enabled = optional_agent_enabled("tester", config)
+    mcp_enabled = optional_agent_enabled("mcp", config)
+    manifest = agent_manifest(
+        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+    )
     return _json(
         {
             "prompt_profile": profile,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
             "scout_enabled": scout_enabled,
+            "tester_enabled": tester_enabled,
+            "mcp_enabled": mcp_enabled,
         }
     )
 
@@ -150,6 +163,23 @@ def configure_optional_agent(name: str, enabled: bool) -> str:
     """Enable or disable a supported optional agent and return deck settings."""
     set_optional_agent_enabled(name, enabled)
     return get_agent_settings()
+
+
+def configure_mcp(args_json: str = "[]") -> str:
+    """Expose explicit MCP setup/probes to frontends without a model."""
+    from .mcp import mcp_command
+
+    args = json.loads(args_json)
+    if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+        raise ValueError("MCP command arguments must be a JSON string array")
+    return _json(mcp_command(args))
+
+
+def configure_mcp_text(text: str = "") -> str:
+    """Parse quoted paths for the terminal UI's /mcp command."""
+    import shlex
+
+    return configure_mcp(json.dumps(shlex.split(text)))
 
 
 def run_quality_eval(
@@ -173,11 +203,31 @@ def run_quality_eval(
     )
 
 
+def run_coding_eval(
+    mode: str = "plan",
+    profiles: str | None = None,
+    task_ids: str | None = None,
+    limit: int | None = None,
+    workspace: str | None = None,
+) -> str:
+    """Run disposable coding exercises with independent acceptance tests."""
+    from .coding_eval import run_coding_eval as run_eval
+
+    return _json(run_eval(mode=mode, profiles=profiles, task_ids=task_ids, limit=limit))
+
+
 def list_quality_eval_tasks() -> str:
     """Return the built-in prompt-profile quality evaluation tasks."""
     from .quality_eval import list_eval_tasks
 
     return _json(list_eval_tasks())
+
+
+def run_harness_eval() -> str:
+    """Run offline integration cases through ProtoLink's native evaluator."""
+    from .harness_eval import run_harness_eval as run_eval
+
+    return _json(run_eval())
 
 
 def compact_protolink_history(
@@ -294,7 +344,11 @@ def doctor(workspace: str | None = None) -> str:
         None,
     )
     scout_enabled = optional_agent_enabled("scout", config)
-    manifest = agent_manifest(profile, scout_enabled=scout_enabled)
+    tester_enabled = optional_agent_enabled("tester", config)
+    mcp_enabled = optional_agent_enabled("mcp", config)
+    manifest = agent_manifest(
+        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+    )
     return _json(
         {
             "python": platform.python_version(),
@@ -310,6 +364,8 @@ def doctor(workspace: str | None = None) -> str:
             else "unknown",
             "prompt_profile": profile,
             "scout_enabled": scout_enabled,
+            "tester_enabled": tester_enabled,
+            "mcp_enabled": mcp_enabled,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
         }
@@ -351,16 +407,25 @@ def process_prompt(
     """
     started = time.time()
     workspace = str(workspace_root(workspace))
+    if progress_path and os.getenv("PROTOAGENT_SCAFFOLD") != "1":
+        if problem := model_startup_problem():
+            return _json({**problem, "elapsed_ms": round((time.time() - started) * 1000)})
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
     _emit_progress(progress_path, f"CLI accepted task for workspace {workspace}.")
-    _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
-    tagged_context = _tagged_file_context(prompt, workspace)
-    for event in _tag_events(tagged_context):
-        _emit_progress(progress_path, event)
-    _emit_progress(progress_path, "Weaving Context Loom pack from the active workspace.")
-    loom_context = _context_pack_for_prompt(prompt, workspace, tagged_context)
-    for event in _context_events(loom_context):
-        _emit_progress(progress_path, event)
+    from .run_contracts import infer_run_contract
+
+    conversational = infer_run_contract(prompt).task_kind == "direct-answer"
+    tagged_context = {"items": [], "errors": []}
+    loom_context = None
+    if not conversational:
+        _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
+        tagged_context = _tagged_file_context(prompt, workspace)
+        for event in _tag_events(tagged_context):
+            _emit_progress(progress_path, event)
+        _emit_progress(progress_path, "Weaving Context Loom pack from the active workspace.")
+        loom_context = _context_pack_for_prompt(prompt, workspace, tagged_context)
+        for event in _context_events(loom_context):
+            _emit_progress(progress_path, event)
 
     if os.getenv("PROTOAGENT_SCAFFOLD") == "1":
         _emit_progress(
@@ -391,19 +456,19 @@ def process_prompt(
         )
     except Exception as exc:
         _emit_progress(progress_path, f"ProtoLink agent run failed: {exc}")
-        fallback = _fallback_response(
-            prompt,
-            workspace,
-            started,
-            tagged_context,
-            progress_path,
-            loom_context,
+        from .runtime_storage import output_redaction
+
+        return _json(
+            output_redaction().redact(
+                {
+                    "status": "failed",
+                    "answer": "The agent run failed. Check /config and /check, then retry. Details are available in /trace.",
+                    "warning": str(exc),
+                    "events": [f"ProtoLink agent run failed: {exc}"],
+                    "elapsed_ms": round((time.time() - started) * 1000),
+                }
+            )
         )
-        fallback["status"] = "fallback"
-        fallback["headline"] = "ProtoLink agent run failed; showing core diagnostics."
-        fallback["warning"] = str(exc)
-        fallback["events"].append(f"ProtoLink agent run failed: {exc}")
-        return _json(fallback)
 
 
 def _fallback_response(
@@ -503,11 +568,13 @@ def _model_response(
         user_prompt=prompt,
     )
     runtime_status = str(result.get("status") or "completed")
-    if runtime_status == "canceled":
+    from .run_contracts import infer_run_contract
+
+    if runtime_status == "completed":
+        remember_valid_provider(result["provider"], result["model"])
+    if runtime_status == "canceled" or infer_run_contract(prompt).task_kind == "direct-answer":
         targets = []
     else:
-        if runtime_status == "completed":
-            remember_valid_provider(result["provider"], result["model"])
         context = build_context_map(workspace)
         targets = _extract_file_targets(prompt, context.get("files", []))
     diff_items = result.get("diffs", [])
@@ -545,7 +612,15 @@ def _model_response(
     return {
         "status": runtime_status
         if runtime_status
-        in {"blocked", "canceled", "incomplete", "failed", "uncertain", "input_required"}
+        in {
+            "blocked",
+            "canceled",
+            "incomplete",
+            "failed",
+            "uncertain",
+            "input_required",
+            "unverified",
+        }
         else "answered",
         "headline": (
             "Architect completed the ProtoLink run."
@@ -569,6 +644,13 @@ def _model_response(
         ),
         "file_target": target_label,
         "diff": diff,
+        "proposal_diff": "\n".join(
+            str(item.get("diff", ""))
+            for item in result.get("proposal_diffs", [])
+            if isinstance(item, dict)
+        ),
+        "change_review": result.get("change_review", {}),
+        "approval_mode": result.get("approval_mode", "ask"),
         "events": [
             *result.get("events", []),
             *_context_events(loom_context),
@@ -586,9 +668,11 @@ def _model_response(
         "elapsed_ms": int((time.time() - started) * 1000),
         "run_contract": run_contract,
         "completion_validation": completion,
+        "verification": result.get("verification", {}),
+        "task_record": result.get("task_record", {}),
+        "context_admission": result.get("context_admission", {}),
         "run_report": result.get("run_report", {}),
         "transport_report": result.get("transport_report", {}),
-        "verification": result.get("verification", {}),
     }
 
 

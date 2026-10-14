@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
+use crossterm::event::{poll, read, Event, KeyCode, KeyModifiers};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{
     call_add_api_key, call_set_model, load_inventory_with_validation, ModelInfo, ModelProvider,
@@ -139,7 +140,7 @@ pub(super) fn handle_model_command(
             app.push(
                 Role::Error,
                 "/model",
-                &format!("Could not save model: {err:?}"),
+                &format!("Could not save model: {err}"),
             );
         }
     }
@@ -298,7 +299,7 @@ fn prompt_and_store_api_key(
     }
 
     call_add_api_key(provider.id.clone(), api_key)
-        .map_err(|err| anyhow::anyhow!("Python config error: {err:?}"))?;
+        .map_err(|err| anyhow::anyhow!("Python config error: {err}"))?;
     let Some(inventory) = load_inventory_with_feedback(
         app,
         terminal,
@@ -337,17 +338,40 @@ pub(super) fn load_inventory_with_feedback(
         let _ = sender.send(load_inventory_with_validation(true));
     });
     let spinner = ["|", "/", "-", "\\"];
-    let mut tick = 0usize;
+    let started = Instant::now();
+    let mut painted_tick = None;
+    terminal.render(app, None)?;
+    let mut dimensions = super::theme::size();
 
     let result = loop {
-        terminal.render(app, None)?;
-        draw_loading_modal_frame(title, &rows, spinner[tick % spinner.len()])?;
-        match receiver.recv_timeout(Duration::from_millis(120)) {
-            Ok(result) => break result,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                tick = tick.wrapping_add(1);
+        if super::theme::size() != dimensions {
+            dimensions = super::theme::size();
+            terminal.render(app, None)?;
+            painted_tick = None;
+        }
+        let tick = (started.elapsed().as_millis() / u128::from(super::ANIMATION_MS)) as usize;
+        if painted_tick != Some(tick) {
+            draw_loading_modal_frame(title, &rows, spinner[tick % spinner.len()])?;
+            painted_tick = Some(tick);
+        }
+        if poll(Duration::from_millis(super::INPUT_POLL_MS))? {
+            if let Event::Key(key) = read()? {
+                if key.code == KeyCode::Esc
+                    || (key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL))
+                {
+                    app.models_loading = false;
+                    app.activity = "idle".into();
+                    app.push(Role::Command, command, "Model discovery canceled.");
+                    terminal.suppress_exit_escape();
+                    return Ok(None);
+                }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+        }
+        match receiver.try_recv() {
+            Ok(result) => break result,
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
                 break Err(anyhow!(
                     "Model inventory worker exited before returning a result"
                 ));

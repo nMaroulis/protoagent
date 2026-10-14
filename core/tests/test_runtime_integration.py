@@ -13,6 +13,7 @@ import protoagent_core.agents.explorer as explorer_module
 from protoagent_core.agents.common import create_runtime_auth
 from protoagent_core.agents.deck import create_agent_deck
 from protoagent_core.runtime import (
+    _failure_detail,
     _run_budget,
     _transport_report,
 )
@@ -50,6 +51,34 @@ class RuntimeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schema["required"], ["pattern"])
         self.assertEqual(schema["properties"]["path"]["default"], ".")
         self.assertEqual(schema["properties"]["file_filter"]["default"], ".*")
+
+    def test_nested_native_inference_limit_has_a_readable_failure(self):
+        inner = {
+            "code": "RuntimeError",
+            "message": "Tool 'coder' execution failed: Maximum inference steps (10) exceeded without producing final response. The LLM may be stuck in a loop.",
+        }
+        error = {
+            "code": "task_failed",
+            "message": "Native run failed: " + str(inner),
+            "blockers": [],
+        }
+        self.assertEqual(
+            _failure_detail(error), "Coder reached its 10-turn limit before finishing."
+        )
+        self.assertEqual(
+            _failure_detail({"code": "x", "message": "Denied by user"}), "Denied by user"
+        )
+        self.assertEqual(
+            _failure_detail("Native run failed: unexpected error"),
+            "Native run failed: unexpected error",
+        )
+
+    def test_provider_repeat_abort_is_distinguished_from_the_agent_turn_limit(self):
+        message = "Tool 'coder' execution failed: LLM call failed at step 2: Ollama API returned an error during stream: prediction aborted, token repeat limit reached"
+        detail = _failure_detail({"code": "RuntimeError", "message": message})
+        self.assertIn("Ollama stopped the model", detail)
+        self.assertIn("interrupted response was not executed", detail)
+        self.assertIn("separate from the agent's turn limit", detail)
 
     async def test_explorer_policy_denies_unmatched_capability_by_default(self) -> None:
         agent = explorer_module.create_explorer_agent(workspace=".", transport="http")

@@ -3,8 +3,8 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.2.3 requires **ProtoLink 0.7.1**. `runtime.py` configures an embedded
-mesh; `workflow.py` defines coding acceptance and repair routing. Native agents,
+ProtoAgent 0.3.0 requires **ProtoLink 0.8.1**. `runtime.py` configures an embedded
+local child roster by default; `workflow.py` defines coding acceptance and repair routing. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
 ## Entry and ownership
@@ -15,15 +15,25 @@ run_selected_model(prompt, workspace=None, session_id=None, progress_path=None, 
 
 The application loads model configuration, builds a trusted `RunContext`, leases
 the project's checkpoint namespace, and constructs its agents. Each LLM-capable
-role gets its own configured LLM instance. Verifier and optional Scout have no
+role gets its own configured LLM instance. Verifier and optional Scout/MCP have no
 LLM. Architect retains its conversation state; workers remain task-local.
+
+The original RunContract selects the roster before agent construction and sets
+native `RunContext.permissions`. Conversation builds only Architect and skips
+repository/check discovery. Questions keep read-only workers and omit coding
+planning tools; explicit verification adds Verifier and approved command access.
+File writes/restores remain denied unless the original request asks for editing.
+No model-produced plan or clarification response can raise those ceilings.
 
 | Native object | Application configuration |
 | --- | --- |
-| `AgentGroup` | Owns the Registry and enabled mesh agents; readiness, partial-start rollback and shutdown are native. |
+| `AgentGroup` | Owns enabled agents; explicit transport mode also owns its Registry. Readiness, partial-start rollback and shutdown are native. |
+| `Agent.subagents`, `SubagentLimits` | Architect owns a fixed enabled roster; fresh child conversations, inherited policies, shared budget, sequential dispatch, depth one and 32 children per attempt. |
+| `ContextPolicy`, `AgentHooks` | Complete-turn pruning, progressive result retrieval and current coding task state before each model request. |
 | Second `AgentGroup` | Owns a local workflow controller, declaring the running mesh as external resources. |
 | `RunHandle` | Executes the workflow and Architect attempts; supplies typed events, cancellation, normalized `RunResult` and `RunReport`. |
 | `ApprovalBroker` | Actual approval handler on Coder/Verifier, with per-run durable records and expiration. |
+| `ask_user_tool` | Architect asks through a native prepared tool; a UI callback returns an answer, decline or timeout before the next inference step. |
 | `StorageCheckpointStore` | Dedicated per-project `SQLiteStorage` namespace under `recovery/`. |
 | `SQLiteRunStore` | Native task/report persistence in a private per-run database under `runs/`. |
 | `Graph` | One initial attempt, two repair visits, three acceptance visits, seven total visits maximum. |
@@ -31,7 +41,8 @@ LLM. Architect retains its conversation state; workers remain task-local.
 
 The tool-only workflow controller exposes an application `run_workflow` tool to
 its local handle. It has no model and is not advertised in worker discovery.
-There is no application subprocess launcher or transport-final-event parser.
+The interactive workflow uses native process execution; the separate evaluation
+harness runs its independent acceptance scripts outside the fixture workspace.
 
 ## Bounded application workflow
 
@@ -43,20 +54,58 @@ flowchart LR
   R --> A
 ```
 
-Architect receives repository context and delegates through normal ProtoLink
-`agent_call` execution. All edits precede command checks within one attempt.
-The application policy prevents further file changes after checking starts.
+For repository work, Architect receives repository context. Small owned-local runs use fixed typed
+worker calls prepared with `PreparedTool` and executed by ProtoLink's child
+supervisor; other profiles/transports use normal `agent_call` execution.
+Both retain native child policies, approvals and receipts.
+A runtime-owned TaskRecord holds criteria, scope, discovered
+check IDs and worker reports. Baseline and preparation commands allow later edits;
+final verification closes the edit phase. The check plan freezes at the first
+write or final check. See [Task Workflow](task-workflow.md).
 Only Graph dispatch opens a new repair attempt. Graph limits and shared native
 budgets bound repair work independently of `RetryPolicy`.
 
+ProtoLink selects the action protocol for each inference. Small-profile Gemma 4
+on Ollama uses its JSON action protocol when configured for automatic selection;
+explicit native/json settings remain authoritative. Other Ollama models default to
+`tool_calling="auto"`; other adapters retain their defaults unless configured.
+The engine corrects recognizable malformed action envelopes in JSON/native
+modes, preserving completed tool observations in the current run. The compact
+JSON prompt retains an Explorer README example. Prose, ordinary JSON answers
+and data inside explicit `final.content` remain answers. ProtoAgent has no
+second action dispatcher or final-answer rejection hook. See
+[Models And Config](../cli/models-and-config.md).
+The before-model hook neutralizes malformed legacy assistant messages through
+the native parser. Valid historical actions, explicit final data and original
+execution reports remain intact.
+
 `run_contracts.py` classifies the original prompt. Write contracts require a
 native applied-file receipt at its current revision; verification requests
-require executed commands. Approval, previews, delegation and blocker prose
+require all selected repository checks. Successful unrelated commands do not count. Approval, previews, delegation and blocker prose
 cannot satisfy execution checks. Structured denials and blockers are preserved
 as unsuccessful outcomes. A write without any command is explicitly unverified.
 
-Command acceptance records the revisions of this run's changed files at
-preparation and rechecks them through `CompletionCheck.read_revision`. It detects
+Planning validation errors raise native `ToolRejectedError` before mutation,
+preserving the current plan. Stale or ambiguous exact-edit preparation, invalid
+worker packets/reports and invalid check requests also reject without effects.
+The native loop can correct the request without restarting. `action.rejected`
+and inference `action_rejection` artifacts distinguish rejection from execution;
+they never satisfy completion checks. The shared correction allowance defaults
+to two per inference, successful actions do not reset it, and existing budgets
+still apply. Denials, ordinary execution errors and uncertain effects stop.
+
+The engine derives `supports_inference` independently of model connection
+health and validates worker targets, advertised tools and schemas before
+dispatch. Verifier, Scout and MCP accept tools only; reasoning workers accept
+inference. The compact roster preserves that distinction.
+
+Python projects lacking checks can use an application-declared unittest
+runner captured before inference and populated with Coder's regression tests.
+The runner uses the existing native process, approval and receipt path. Zero-test
+final runs never satisfy verification. See [Task Workflow](task-workflow.md).
+
+Command acceptance records revisions of changed files, directly read source and
+configured check dependencies (up to 512 files) at preparation and rechecks them through `CompletionCheck.read_revision`. It detects
 later changes to those resources, including external edits. It does not capture
 all repository inputs. See [Verify & Recover](../cli/verification-and-recovery.md)
 for the exact acceptance and restoration boundaries.
@@ -64,7 +113,7 @@ for the exact acceptance and restoration boundaries.
 ## Authorization and controls
 
 The top-level context grants `agent.delegate`, `workspace.read`,
-`filesystem.read`, `filesystem.write`, `filesystem.restore`, `process.execute`
+`task.manage`, `user.interact`, `filesystem.read`, `filesystem.write`, `filesystem.restore`, `process.execute`
 and `network.read`. Each agent still applies a restrictive native capability
 policy. Coder requires approval for writes and restoration; Verifier requires
 approval for command execution. Native policies otherwise allow actions by
@@ -79,21 +128,102 @@ decisions do not release execution. Cancellation is sent once to `RunHandle`;
 the application does not retry task submission to recover an uncertain effect.
 
 Controls use short-lived private files shared with Rust. Without an interactive
-bridge, pending approvals are denied. The per-run broker namespace has one live
+bridge, pending approvals are denied unless a saved project preference explicitly
+permits automatic resolution for that native action. The per-run broker namespace has one live
 writer; reopening stored pending records is inspection-only uncertainty, never
 execution resumption.
 
+`approval_modes` preferences resolve prepared `create_file`/`replace_file` requests
+in Edits or Auto mode, and prepared `execute_command` requests only in Auto mode.
+The bridge binds the choice at run start and calls native `ApprovalBroker.resolve`
+with the trusted scope and exact fingerprint; automatic decisions are recorded
+as `protoagent-auto`. Native policies remain approval-gated, and all execution
+guards still apply. MCP and `restore_change` are outside this automatic selection.
+Recovery operations bind the default manual mode independently.
+
+Python create/replace/exact-edit proposals also receive parse-only source
+validation before write approval. A new `.py` file, or a syntactically valid
+existing file, cannot receive an afterimage introducing a Python syntax error.
+`introduced_python_syntax` uses a read-only prepared feedback action so ProtoLink
+owns the same bounded correction allowance. Validation never imports or runs the
+source and never unescapes it automatically. Existing malformed Python can still
+be repaired incrementally; behavior and dependency failures need real checks.
+Valid proposals carry native `filesystem.write` authorization, exact fingerprints
+and recovery snapshots even though the validation interface declares read access.
+
+Terminal `change_review` metadata and `diffs` are derived from this run's native
+checkpoint inventory and event ordering. They combine continuous preimage/afterimage
+chains, exclude denied previews, mark external revision changes and uncertain
+effects, and retain partial-run effects. `proposal_diffs` is a separate preview
+channel. This bounded, model-free review does not claim arbitrary process or
+MCP effects are recoverable file edits.
+
+## User questions and live continuation
+
+Architect alone registers ProtoLink's `ask_user(question, options=None)` with
+`user.interact` permission. Workers report missing information to Architect.
+The application attaches `RuntimeBridge.ask_user` as the live UI callback;
+ProtoLink owns preparation, validation, waiting, typed results, events and the
+next model step. No second question executor or task resubmission is involved.
+The single-agent coding evaluation receives the same interaction capability.
+
+The CLI/TUI displays the question and accepts free text, suggested answers or
+an explicit skip. Responses bind to the native run, task, action and request IDs
+through private per-run controls. Stale and malformed responses do not release
+the wait. Answers contain at most 4096 characters; the native timeout is 300
+seconds, reduced by the remaining run budget. Native cancellation/timeout clears
+pending controls and closes the UI. Waiting counts toward runtime, and the tool
+uses the existing step/tool budgets. Suggested answers never submit themselves.
+
+The engine returns `answered`, `declined` or `timed_out` in ordinary tool history;
+decline and timeout contain no answer. Without an interactive bridge, the question
+explicitly declines. Feedback does not change RunContract or grant permission
+to write, restore, run commands or invoke MCP. A missing answer to a blocking
+requirement must be reported rather than guessed. Questions and answers enter
+native history/events and redacted reports; this tool is not for credentials.
+An after-tool lifecycle hook retains answered question/answer pairs in TaskRecord
+and worker packets, so subsequent observation pruning does not discard user
+requirements. It consumes the validated native result and does not alter its
+execution receipt. Required clarification state that cannot fit still fails
+context admission explicitly rather than being silently truncated.
+
+A thin prepared-tool adapter observes the validated native answer before model
+continuation. After editing or final checking begins, an explicit verification
+stop, such as "don't run it, I'll do it" or "I'll verify it myself; stop here",
+records `verification.deferred` and cancels through ProtoLink's execution token.
+The application returns a deterministic `unverified` handoff with verification
+`deferred`; it needs no final model round and cannot route into repair. Native
+cancellation and failed command receipts remain intact, with the last measured
+verification status retained separately. Uncertain effects, denials and stale
+resources remain unresolved rather than being hidden by a handoff. A declined
+or expired question is not a handoff, and instructions to continue other work
+still use the ordinary native continuation path.
+
+This is continuation inside the current live run. ProtoLink also supports
+checkpointed questions with `Agent.resume(..., answer=...)`, but restartable
+coding execution requires preservation of application Graph state and remains
+outside this integration. Reopening a session does not resume a pending question.
+
 ## Transports and events
 
-The mesh defaults to loopback SSE with an HTTP Registry. Set
+The harness defaults to `PROTOAGENT_AGENT_TRANSPORT=local`: native owned
+children with no Registry or loopback listeners. `agent_call` retains its normal
+infer/tool-call format. Children share the Graph's root budget and satisfy
+ancestor policies. Background model tools are disabled, concurrency is one,
+depth is one, and `PROTOAGENT_MAX_CHILDREN` defaults to 32 per Architect attempt.
+Graph still permits at most two repairs; its shared budget persists across them.
+
+Set
 `PROTOAGENT_AGENT_TRANSPORT=http`, `websocket`, `grpc` or `runtime` as needed.
+`sse` selects a loopback SSE mesh with an HTTP Registry.
 The `grpc` transport requires ProtoLink's optional extra. `runtime` uses an
 in-process Registry and transport identities. JSON-RPC aliases map to SSE.
 
 `PROTOAGENT_RUNTIME_HOST` defaults to `127.0.0.1`. Registry and worker URLs can
 be overridden with `PROTOAGENT_REGISTRY_URL`, `PROTOAGENT_ARCHITECT_URL`,
-`PROTOAGENT_EXPLORER_URL`, `PROTOAGENT_CODER_URL`, `PROTOAGENT_VERIFIER_URL` and
+`PROTOAGENT_EXPLORER_URL`, `PROTOAGENT_CODER_URL`, `PROTOAGENT_TESTER_URL`, `PROTOAGENT_VERIFIER_URL` and
 `PROTOAGENT_SCOUT_URL`; the corresponding older `*_AGENT_URL` aliases remain.
+URL overrides identify agents but do not create network resources in local mode.
 The entry handle invokes owned agents locally; there is no separate CLI task
 client to configure.
 
@@ -132,18 +262,26 @@ no workspace tools, coding delegation, persistent history or run database.
 For JSON-action models, a display projection progressively decodes the canonical
 `{"type":"final","content":"..."}` envelope, withholding unfinished escapes
 and secrets spanning chunks. Tool/delegation envelopes stay out of live text.
-The mode comes from the configured model's `supports_native_action_stream`
-capability: native-tool text, including genuine JSON answers, passes through.
-Unrecognized envelopes wait for native `llm_final`. This projection never
-validates or dispatches actions; ProtoLink retains all execution authority.
+Native-capable models may also send fallback actions as text. Leading JSON is
+buffered until its display intent is known; the native normalizer distinguishes
+complete data objects from control envelopes. Tool/delegation JSON stays hidden
+in either mode. Ordinary native prose streams immediately, domain JSON remains
+intact, and typed `llm_final` content preserves explicit protocol examples.
+Native tool selection clears any provisional narration from that step, restoring
+the muted activity line. This projection never authorizes or dispatches an
+action; ProtoLink retains execution authority and bounded correction.
 
-`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) limits summaries, not live text.
+`PROTOAGENT_STREAM_TRACE_LIMIT` (default 120) bounds the live summary preview,
+not execution steps, model text or the complete stored report. Reaching it
+displays a notice that the run continues and full events remain in `/trace`.
+Later model/action starts, approval/question outcomes, execution receipts and terminal events still
+reach the live UI. This preview cap is independent of the run's time budget.
 `PROTOAGENT_STREAM=0` suppresses live text and incremental UI summaries; native
 handles still consume execution once. Peer capabilities determine whether
 delegated output arrives live or with the final snapshot. Even an HTTP worker
 mesh can show live output from the locally invoked Architect.
 
-ProtoLink 0.7.1 puts delegated events and receipts directly in parent streams,
+ProtoLink 0.8.1 puts delegated events and receipts directly in parent streams,
 tasks and reports, with native identity preservation and deduplication. Completion
 uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
 handle's complete report events into the Graph task, preserving model metrics
@@ -159,6 +297,51 @@ reported as potentially effected work, never as an action that was not submitted
 
 ## Budgets and persistence
 
+Each ProtoLink inference invocation also has a ten-turn cap. It is independent
+of the aggregate budgets below and the 120-message live trace preview limit.
+Coder's native before-model hook stops before the tenth provider call in each
+work window. A public Agent extension permits at most three native windows in
+the same assignment when each preceding window made fresh native writes and its
+latest resource revisions remain current. It preserves the original assignment,
+history, run context and aggregate budget; committed edits and approvals are not
+replayed. Explicit missing-context reports, native stops, uncertainty and stale
+writes prevent continuation. `worker.continuing` records each admitted window.
+`PROTOAGENT_CODER_MAX_WINDOWS` can lower the ceiling to one or two; it is clamped
+to 1–3 and defaults to three (at most 27 model calls per assignment).
+
+At the ceiling, an unfinished progressing assignment returns
+`needs_context`/`worker_turn_limit`. A window without fresh writes returns
+`blocked`/`worker_no_progress`, preserving earlier applied paths. Both record
+unresolved work; final checking is
+rejected until a focused subsequent assignment resolves it. New assignments
+consume the same aggregate budget and preserve applied effects. Native denial,
+execution failure, cancellation, uncertain effects and shared-budget exhaustion
+are not caught or converted into a handoff. The engine's provider acquisition,
+inference loop and tool executor remain unchanged.
+
+An exhausted partial Coder assignment returns Architect directly to the workflow
+before another model request (`workflow.work_yielded`). It does not require a user
+decision about continuing the already requested task. The native Graph permits
+up to two qualifying continuations. This continues the same open edit
+phase and frozen plan, sharing budgets; it does not replay actions or increment
+the repair attempt. Stable native write receipts are required. Native stops,
+stale revisions, no-progress handoffs and completed final checking exclude this
+path. `workflow.continuing` events and `workflow_continuations` report the count.
+After two unfinished continuations, the answer reports incomplete work rather
+than preserving prose announcing another tool call. The existing maximum of two
+repairs after qualifying completed check failures remains separate.
+Completed failing final checks yield through a public Architect Agent extension
+before another model request, so a model cannot accidentally begin editing while
+checking has closed the phase. `workflow.repair.requested` records this handoff;
+only the Graph's acceptance decision opens the next edit phase. The extension
+catches its own typed control signal, never native action/provider errors. After
+two repairs, unresolved failures finish incomplete without another dispatch.
+Live presentation deduplicates native event IDs across all workflow handles;
+earlier activity and output are not replayed when another Graph node starts.
+The full native report retains its execution evidence.
+Failed answers show the readable cause and files already changed; `/trace`
+retains the native error and execution evidence.
+
 | Environment variable | Native budget |
 | --- | --- |
 | `PROTOAGENT_RUN_MAX_STEPS` | `max_steps`; application default 80 |
@@ -167,8 +350,12 @@ reported as potentially effected work, never as an action that was not submitted
 | `PROTOAGENT_RUN_MAX_SECONDS` | `max_runtime_seconds`; default agent timeout, 600 seconds |
 | `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | Aggregate `max_input_tokens` for all providers, including Ollama |
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
+| `PROTOAGENT_CODER_MAX_WINDOWS` | Application work windows per Coder assignment; default 3, clamped to 1–3 |
 
 Input and output token budgets are optional totals across model calls in a run.
+The runtime clock includes waiting for approvals and user answers. An explicit
+verification handoff finishes without spending the remaining time on another
+model reply; it does not extend or reset the native budget.
 They are unset unless explicitly configured. A model's context window applies to
 individual requests and does not set the aggregate run budget. Command execution
 is also bounded by its explicit limits and the remaining native runtime budget.
@@ -185,3 +372,15 @@ RunReplay remains read-only inspection, not task resumption.
 `${PROTOAGENT_CONFIG_DIR:-~/.protoagent}/traces.jsonl`, using the same redactor.
 Private directories use 0700 and storage files use 0600. Source diffs and unknown
 secrets printed by project code can still be sensitive.
+
+
+## Frozen optional-worker configuration
+
+`run_selected_model()` snapshots Tester/Scout/MCP toggles and MCP server
+contracts before assembling the deck. Tester defaults on; Scout/MCP default
+off. Disabled optional workers are not constructed, registered or included in
+the runtime transport report. The Architect prompt carries their availability.
+Required checks stay enforced when Tester is off. Native MCP tools are used
+through lazy, approved broker operations rather than eager server discovery
+at startup; see [MCP Broker](mcp.md). The broker has no context-admission/model
+entry because it never calls an LLM.

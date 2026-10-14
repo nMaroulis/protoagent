@@ -45,6 +45,47 @@ The config contains:
 | `recent_projects` | Up to 12 recently opened project paths. |
 | `context_memory_enabled` | Optional boolean controlling persistent ProtoLink session use. Defaults to on. |
 
+## Browse and view files
+
+File inspection works without a model:
+
+```text
+/ls
+/ls core
+/browse
+/browse core
+/open server.py
+/cat server.py
+/cat "docs/my notes.md"
+```
+
+`/ls [PATH]` lists one directory, including hidden entries. `/browse [PATH]`
+(`/files`) opens a directory browser: type to filter, use arrows/page keys to
+select, Enter to open a folder or text file, and Backspace to erase the filter
+or go to the parent folder. Esc closes it.
+
+`/open FILE` opens a read-only viewer with line numbers. Up/Down, PgUp/PgDn
+and Home/End move through the file; Left/Right pan long lines. Esc or q returns
+to the browser or transcript. `/open` without a path opens the browser.
+`/cat FILE` displays a text preview directly in the transcript. Quoted paths
+with spaces and `@file` paths are accepted. Selecting the project remains
+`/project PATH`; `/open` now views files rather than acting as a project alias.
+
+Paths are relative to the active project; absolute paths inside it also work.
+Browsing does not change the active project or send source to an LLM. To include
+source in a task, use `@file` tagging. Viewing is separate from execution receipts
+and verification.
+
+The browser reads one folder at a time and caps listings at 2,000 entries.
+The viewer caches up to 1 MiB of UTF-8 text; `/cat` shows up to 32,768 characters.
+Truncated previews are identified. Binary/non-UTF-8 files report an error;
+terminal control sequences are rendered as inert text. Links resolving outside
+the active project are not opened.
+
+Shell equivalents are `proto-cli ls [PATH]`, `proto-cli cat FILE`,
+`proto-cli browse [PATH]` and `proto-cli open [FILE]`. The browser/viewer require
+an interactive terminal; ls/cat also work in scripts.
+
 ## Path Resolution
 
 Relative project paths are resolved from the launch workspace. If the CLI is

@@ -6,6 +6,19 @@ from protoagent_core.run_contracts import infer_run_contract
 
 
 class RunContractTests(unittest.TestCase):
+    def test_whole_greetings_are_conversation_but_attached_requests_are_preserved(self):
+        for prompt in (
+            "hi!",
+            "hello there",
+            "thanks",
+            "good morning",
+            "how are you?",
+            "what can you do?",
+        ):
+            self.assertEqual(infer_run_contract(prompt).task_kind, "direct-answer")
+        self.assertTrue(infer_run_contract("Hi, please change server.py").requires_write)
+        self.assertTrue(infer_run_contract("Hello, fix the tests").requires_write)
+
     def test_write_prompt_requires_coder_or_write_artifact(self) -> None:
         contract = infer_run_contract("Implement the runtime guard and update the docs")
 
@@ -53,6 +66,8 @@ class RunContractTests(unittest.TestCase):
             "Check test coverage",
             "Build the docs",
             "Please run the tests",
+            "Explain this project and run its baseline",
+            "Review the code; then run the tests",
         ):
             with self.subTest(prompt=prompt):
                 contract = infer_run_contract(prompt)

@@ -170,3 +170,25 @@ build_context_pack(query: str)
 
 This lets Architect ask Explorer for a fresh focused evidence pack during a run,
 not only during initial prompt preparation.
+
+## Request admission and direct source (v0.3.0)
+
+Context Loom supplies initial orientation. Workers now use bounded line-range
+reads with full-file revisions for actual edits. Coder can reread missing source
+and apply exact replacements instead of reproducing a whole file.
+
+`request_budget.py` configures native `ContextPolicy` and `AgentHooks`, reserves
+output space and accounts for native schemas before every model request. ProtoLink
+prunes complete old turns and clears acknowledged observations. The application
+refreshes the runtime task record and prepares delegated results through the same
+policy. Large tool/child results become previews with scoped references, readable
+through `read_context_artifact` in small pages; receipt authority is preserved.
+Large initial repository
+evidence can be reduced to fit; mandatory overflow fails explicitly. These are
+estimates, not exact provider token counts. See [Task Workflow](task-workflow.md).
+
+Small profiles also use compact protocol prompts and worker cards. Exact tool
+input schemas remain available; output schemas and repetitive framework examples
+are omitted. Unknown small-model capacity gets an 8192-token application admission
+cap until a provider `context_window` is configured. This cap is not a measurement
+of the provider's actual model limit.
