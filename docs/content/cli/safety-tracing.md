@@ -62,7 +62,7 @@ Verification normally occupies one line. For example:
 runner or external module in a completed final check ends the run with applied
 edits **unverified**, without installation questions, automatic setup or code
 repairs. Existing project modules remain code/import-path failures; genuine test
-failures retain bounded repairs. Canceled, denied, stale or uncertain evidence
+failures are reported without automatic repairs. Canceled, denied, stale or uncertain evidence
 cannot be downgraded to this unavailable state. No skipped check is marked passed.
 Full commands, output and exit codes remain in `/trace` and the native report.
 
@@ -111,7 +111,7 @@ JSON preview contains argv, absolute cwd, explicit env, timeout, output cap and
 host execution boundary. **V opens details; it does not approve or execute.**
 Press **Y** to approve and run the exact command, or **N/Esc** to deny from the
 approval screen. Inside details or a diff, Y/N decides and Enter/Esc returns
-without a decision. The screen distinguishes baseline checks, final verification,
+without a decision. The screen distinguishes final verification,
 other commands and file changes. A command preview has no proposed file diff;
 Coder's file changes receive separate diff approvals. Native cancellation,
 timeout and run-budget expiry close the modal and its review automatically.
@@ -150,14 +150,15 @@ run time limit while waiting for your answer. Earlier partial edits remain recor
 
 Failed runs can leave approved edits in place. The final answer lists paths
 already changed and distinguishes partial work from completion; inspect `/diff`
-and the current files before continuing. The harness ends Coder's work slice
-before ProtoLink's tenth provider call in each window. Fresh applied edits with
-current revisions permit up to three windows in the same assignment and shared
-budget. The pale loading label shows Coder continuing; `/trace` records
-`worker.continuing`. A window without new writes cannot reuse earlier progress.
-After the window bound, partial work returns to the workflow without another
-Architect question about whether to continue the task. Use
-`PROTOAGENT_CODER_MAX_WINDOWS=1` for one-window assignments.
+and the current files before continuing. Local Coder work uses ProtoLink's
+checkpointed slices and structured handoffs. Fresh applied edits with current
+revisions permit bounded continuation; the pale loading label and `/trace` show
+`worker.continuing`. The SDK keeps committed actions and cumulative budgets.
+A slice with no new writes cannot reuse earlier progress. Up to three progressing
+slices are admitted per child; `PROTOAGENT_CODER_MAX_WINDOWS=1` lowers that bound.
+Checkpointed approval/input resumes also use bounded slices and never reset the
+shared hard budget. Temporary execution stores are removed at workflow exit;
+this does not make coding runs restartable.
 Architect can assign remaining work within
 the shared run budget, but unresolved limit handoffs cannot enter final checking
 or satisfy completion. Native execution failures and denials still stop work;

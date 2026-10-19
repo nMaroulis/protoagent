@@ -53,13 +53,22 @@ else:
 
 
 class OptionalAgentTests(unittest.TestCase):
+    def test_manifest_describes_default_verification_tools_and_disabled_routes(self):
+        for enabled in (True, False):
+            manifest = agent_manifest(profile={"resolved": "small"}, verifier_enabled=enabled)
+            agents = {agent["name"]: agent for agent in manifest["agents"]}
+            self.assertEqual("execute_command" in agents["architect"]["tools"], enabled)
+            self.assertNotIn("run_check", agents["architect"]["tools"])
+            self.assertEqual(agents["verifier"]["tools"], ["execute_command"])
+            self.assertEqual(agents["verifier"]["enabled"], enabled)
+
     def test_defaults_persistence_manifest_and_required_roles(self):
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(config, "CONFIG_DIR", Path(directory)),
             patch.object(config, "CONFIG_PATH", Path(directory) / "config.json"),
         ):
-            self.assertTrue(config.optional_agent_enabled("tester", {"optional_agents": {}}))
+            self.assertFalse(config.optional_agent_enabled("tester", {"optional_agents": {}}))
             self.assertFalse(config.optional_agent_enabled("mcp", config.default_config()))
             result = json.loads(agent_engine.configure_optional_agent("tester", False))
             agents = {entry["name"]: entry for entry in result["agents"]}
@@ -67,7 +76,12 @@ class OptionalAgentTests(unittest.TestCase):
             self.assertTrue(agents["tester"]["optional"])
             self.assertNotIn("tester", result["architecture"]["stateless"])
             self.assertFalse(config.optional_agent_enabled("tester", config.load_config()))
-            for name in ("architect", "explorer", "coder", "verifier"):
+            self.assertTrue(config.optional_agent_enabled("verifier", config.default_config()))
+            result = json.loads(agent_engine.configure_optional_agent("verifier", False))
+            verifier = next(agent for agent in result["agents"] if agent["name"] == "verifier")
+            self.assertTrue(verifier["optional"])
+            self.assertFalse(verifier["enabled"])
+            for name in ("architect", "explorer", "coder"):
                 with self.assertRaises(ValueError):
                     config.set_optional_agent_enabled(name, False)
             self.assertTrue(
@@ -97,7 +111,7 @@ class OptionalAgentTests(unittest.TestCase):
             prompt = architect_system_prompt(tester_enabled=False, mcp_enabled=False)
             self.assertIn("Never delegate to tester", prompt)
             self.assertIn("Never delegate to mcp", prompt)
-            self.assertIn("Verifier still runs every required check", prompt)
+            self.assertIn("the harness runs enabled checks after edits", prompt)
 
     def test_selected_model_threads_configuration_into_runtime(self):
         cfg = config.default_config()

@@ -11,7 +11,16 @@ from protoagent_core.runtime import _run_agent_deck
 
 
 class WorkflowControlTests(NativeRuntimeCase):
-    async def run_workflow(self, architect, coder, *, answer=None):
+    async def run_workflow(
+        self,
+        architect,
+        coder,
+        *,
+        answer=None,
+        approve_commands=True,
+        verifier_enabled=True,
+        prompt="Fix sample.py so value is 42",
+    ):
         with (
             patch("protoagent_core.agents.coder.create_selected_llm", return_value=coder),
             patch("protoagent_core.agents.architect.create_selected_llm", return_value=architect),
@@ -20,7 +29,7 @@ class WorkflowControlTests(NativeRuntimeCase):
         ):
             running = asyncio.create_task(
                 _run_agent_deck(
-                    "Fix sample.py so value is 42",
+                    prompt,
                     "mock",
                     "offline",
                     str(self.root),
@@ -28,6 +37,7 @@ class WorkflowControlTests(NativeRuntimeCase):
                     self.bridge,
                     {"resolved": "small"},
                     tester_enabled=False,
+                    verifier_enabled=verifier_enabled,
                 )
             )
             approved = set()
@@ -60,7 +70,8 @@ class WorkflowControlTests(NativeRuntimeCase):
                                         {
                                             "request_id": request["request_id"],
                                             "fingerprint": request["fingerprint"],
-                                            "approved": True,
+                                            "approved": approve_commands
+                                            or request["action"]["name"] != "execute_command",
                                         }
                                     )
                                 )
@@ -92,103 +103,23 @@ class WorkflowControlTests(NativeRuntimeCase):
             {"type": "final", "content": "Applied the assigned edit."},
         ]
 
-    @staticmethod
-    def controller_attempt():
-        return [
-            {"type": "tool_call", "tool": "coder", "args": {"task": "Fix sample.py"}},
-            {
-                "type": "tool_call",
-                "tool": "run_check",
-                "args": {"check_id": "python-tests", "phase": "verify"},
-            },
-        ]
-
-    async def test_failed_check_returns_to_graph_before_a_new_edit(self):
+    async def test_command_denial_keeps_edits_and_stops_verification(self):
         self.prepare_source()
-        seen = []
-        replies = iter(
-            [
-                *self.controller_attempt(),
-                *self.controller_attempt(),
-                {"type": "final", "content": "Applied and verified."},
-            ]
-        )
-
-        def reply(history, prompt):
-            seen.append(str(history.to_list()))
-            return next(replies)
-
-        result = await self.run_workflow(
-            create_llm("mock", response_callback=reply),
-            create_llm("mock", sequential_responses=[*self.assignment(1), *self.assignment(42)]),
-        )
-        self.assertEqual(result["status"], "completed", result["answer"])
-        self.assertEqual(result["verification"]["attempts"], 2)
-        self.assertEqual(result["verification"]["status"], "passed")
-        self.assertEqual([item["exit_code"] for item in result["verification"]["results"]], [1, 0])
-        self.assertIn("new bounded repair attempt", seen[2])
-        self.assertEqual(len(result["approval_requests"]), 4)
-        self.assertFalse(
-            any(
-                event["type"] in {"action.failed", "action.denied"}
-                for event in result["run_events"]
-            )
-        )
-        self.assertEqual(
-            sum(event["type"] == "workflow.repair.requested" for event in result["run_events"]), 1
-        )
-
-    async def test_three_failed_checks_exhaust_repairs_without_another_dispatch(self):
-        self.prepare_source()
-        architect = create_llm("mock", sequential_responses=self.controller_attempt() * 3)
-        coder = create_llm(
-            "mock",
-            sequential_responses=[
-                action for value in (1, 2, 3) for action in self.assignment(value)
-            ],
-        )
-        result = await self.run_workflow(architect, coder)
-        self.assertEqual(result["status"], "incomplete", result["answer"])
-        self.assertEqual(result["verification"]["attempts"], 3)
-        self.assertEqual(len(result["approval_requests"]), 6)
-        self.assertEqual(architect._current_seq_idx, 6)
-        self.assertEqual((self.root / "sample.py").read_text(), "value = 3\n")
-        self.assertFalse(any(event["type"] == "action.denied" for event in result["run_events"]))
-
-    async def test_dependency_failure_reports_unavailable_without_questions_or_repairs(self):
-        self.prepare_source()
-        (self.root / "test_sample.py").write_text(
-            "import unittest\n"
-            "class Regression(unittest.TestCase):\n"
-            "    def test_dependency(self):\n"
-            "        raise ModuleNotFoundError(\"No module named 'fastapi'\")\n"
-        )
         architect = create_llm(
             "mock",
             sequential_responses=[
-                *self.controller_attempt(),
-                {
-                    "type": "tool_call",
-                    "tool": "ask_user",
-                    "args": {
-                        "question": "FastAPI is missing from the test environment. Defer verification?"
-                    },
-                },
-                *self.controller_attempt(),
+                {"type": "tool_call", "tool": "coder", "args": {"task": "Fix sample.py"}},
+                {"type": "final", "content": "Updated sample.py."},
             ],
         )
         result = await self.run_workflow(
             architect,
             create_llm("mock", sequential_responses=self.assignment(42)),
-            answer="Don't run tests; I'll verify it myself. Stop here.",
+            approve_commands=False,
         )
-        self.assertEqual(result["status"], "unverified", result["answer"])
-        self.assertEqual(result["verification"]["status"], "unavailable")
-        self.assertEqual(result["verification"]["attempts"], 1)
-        self.assertEqual(result["verification"]["setup_issues"][0]["module"], "fastapi")
-        self.assertFalse(
-            any(event["type"] == "user_input.requested" for event in result["run_events"])
-        )
-        self.assertEqual(architect._current_seq_idx, 2)
-        self.assertEqual(len(result["approval_requests"]), 2)
+        self.assertEqual(result["status"], "blocked", result["answer"])
         self.assertEqual((self.root / "sample.py").read_text(), "value = 42\n")
+        self.assertFalse(result["verification"]["results"])
+        self.assertEqual(len(result["approval_requests"]), 2)
+        self.assertFalse(result["approval_decisions"][-1]["approved"])
+        self.assertEqual(architect._current_seq_idx, 2)

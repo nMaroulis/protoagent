@@ -144,7 +144,10 @@ class WorkspacePolicy(CapabilityPolicy):
                 return self.deny("Command working directory must remain inside the project")
             if self.attempt is not None:
                 check_id = self.attempt.record.check_for(args) if self.attempt.record else None
-                phase = action.metadata.get("check_phase", "verify" if check_id else "prepare")
+                automatic = self.attempt.record and self.attempt.record.automatic_verification
+                phase = action.metadata.get(
+                    "check_phase", "verify" if check_id and not automatic else "prepare"
+                )
                 self.attempt.prepare_check(action.action_id, phase, check_id)
         if "filesystem.write" in action.capabilities or "filesystem.restore" in action.capabilities:
             recovery = action.payload.get("recovery", {})
@@ -166,6 +169,6 @@ class WorkspacePolicy(CapabilityPolicy):
             if self.attempt is not None and self.attempt.checking:
                 return self.deny(
                     "This attempt is already checking. Return the measured result; "
-                    "only the bounded workflow may start a new repair attempt."
+                    "finish this run and use a follow-up request for further edits."
                 )
         return decision

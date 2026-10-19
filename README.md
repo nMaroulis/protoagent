@@ -10,7 +10,7 @@ Its runtime is designed to give smaller models narrow roles, bounded evidence,
 and deterministic completion checks instead of one large prompt with every
 tool attached.
 
-Release `0.3.0` covers the active `proto-cli` and `protoagent-core`
+Release `0.3.1` covers the active `proto-cli` and `protoagent-core`
 components. The ACP editor bridge remains a planned `0.0.0-dev.0` component.
 See [VERSIONING.md](VERSIONING.md) and [CHANGELOG.md](CHANGELOG.md).
 
@@ -44,8 +44,8 @@ for auto/native/json overrides and correction limits.
 
 | Surface | Status | Responsibility |
 | --- | --- | --- |
-| `cli/` | Active, `0.3.0` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
-| `core/` | Active, `0.3.0` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
+| `cli/` | Active, `0.3.1` | Rust CLI/TUI, project and model controls, approvals, cancellation, and diagnostics. |
+| `core/` | Active, `0.3.1` | Python application logic, Context Loom, prompt profiles, agent factories, and the ProtoLink runtime bridge. |
 | `acp/` | Planned, `0.0.0-dev.0` | Future editor-facing Agent Client Protocol adapter. |
 
 The default coding deck is intentionally asymmetric:
@@ -55,7 +55,7 @@ The default coding deck is intentionally asymmetric:
 | **Architect** | Persistent project conversation | Plans, prepares bounded source packets, delegates, and explains results; no writes. |
 | **Explorer** | Task-local | Reads and searches the selected workspace. |
 | **Coder** | Task-local | Native recoverable file changes with write and restore approval. |
-| **Tester** | Optional, default on; task-local | Read-only test planning and failure analysis. |
+| **Tester** | Optional, default off; task-local | Read-only test planning and failure analysis. |
 | **Verifier** | Tool-only, no memory | Native approved process execution and measured outcomes. |
 | **Scout** | Tool-only, no memory, disabled by default | Exposes ProtoLink's bounded `web_search` and `fetch_url` tools with `network.read`. |
 | **MCP** | Optional, default off; no model | Lazy discovery, one exact schema and approved allowlisted server calls. |
@@ -83,9 +83,9 @@ For the complete design, read the [whitepaper](whitepaper.md) and the
 [maintainer documentation](https://nmaroulis.github.io/protoagent/).
 
 Optional workers can be controlled from the shell or TUI. Architect, Explorer,
-Coder and Verifier stay required. Disabling Tester removes its model and registry
-card; Architect defines criteria and Coder adds regression tests while required
-checks still run.
+Coder stay required. Verifier is a tool-only post-edit check worker that can be
+disabled. Tester is opt-in design assistance; disabling it removes its model and
+registry card without changing the enabled check pass.
 
 ```bash
 proto-cli agents tester off           # TUI: /agents tester off
@@ -96,7 +96,7 @@ proto-cli mcp test docs               # Discover only; no server tool invocation
 proto-cli mcp on                      # TUI: /mcp on
 ```
 
-The optional MCP broker uses ProtoLink 0.8.1's native adapter. Architect calls it
+The optional MCP broker uses ProtoLink 0.8.2's native adapter. Architect calls it
 with `tool_call`, never `infer`. Three fixed broker tools keep large server
 catalogs out of small-model prompts; connections and invocations use native
 approvals. See the [MCP setup guide](docs/content/core/mcp.md) for local/remote
@@ -118,7 +118,7 @@ Requirements:
 - Rust toolchain with Cargo 1.85 or newer
 - a supported local or API model provider
 
-ProtoAgent 0.3.0 requires ProtoLink 0.8.1 or newer with the HTTP, LLM and MCP extras.
+ProtoAgent 0.3.1 requires ProtoLink 0.8.2 or newer with the HTTP, LLM and MCP extras.
 The default harness uses owned local subagents with fresh conversations,
 inherited policies and shared budgets. It runs one child at a time, with no
 Registry server or loopback transport startup. Explicit transport meshes remain
@@ -178,14 +178,15 @@ cargo run --locked --manifest-path cli/Cargo.toml -- agents
 Provider setup, every CLI command, Context Loom behavior, and troubleshooting
 are covered in the [documentation](https://nmaroulis.github.io/protoagent/docs/intro).
 
-## New in 0.3.0
+## Task workflow
 
 - A runtime-owned TaskRecord preserves objectives, criteria, file scope, check IDs
   and worker outcomes independently of model conversation summaries.
 - Read-only Tester designs regression cases; tool-only Verifier executes frozen
   repository checks. Arbitrary successful commands cannot verify a code change.
-- Baseline checks and preparation permit later edits. Final checks bind source
-  revisions and close the edit phase, with at most two bounded repairs.
+- Software runs one enabled check pass after edits. No baseline, installation
+  question or automatic repair loop is needed. `/agents verifier off` skips checks
+  and marks edits unverified; Tester is opt-in for new configurations.
 - Coder reads bounded source spans and uses exact `edit_file` replacements with
   revision checks instead of regenerating whole files for small changes.
 - Small profiles use compact protocol prompts and worker cards. Estimated
@@ -226,7 +227,7 @@ ProtoLink trace output is opt-in through `PROTOAGENT_TRACE=1`.
 
 ## Project Status
 
-The Rust CLI and Python core are the supported surfaces in `0.3.0`. The
+The Rust CLI and Python core are the supported surfaces in `0.3.1`. The
 [ACP directory](acp/README.md) is a roadmap placeholder; it is not currently an
 installable editor server. Contributions should keep code, CLI help, readiness
 output, docs, tests, and the changelog aligned.

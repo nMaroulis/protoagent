@@ -23,7 +23,6 @@ class Acceptance:
 
     completion: dict[str, Any]
     verification: dict[str, Any]
-    repairable: bool = False
     continuable: bool = False
 
 
@@ -74,7 +73,7 @@ def verification_setup_issue(result, arguments, workspace):
 async def validate_completion(contract, task, report, attempt, broker) -> Acceptance:
     """Validate actual effects; previews, approval and model claims are insufficient.
 
-    A repair is eligible only for a completed, nonzero command in this attempt.
+    A completed nonzero command is a measured failure, never an automatic repair.
     Denials, interrupted effects, timeouts, cancellations, missing evidence and
     stale revisions stop the workflow and require inspection or a new instruction.
     """
@@ -237,6 +236,8 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
     outcome = "satisfied" if all(result.passed for result in results) else "incomplete"
     if native_status in {"failed", "canceled", "input_required"} or stopped:
         outcome = "canceled" if native_status == "canceled" else "blocked"
+    if native_status == "input-required":
+        outcome = "incomplete" if task.metadata.get("worker_handoff") and not stopped else "blocked"
     if uncertain_changes:
         outcome = "uncertain"
     missing = [
@@ -348,6 +349,34 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
         outcome = "unverified"
         verification_status = "unavailable"
         stop_reason = "Verification unavailable: " + setup_items[0]["setup_issue"]["message"]
+    skipped = (
+        record
+        and record.automatic_verification
+        and native_status == "completed"
+        and not RunContext.from_task(task).canceled
+        and not deferred
+        and not stopped
+        and not uncertain_changes
+        and (not contract.requires_write or bool(latest_writes))
+        and not latest_commands
+        and (not record.verification_enabled or not record.baseline_check_ids())
+        and all(
+            result.passed
+            or result.code == "check_not_run"
+            or result.name == "repository verification plan"
+            for result in results
+        )
+        and (contract.requires_write or contract.task_kind == "workspace-verification")
+        and not docs_only
+    )
+    if skipped:
+        outcome = "unverified"
+        verification_status = "disabled" if not record.verification_enabled else "not_configured"
+        stop_reason = (
+            "Verification is disabled."
+            if not record.verification_enabled
+            else "No runnable repository checks were found."
+        )
     missing_checks = sorted(required_ids - observed_ids)
     unfinished_message = ""
     if outcome == "incomplete":
@@ -363,24 +392,6 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             unfinished_message += (
                 " Required checks were not run: " + ", ".join(missing_checks) + "."
             )
-    repairable = (
-        contract.requires_write
-        and not (record and any(worker["status"] != "done" for worker in record.reports.values()))
-        and outcome == "incomplete"
-        and not stopped
-        and not setup_items
-        and all(status in {"passed", "failed"} for status in statuses)
-        and bool(current_results)
-        and any(
-            item["attempt"] == attempt.attempt and item["exit_code"] not in {None, 0}
-            for item in current_results
-        )
-        and not any(
-            item.get(flag)
-            for item in current_results
-            for flag in ("timed_out", "canceled", "budget_exceeded", "stale")
-        )
-    )
     continuable = (
         contract.requires_write
         and outcome == "incomplete"
@@ -424,7 +435,6 @@ async def validate_completion(contract, task, report, attempt, broker) -> Accept
             "setup_issues": [item["setup_issue"] for item in setup_items],
             **({"last_attempt_status": last_attempt_status, "handoff": handoff} if handoff else {}),
         },
-        repairable,
         continuable,
     )
 
@@ -433,6 +443,10 @@ def verification_summary(report: dict[str, Any]) -> str:
     """One compact result; native command details remain in /trace."""
     status = report["status"]
     latest = report.get("latest") or []
+    if status == "disabled":
+        return "Verification: disabled — /agents verifier on to enable."
+    if status == "not_configured":
+        return "Verification: not run — no runnable repository checks."
     if status == "deferred":
         return "Verification: deferred to you. Previous check details: /trace."
     if status == "unavailable":

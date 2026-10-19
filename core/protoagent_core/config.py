@@ -66,7 +66,8 @@ PROVIDER_LABELS = {
 }
 
 OPTIONAL_AGENT_DEFAULTS = {
-    "tester": {"enabled": True},
+    "tester": {"enabled": False},
+    "verifier": {"enabled": True},
     "mcp": {"enabled": False},
     "scout": {
         "enabled": False,

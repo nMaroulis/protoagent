@@ -46,7 +46,10 @@ def run_selected_model(
     provider = normalize_provider(config.get("active_provider", "ollama"))
     cfg = provider_config(provider, config)
     model = cfg.get("model", "")
-    if not model:
+    if (
+        not model
+        and infer_run_contract(user_prompt or prompt).task_kind != "workspace-verification"
+    ):
         raise RuntimeError(f"No model selected for provider '{provider}'")
     profile = prompt_profile_status(config, provider=provider, model=str(model))
 
@@ -66,6 +69,7 @@ def run_selected_model(
                     user_prompt=user_prompt,
                     scout_enabled=optional_agent_enabled("scout", config),
                     tester_enabled=optional_agent_enabled("tester", config),
+                    verifier_enabled=optional_agent_enabled("verifier", config),
                     mcp_enabled=optional_agent_enabled("mcp", config),
                     mcp_config=config,
                     run_state=run_state,
@@ -109,11 +113,12 @@ async def _run_agent_deck(
     prompt_profile: dict[str, Any],
     user_prompt: str | None = None,
     scout_enabled: bool = False,
-    tester_enabled: bool = True,
+    tester_enabled: bool = False,
     mcp_enabled: bool = False,
     mcp_config: dict[str, Any] | None = None,
     run_state: dict[str, Any] | None = None,
     architecture: str = "deck",
+    verifier_enabled: bool = True,
 ) -> dict[str, Any]:
     """Own the embedded mesh with AgentGroup and consume native RunHandle results."""
     from protolink import (
@@ -156,6 +161,7 @@ async def _run_agent_deck(
             "run_contract": contract.to_dict(),
             "optional_agents": {
                 "tester": tester_enabled,
+                "verifier": verifier_enabled,
                 "scout": scout_enabled,
                 "mcp": mcp_enabled and architecture != "single",
             },
@@ -174,48 +180,24 @@ async def _run_agent_deck(
         events.append(message)
         bridge.emit(message)
 
+    def present(event):
+        # Graph attempts and the enclosing handle expose the same native
+        # receipts. Deduplicate presentation across the whole application
+        # run, not just one handle; full evidence remains in native reports.
+        if event.event_id in seen_events:
+            return
+        seen_events.add(event.event_id)
+        if live_updates:
+            live_output.emit(event)
+        data = event.to_dict(redaction_policy=redaction)
+        summary = _run_event_summary(data)
+        if summary:
+            _append_event(events, summary, bridge if live_updates else None, run_event=data)
+
     async def observe(handle):
-        def present(event):
-            # Graph attempts and the enclosing handle expose the same native
-            # receipts. Deduplicate presentation across the whole application
-            # run, not just one handle; full evidence remains in native reports.
-            if event.event_id in seen_events:
-                return
-            seen_events.add(event.event_id)
-            if live_updates:
-                live_output.emit(event)
-            data = event.to_dict(redaction_policy=redaction)
-            summary = _run_event_summary(data)
-            if summary:
-                _append_event(events, summary, bridge if live_updates else None, run_event=data)
-
-        async def child_observations():
-            # ProtoLink 0.8.0 commits live child events to the parent's Task;
-            # its local recorder can deliver them to the stream only at join.
-            # This is presentation of existing evidence, never task execution.
-            from protolink import RunEvent
-
-            cursor = 0
-            while True:
-                records = handle.task.metadata.get("run_events", [])
-                batch = records[cursor : cursor + 256]
-                cursor += len(batch)
-                for data in batch:
-                    if data.get("delegation_id"):
-                        present(RunEvent.from_dict(data))
-                await asyncio.sleep(0 if cursor < len(records) else 0.025)
-
-        observations = (
-            asyncio.create_task(child_observations()) if _agent_transport() == "local" else None
-        )
-        try:
-            async for event in handle.events():
-                present(event)
-        finally:
-            if observations is not None:
-                observations.cancel()
-                with suppress(asyncio.CancelledError):
-                    await observations
+        # ProtoLink forwards nested child events through the public stream.
+        async for event in handle.events():
+            present(event)
 
     with workspace_writer(project):
         store = SQLiteRunStore(
@@ -250,7 +232,13 @@ async def _run_agent_deck(
                 "approval_decisions": [],
             }
         checkpoints = checkpoint_store(project)
-        record = TaskRecord.create(project, user_prompt or prompt, contract=contract)
+        record = TaskRecord.create(
+            project,
+            user_prompt or prompt,
+            contract=contract,
+            verification_enabled=verifier_enabled,
+            automatic_verification=True,
+        )
         attempt = AttemptState(project, checkpoints, authorization, record=record)
         urls = _runtime_urls()
         transport = _agent_transport()
@@ -282,6 +270,7 @@ async def _run_agent_deck(
             prompt_profile=str(prompt_profile["resolved"]),
             scout_enabled=scout_enabled,
             tester_enabled=tester_enabled,
+            verifier_enabled=verifier_enabled,
             mcp_enabled=mcp_enabled and architecture != "single",
             mcp_servers=server_settings(mcp_config)
             if mcp_enabled and architecture != "single"
@@ -297,7 +286,7 @@ async def _run_agent_deck(
 
             single = deck["coder"]
             single.card.name = "architect"
-            for worker in (deck["explorer"], deck["verifier"]):
+            for worker in (deck[name] for name in ("explorer", "verifier") if name in deck):
                 for name, tool in worker.tools.items():
                     if name not in single.tools and name != "report_task":
                         single.add_tool(tool)
@@ -305,7 +294,10 @@ async def _run_agent_deck(
             from .user_input import add_user_input_tool
 
             add_user_input_tool(single, bridge.ask_user, record)
-            deck = {"architect": single}
+            deck = {
+                "architect": single,
+                **({"verifier": deck["verifier"]} if "verifier" in deck else {}),
+            }
         elif architecture not in {"deck", "single"}:
             raise ValueError("Unknown evaluation architecture")
         for agent in deck.values():
@@ -339,7 +331,7 @@ async def _run_agent_deck(
             f"{'owned local children' if transport == 'local' else transport + ' worker transport'}; "
             f"{provider} / {model}."
         )
-        emit(f"Project: {project}. Run: {context.run_id}. Repair limit: 2.")
+        emit(f"Project: {project}. Run: {context.run_id}. Verification: one pass after edits.")
         coordinator = Agent(
             execution_version="protoagent-workflow-3",
             card={
@@ -367,6 +359,8 @@ async def _run_agent_deck(
                     observe=observe,
                     redaction=redaction,
                     prompt=prompt,
+                    user_input_handler=bridge.ask_user,
+                    event_handler=present,
                 )
 
                 @coordinator.tool(capabilities=["workflow.execute"])
@@ -377,17 +371,22 @@ async def _run_agent_deck(
                 if reason := bridge.cancel_reason():
                     context.cancel(reason).attach_to_task(task)
                     task.cancel(reason)
-                handle = group.run(coordinator, task, redaction_policy=redaction)
-                if run_state is not None:
-                    run_state["handle"] = handle
-                controls = asyncio.create_task(bridge.serve(handle))
-                try:
-                    await observe(handle)
-                    result = await handle.result()
-                finally:
-                    controls.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await controls
+                from protolink.core.execution import workflow_budget_scope
+
+                # Every Graph node and AgentGroup handle belongs to this one
+                # native budget, including checkpoint resumes and final checks.
+                with workflow_budget_scope(context):
+                    handle = group.run(coordinator, task, redaction_policy=redaction)
+                    if run_state is not None:
+                        run_state["handle"] = handle
+                    controls = asyncio.create_task(bridge.serve(handle))
+                    try:
+                        await observe(handle)
+                        result = await handle.result()
+                    finally:
+                        controls.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await controls
                 native_report = result.report
                 evidence_task = workflow.task or result.task or task
                 evidence_report = RunReport.from_task(evidence_task)
@@ -411,7 +410,11 @@ async def _run_agent_deck(
                         str(Path(path).relative_to(project))
                         for path in acceptance.completion["applied_paths"]
                     ]
-                    if acceptance.verification["status"] == "unavailable":
+                    if acceptance.verification["status"] in {
+                        "unavailable",
+                        "disabled",
+                        "not_configured",
+                    }:
                         answer = (
                             "Changes applied." if paths else "Verification could not be completed."
                         )
@@ -444,6 +447,12 @@ async def _run_agent_deck(
                         # not a useful result. Preserve the proposal in the
                         # native trace, and report what actually happened.
                         answer = f"Run incomplete: {acceptance.completion['message']}"
+                    elif (
+                        status == "incomplete"
+                        and acceptance.verification["status"] == "failed"
+                        and acceptance.completion["applied"]
+                    ):
+                        answer = "Changes applied."
                     elif status == "incomplete" and workflow.continuations:
                         answer = (
                             "Run incomplete: remaining edits were not finished after "
@@ -452,7 +461,10 @@ async def _run_agent_deck(
                         )
                     else:
                         answer = f"Run {status}: {detail}\n\n{answer}".strip()
-                    if acceptance.completion["applied_paths"]:
+                    if (
+                        acceptance.completion["applied_paths"]
+                        and acceptance.verification["status"] != "failed"
+                    ):
                         paths = [
                             str(Path(path).relative_to(project))
                             for path in acceptance.completion["applied_paths"]

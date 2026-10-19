@@ -15,6 +15,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e core -r requirements-dev.txt
 rustup component add rustfmt clippy
+export PYO3_PYTHON="$PWD/.venv/bin/python"
 cargo build --locked --manifest-path cli/Cargo.toml
 ```
 
@@ -85,3 +86,8 @@ GitHub Actions runs the Python gate through
 - Prefer concrete command output in the PR description when a change touches the
   CLI, runtime, or docs build.
 - Call out skipped checks and why they were skipped.
+
+The CLI embeds Python through PyO3. Build it with the same interpreter that owns
+the core dependencies (`PYO3_PYTHON="$PWD/.venv/bin/python"` from the repo root).
+The CLI loads only matching-version virtualenv packages; mixing extension modules
+from another Python ABI is unsupported.

@@ -134,7 +134,7 @@ Enable Scout for the next run:
 proto-cli agents scout on
 ```
 
-If `web_tools_ready` is unavailable, install ProtoLink 0.8.1 or newer. Brave is
+If `web_tools_ready` is unavailable, install ProtoLink 0.8.2 or newer. Brave is
 the default search engine and needs:
 
 ```bash
@@ -147,7 +147,7 @@ factual search. Architect can pass either to `web_search`. Wikipedia only suppor
 nonstandard ports, unsafe redirects, binary content, and oversized responses.
 These rejections are safety behavior, not general network failures.
 
-ProtoLink 0.8.1 applies native budget checks to direct tool tasks. If a call
+ProtoLink 0.8.2 applies native budget checks to direct tool tasks. If a call
 stops at a budget boundary, inspect `/trace` and the configured run budget.
 Verifier also has a separate per-command timeout.
 

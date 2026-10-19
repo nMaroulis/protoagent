@@ -139,7 +139,7 @@ def infer_run_contract(user_prompt: str) -> RunContract:
     )
     expected_workers = ("explorer", "coder") if write_intent else ("explorer",)
     if verification_intent:
-        expected_workers = ("explorer", "verifier")
+        expected_workers = ("verifier",)
     expected_artifacts = ("executed_file_change", "resource_revision") if write_intent else ()
     return RunContract(
         task_kind=(

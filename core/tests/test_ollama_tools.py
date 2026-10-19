@@ -29,6 +29,20 @@ class OllamaToolsTests(unittest.TestCase):
         self.assertNotIn("supports_tool_calling", kwargs)
         discover.assert_not_called()
 
+    def test_configured_api_urls_reach_the_native_adapters(self):
+        for provider in ("gemini", "anthropic", "openai"):
+            with (
+                self.subTest(provider=provider),
+                patch(
+                    "protoagent_core.llm.provider_config",
+                    return_value={
+                        "model": "fixture-model",
+                        "base_url": "https://fixture.invalid/api",
+                    },
+                ),
+            ):
+                self.assertEqual(llm_kwargs(provider)["base_url"], "https://fixture.invalid/api")
+
     def test_native_discovery_cache_refresh_and_unknown_metadata(self):
         model = self.configured()
         with patch.object(OllamaLLM, "discover_tool_calling", return_value=True) as discover:
@@ -95,4 +109,4 @@ class OllamaToolsTests(unittest.TestCase):
             report = validate_protolink()
         self.assertFalse(report["action_validation_ready"])
         self.assertFalse(report["agent_ready"])
-        self.assertIn("0.8.1", report["error"])
+        self.assertIn("0.8.2", report["error"])

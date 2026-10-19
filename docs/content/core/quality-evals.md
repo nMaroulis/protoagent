@@ -85,7 +85,7 @@ prompt-profile issues.
 Scaffold mode marks behavior checks as informational because no real agent
 delegation happens. Use live mode when tuning prompt profile quality.
 
-## Coding success and same-model comparison (v0.3.0)
+## Coding success and same-model comparison (v0.3.1)
 
 The routing harness above does not measure applied coding success. The separate
 `coding_eval.py` harness uses disposable workspaces and independent acceptance

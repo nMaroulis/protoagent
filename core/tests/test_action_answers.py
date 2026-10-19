@@ -62,7 +62,7 @@ class ActionAnswerTests(NativeRuntimeCase):
             ],
             prompt="Change server.py value to 42",
         )
-        self.assertEqual(len(requests), 4)
+        self.assertEqual(len(requests), 4, result["answer"])
         self.assertEqual(result["status"], "completed", result["answer"])
         self.assertEqual((self.root / "server.py").read_text(), "value = 42\n")
         self.assertEqual(result["verification"]["status"], "passed")
@@ -294,7 +294,7 @@ class ActionAnswerTests(NativeRuntimeCase):
                 {"content": "Plan includes the runner and a regression test."},
             ],
             native=True,
-            prompt="Run the tests",
+            prompt="Change sample.py",
         )
         # A corrected plan alone cannot complete a verification request.
         self.assertEqual(result["status"], "incomplete", result["answer"])
@@ -339,7 +339,7 @@ class ActionAnswerTests(NativeRuntimeCase):
                 {"content": "A task management service."},
             ],
             native=True,
-            prompt="Run the tests",
+            prompt="Change sample.py",
         )
         self.assertEqual(result["status"], "incomplete", result["answer"])
         self.assertEqual(len(requests), 3)

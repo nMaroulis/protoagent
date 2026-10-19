@@ -2,9 +2,7 @@
 
 import re
 
-from protolink import AgentHooks
 from protolink.tools.builtins import ask_user_tool
-from protolink.tools.builtins.user_input import UserInputResult
 from protolink.tools.prepared import PreparedTool
 
 MAX_ANSWER_CHARS = 4096
@@ -44,42 +42,18 @@ async def decline_input(request):
 def add_user_input_tool(agent, handler=None, record=None) -> None:
     """Attach the engine-owned tool; applications supply only its UI callback."""
     callback = handler or decline_input
-    if record is not None:
-        questions = {}
-
-        async def receive(request):
-            questions[request.request_id] = request.question
-            return await callback(request)
-
-        def retain(observation):
-            if observation.name != "ask_user":
-                return
-            result = observation.result
-            if isinstance(result, UserInputResult):
-                result = result.to_dict()
-            if not isinstance(result, dict):
-                return
-            request_id = result.get("request_id")
-            question = questions.pop(request_id, None)
-            if question is not None and result.get("status") == "answered":
-                # Native execution already validated this outcome. Application
-                # obligations survive observation pruning; receipts are untouched.
-                record.clarifications[request_id] = {
-                    "question": question,
-                    "answer": result["answer"],
-                }
-
-        agent.hooks = (*agent.hooks, AgentHooks(after_tool=retain))
-        callback_to_install = receive
-    else:
-        callback_to_install = callback
-    native = ask_user_tool(callback_to_install, max_answer_chars=MAX_ANSWER_CHARS)
+    native = ask_user_tool(callback, max_answer_chars=MAX_ANSWER_CHARS)
     if record is not None:
         execute_native = native.execute_authorized
 
         async def execute(execution):
             result = await execute_native(execution)
             question = execution.authorization.action.payload["arguments"]["question"]
+            if result.status == "answered":
+                record.clarifications[result.request_id] = {
+                    "question": question,
+                    "answer": result.answer,
+                }
             if (
                 record.frozen
                 and result.status == "answered"

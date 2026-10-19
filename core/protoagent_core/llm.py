@@ -42,7 +42,17 @@ def llm_kwargs(provider: str, model: str | None = None) -> dict[str, Any]:
 
     base_url = cfg.get("base_url")
     if (
-        provider in {"ollama", "lmstudio", "llama.cpp-server", "deepseek", "openai-compatible"}
+        provider
+        in {
+            "ollama",
+            "lmstudio",
+            "llama.cpp-server",
+            "deepseek",
+            "openai-compatible",
+            "openai",
+            "anthropic",
+            "gemini",
+        }
         and base_url
     ):
         kwargs["base_url"] = base_url
@@ -282,6 +292,9 @@ def validate_protolink() -> dict[str, Any]:
             and "subagent_limits" in agent_parameters
             and callable(SubagentLimits)
             and callable(getattr(RunHandle, "spawn", None))
+            and callable(getattr(Agent, "add_worker_tool", None))
+            and callable(getattr(Agent, "resume_task", None))
+            and "yield_after_steps" in agent_parameters
         )
         context_policy_ready = (
             "context_policy" in agent_parameters
@@ -387,7 +400,7 @@ def validate_protolink() -> dict[str, Any]:
             "context_policy_ready": context_policy_ready,
             "user_input_ready": user_input_ready,
             "action_validation_ready": action_validation_ready,
-            "error": "" if agent_ready else "ProtoLink 0.8.1 runtime APIs are required",
+            "error": "" if agent_ready else "ProtoLink 0.8.2 runtime APIs are required",
         }
     except Exception as exc:  # pragma: no cover - used for diagnostics
         try:

@@ -22,7 +22,7 @@ from protoagent_core.worker_interface import install_worker_interface
 
 
 class WorkerInterfaceTests(NativeRuntimeCase):
-    async def test_bootstrap_coding_hint_does_not_apply_to_questions_or_docs(self):
+    async def test_editing_hint_does_not_schedule_baselines_or_affect_questions(self):
         (self.root / "sample.py").write_text("value = 0\n")
         record = self.attempt.record
         record.checks = discover_checks(str(self.root))
@@ -30,15 +30,16 @@ class WorkerInterfaceTests(NativeRuntimeCase):
         for goal, should_code in (
             ("Fix sample.py", True),
             ("Explain this project", False),
-            ("Update README.md", False),
+            ("Update README.md", True),
         ):
             record.objective = goal
             seen = []
             parent = self.parent([{"type": "final", "content": "Fixture outcome"}], seen=seen)
             result = await self.start(parent, goal).result()
             self.assertEqual(result.status, "completed", result.error)
+            self.assertNotIn("Before editing call run_check", seen[0][0]["content"])
             self.assertEqual(
-                "No existing baseline tests are available." in seen[0][0]["content"], should_code
+                "The harness runs checks once afterwards" in seen[0][0]["content"], should_code
             )
 
     async def test_budget_expiry_while_approval_is_pending_has_a_clear_reason(self):
@@ -264,7 +265,7 @@ class WorkerInterfaceTests(NativeRuntimeCase):
             )
         )
 
-    async def test_invalid_command_preparation_is_corrected_before_child_or_approval(self):
+    async def test_invalid_command_preparation_is_corrected_before_effect_or_approval(self):
         (self.root / "README.md").write_text("Use the test folder.\n")
         seen = []
         parent = self.parent(
@@ -297,7 +298,7 @@ class WorkerInterfaceTests(NativeRuntimeCase):
         self.assertEqual(result.status, "completed", result.error)
         self.assertTrue((self.root / "test").is_dir())
         self.assertIn("invalid_command_preparation", json.dumps(seen[1]))
-        self.assertEqual(len(result.task.metadata["subagent_runs"]), 2)
+        self.assertEqual(len(result.task.metadata["subagent_runs"]), 3)
         self.assertEqual(len(self.broker.records(self.authorization.scope)), 1)
         self.assertTrue(any(event.type == "action.rejected" for event in result.report.events))
         self.assertFalse(any(event.type == "action.failed" for event in result.report.events))
@@ -602,7 +603,7 @@ class WorkerInterfaceTests(NativeRuntimeCase):
             self.broker,
         )
         self.assertTrue(accepted.completion["satisfied"], accepted.completion)
-        self.assertEqual(len(result.task.metadata["subagent_runs"]), 3)
+        self.assertEqual(len(result.task.metadata["subagent_runs"]), 4)
 
     async def test_denied_command_stops_without_retry_or_execution(self):
         (self.root / "sample.py").write_text("value = 0\n")
@@ -670,14 +671,14 @@ class WorkerInterfaceTests(NativeRuntimeCase):
 
     async def test_prepared_call_cannot_execute_without_a_native_supervisor(self):
         parent = self.parent([])
-        with self.assertRaisesRegex(RuntimeError, "authorization"):
+        with self.assertRaisesRegex(ValueError, "native parent tool declaration"):
             await parent.tools["read_file"](path="README.md")
 
     def test_installation_rejects_empty_roster_and_collisions(self):
         with self.assertRaisesRegex(ValueError, "owned local children"):
             install_worker_interface(Agent(name="empty", verbosity=0))
         parent = self.parent([])
-        with self.assertRaisesRegex(ValueError, "collides"):
+        with self.assertRaisesRegex(ValueError, "conflicts"):
             install_worker_interface(parent)
 
     async def test_inherited_read_denial_is_not_bypassed_by_the_facade(self):

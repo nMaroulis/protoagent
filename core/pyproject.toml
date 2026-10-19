@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "protoagent-core"
-version = "0.3.0"
+version = "0.3.1"
 description = "Shared Python runtime core for ProtoAgent frontends."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,9 +20,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "protolink[http,llms,mcp]>=0.8.1",
-    # ProtoLink's Anthropic adapter still sends the pre-1.0 generation parameters.
-    "anthropic>=0.109.2,<1",
+    "protolink[http,llms,mcp]>=0.8.2",
 ]
 
 [project.urls]

@@ -116,3 +116,9 @@ PROTOAGENT_CONFIG_DIR=/tmp/protoagent-smoke proto-cli check
 
 
 MCP HTTP authentication uses owner-selected environment variables through each server's `headers_env` mapping. Values resolve only on connection and join runtime redaction. `PROTOAGENT_MCP_URL` / `MCP_AGENT_URL` override the broker's internal mesh endpoint; they are unrelated to a remote server URL in `mcp_servers`. `PROTOAGENT_TESTER_URL` / `TESTER_AGENT_URL` override Tester's internal endpoint. See [MCP Broker](../core/mcp.md).
+
+Owned-local coding uses native checkpointed worker slices by default. Set
+`PROTOAGENT_CHECKPOINTED_WORKERS=0` to select live fallback limits.
+`PROTOAGENT_CODER_MAX_WINDOWS` admits 1–3 progressing slices per child (default 3);
+all work remains inside the same hard run budget. Temporary execution checkpoints
+are removed at workflow exit and do not enable coding restart/resume.

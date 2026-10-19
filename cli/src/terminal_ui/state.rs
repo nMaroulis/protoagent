@@ -150,6 +150,21 @@ impl TerminalApp {
             meta: Vec::new(),
             details: Vec::new(),
             review: None,
+            agents: None,
+        }));
+    }
+
+    pub(super) fn push_agents(&mut self, label: &str, focus: Option<String>) {
+        let view = crate::agent_display::View::new(self.agent_settings.clone(), focus);
+        self.jump_to_bottom();
+        self.messages.push(Arc::new(TerminalMessage {
+            role: Role::Command,
+            label: label.to_string(),
+            body: view.plain_text(),
+            meta: Vec::new(),
+            details: Vec::new(),
+            review: None,
+            agents: Some(view),
         }));
     }
 
@@ -171,6 +186,7 @@ impl TerminalApp {
                     meta: Vec::new(),
                     details: Vec::new(),
                     review: None,
+                    agents: None,
                 }),
             );
         }
@@ -214,6 +230,7 @@ impl TerminalApp {
             ],
             details: Vec::new(),
             review: has_review.then(|| response.change_review.clone()),
+            agents: None,
         };
         if !response.file_target.is_empty() {
             message
@@ -344,6 +361,7 @@ impl TerminalApp {
                     meta,
                     details: Vec::new(),
                     review: None,
+                    agents: None,
                 });
                 self.answer_revision = Some(revision);
             }
@@ -462,6 +480,7 @@ pub(super) struct TerminalMessage {
     pub(super) meta: Vec<String>,
     pub(super) details: Vec<(String, String)>,
     pub(super) review: Option<serde_json::Value>,
+    pub(super) agents: Option<crate::agent_display::View>,
 }
 
 #[cfg(test)]

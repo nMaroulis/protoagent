@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import anthropic
 import httpx
+import httpx2
 import openai
 from protolink.llms.api.anthropic_client import AnthropicLLM
 from protolink.llms.api.openai_client import OpenAILLM
@@ -17,14 +18,18 @@ class ProviderSDKCompatibilityTests(unittest.TestCase):
         self.check_adapter(OpenAILLM, openai.OpenAI, "openai")
 
     def test_anthropic_sdk_accepts_the_engine_generation_parameters(self):
-        # Anthropic 1.x removed temperature/top_p; this must fail if a future
-        # dependency update loses ProtoLink 0.8.1's compatibility constraint.
         self.check_adapter(AnthropicLLM, anthropic.Anthropic, "anthropic")
 
     def check_adapter(self, adapter, sdk, provider):
         history = ConversationHistory(system_prompt="Answer the fixture question.")
         history.add_user("Say hello.")
         requests = []
+
+        http = (
+            httpx2
+            if provider == "anthropic" and int(anthropic.__version__.split(".")[0]) >= 1
+            else httpx
+        )
 
         def respond(request):
             body = json.loads(request.content)
@@ -56,8 +61,9 @@ class ProviderSDKCompatibilityTests(unittest.TestCase):
                     "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
                 }
             else:
-                self.assertIn("temperature", body)
-                self.assertIn("top_p", body)
+                self.assertNotIn("temperature", body)
+                self.assertNotIn("top_p", body)
+                self.assertEqual(body["max_tokens"], 1024)
                 result = {
                     "id": "msg_fixture",
                     "type": "message",
@@ -68,7 +74,7 @@ class ProviderSDKCompatibilityTests(unittest.TestCase):
                     "stop_sequence": None,
                     "usage": {"input_tokens": 2, "output_tokens": 3},
                 }
-            return httpx.Response(200, json=result)
+            return http.Response(200, json=result)
 
         with patch.object(adapter, "validate_connection", return_value=True):
             llm = adapter(api_key="fixture-only", model="fixture-model")
@@ -76,7 +82,7 @@ class ProviderSDKCompatibilityTests(unittest.TestCase):
         with sdk(
             api_key="fixture-only",
             base_url="https://sdk-fixture.invalid/v1",
-            http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+            http_client=http.Client(transport=http.MockTransport(respond)),
         ) as client:
             llm._client = client
             self.assertEqual(llm.call_action(history, tools={}).action.content, "Hello fixture.")

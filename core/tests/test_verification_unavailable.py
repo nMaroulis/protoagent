@@ -24,7 +24,6 @@ class VerificationUnavailableTests(NativeRuntimeCase):
         self.assertEqual(accepted.completion["outcome"], "unverified")
         self.assertFalse(accepted.completion["satisfied"])
         self.assertFalse(accepted.completion["verified"])
-        self.assertFalse(accepted.repairable)
         self.assertEqual(accepted.verification["status"], "unavailable")
         self.assertEqual(accepted.verification["results"][0]["exit_code"], 1)
         self.assertEqual(accepted.verification["setup_issues"][0]["code"], "runner_unavailable")

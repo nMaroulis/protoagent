@@ -51,7 +51,9 @@ Installed examples use `proto-cli <command>`.
 | `open [FILE]` | Scrollable text viewer; no path opens the browser. |
 | `cat FILE` | Print a bounded project text preview; works without a model. |
 | `check` | Show Python, platform, ProtoLink readiness, active provider status, and agent manifest. |
-| `agents` | Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Tester/Scout/MCP state, and tool isolation. |
+| `agents` | Colored roster with roles, CORE/ON/OFF availability, LLM/tool-only execution and prompt profile. |
+| `agents NAME` | Inspect an agent's role, state, memory, contract, tool catalog and optional toggle. |
+| `agents architecture` | Detailed runtime architecture and tool isolation. |
 | `agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile used by Architect, Explorer, and Coder. |
 | `agents small`, `agents medium`, `agents large`, `agents api` | Shorthand for setting the deck prompt profile. |
 | `agents scout [on\|off]` | Show, enable, or disable optional Scout. Changes apply to the next run. |
@@ -88,7 +90,9 @@ Slash commands are handled inside `cli/src/terminal_ui.rs`.
 | `/models choose`, `/models set`, `/models select` | Open model selection. |
 | `/model`, `/provider` | Open provider/model selection. |
 | `/key [provider]` | Store an API key through a masked modal. |
-| `/agents` | Pin the Agents panel; shows required roles, prompt profile, all optional-worker ON/OFF states and their toggle commands. |
+| `/agents` | Pin a compact agent grid and show the colored roster. Availability is distinct from current run activity. |
+| `/agents NAME` | Inspect any worker and see its tools and optional toggle. |
+| `/agents architecture` | Show full runtime architecture and tool isolation. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the deck prompt profile. |
 | `/agents small`, `/agents medium`, `/agents large`, `/agents api` | Shorthand for changing prompt profile. |
 | `/agents scout [on\|off]` | Show or change optional Scout for subsequent runs. |
@@ -183,7 +187,8 @@ the host. See [Quality Evals](../core/quality-evals.md) for scoring and limits.
 
 | Shell command | TUI equivalent | Purpose |
 | --- | --- | --- |
-| `proto-cli agents tester on/off` | `/agents tester on/off` | Test design on by default; off removes the model worker without skipping required checks. |
+| `proto-cli agents tester on/off` | `/agents tester on/off` | Test design off by default; enabled verification runs independently after edits. |
+| `proto-cli agents verifier on/off` | `/agents verifier on/off` | One post-edit check pass on by default; off skips checks and leaves edits unverified. |
 | `proto-cli agents mcp on/off` | `/agents mcp on/off` | Model-free broker, off by default. |
 | `proto-cli mcp` | `/mcp` | Status/setup guidance without connecting. |
 | `proto-cli mcp add NAME FILE.json` | `/mcp add NAME FILE.json` | Import a named server and exact tool allowlist; does not connect or enable. |

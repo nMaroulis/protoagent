@@ -33,7 +33,7 @@ def create_verifier_agent(
     agent = Agent(
         card={
             "name": "verifier",
-            "description": "Run required repository checks with run_check(check_id, phase=baseline|verify). execute_command is for approved preparation; arbitrary commands do not prove verification. No infer loop.",
+            "description": "Tool-only command worker. The harness runs repository checks after edits; execute_command is for explicitly needed command preparation. No inference or dependency installation.",
             "url": agent_url,
             "capabilities": {
                 "streaming": True,
@@ -70,6 +70,10 @@ def create_verifier_agent(
     )
     agent.add_tool(native)
     agent.execution_version += ":protoagent-command-paths-4"
-    if attempt is not None and attempt.record is not None:
+    if (
+        attempt is not None
+        and attempt.record is not None
+        and not attempt.record.automatic_verification
+    ):
         agent.add_tool(check_tool(native, attempt.record))
     return agent

@@ -3,20 +3,28 @@
 Python brain for the ProtoAgent frontends. The Rust CLI imports this package
 through PyO3 and expects JSON strings from `protoagent_core.agent_engine`.
 
-Current package version: `0.3.0`. The source of truth is
+Current package version: `0.3.1`. The source of truth is
 `core/pyproject.toml`, mirrored by `protoagent_core.__version__`.
 
-Install from the monorepo root. The core brings ProtoLink 0.8.1 or newer with
+Install from the monorepo root. The core brings ProtoLink 0.8.2 or newer with
 its HTTP, LLM and MCP extras and the compatible provider SDK versions:
 
 ```bash
 pip install -e core
 ```
 
-ProtoLink 0.8.1's Anthropic adapter requires `anthropic<1`; the core's package
-metadata enforces that bound. Upgrade through the core package rather than
-upgrading the provider SDK independently. Contributor tooling is pinned in
+ProtoLink owns provider SDK compatibility, including Anthropic v1. The core
+has no separate Anthropic version constraint. Contributor tooling is pinned in
 `requirements-dev.txt` at the repository root.
+
+Local Coder assignments use native `yield_after_steps`, `RunHandoff` and root
+`resume_task` with private temporary execution checkpoints. The live controller
+admits bounded continuation only after fresh applied writes with current revisions.
+Approval and question interruptions still use the existing CLI controls. The
+coding Graph and TaskRecord are not restored after a process restart; temporary
+execution stores are removed when the workflow exits. Explicit transport meshes
+retain live bounded workers. Set `PROTOAGENT_CHECKPOINTED_WORKERS=0` for that live
+fallback in local runs too.
 
 Recoverable Coder writes require POSIX. The runtime uses the native execution,
 approval, lifecycle, recovery and completion APIs; ProtoAgent owns coding roles,
@@ -53,11 +61,11 @@ registers `filesystem_tools()` as `create_file`, `replace_file`, `preview_change
 and `restore_change`. Both mutations and restoration require broker approval;
 commands require `process.execute` approval of the frozen specification.
 
-`workflow.py` uses Graph for an initial Architect attempt and at most two
-repairs. `verification.py` supplies native completion predicates over executed
+`workflow.py` bounds progressing edits with Graph, then schedules one enabled
+verification pass without model inference or automatic repairs. `verification.py` supplies native completion predicates over executed
 outcomes and current resource revisions. Approval and diff previews cannot
-satisfy completion. Baselines and preparation allow later edits; final verification
-closes the edit phase. Code changes require selected repository checks; unrelated
+satisfy completion. Preparation supports edits; checks run afterwards, with no
+default baseline stage. Code changes require selected repository checks; unrelated
 successful commands do not count. See the [task workflow guide](../docs/content/core/task-workflow.md).
 `task_record.py` also declares a standard unittest runner for Python projects
 without checks, and exposes compact valid/bootstrap IDs. Rejected plans return
@@ -82,8 +90,8 @@ See the [runtime guide](../docs/content/core/runtime.md) and
 
 The CLI invokes the selected provider/model through ProtoLink agents by
 default. The selected model is used to create fresh LLM instances for
-Architect, Explorer, Coder and enabled Tester on each run. Verifier is always registered with
-no LLM and exposes approved command execution. Scout is a tool-only agent with no
+Architect, Explorer, Coder and enabled Tester on each run. Enabled Verifier has no LLM and exposes approved command execution. Explicit
+test requests construct no LLM and work without a selected or running model. Scout is a tool-only agent with no
 LLM and is not constructed when it is disabled. The default Architect owns
 enabled workers through ProtoLink local subagents. Children have independent
 conversations, inherited policies and shared Graph budgets. Delegation remains
@@ -121,7 +129,7 @@ events, and reports. A ProtoAgent `RunContract` is inferred before the model
 runs, attached to `RunContext.metadata`, and checked with native
 `CompletionValidator`. Write tasks need an executed native change at its current
 revision. Missing or stale evidence remains incomplete; denials and uncertain
-effects stop repair routing.
+effects stop further execution.
 
 Prompt profile quality can be checked with the built-in eval harness:
 `proto-cli eval profiles` runs a scaffold smoke without contacting a model,
@@ -152,13 +160,13 @@ current run.
 
 Architect's native `ask_user` calls await the CLI/TUI callback and continue the
 same task. Only the controller has `user.interact`; workers report missing
-requirements to it. Native after-tool hooks retain answered clarifications in
+requirements to it. A prepared-tool adapter retains validated native clarifications in
 TaskRecord so pruning observations cannot discard them. Feedback supplies no
 execution approval and does not resume runs after an application restart.
 
 Scout is disabled by default through `optional_agents.scout.enabled`. It can be
 toggled with `proto-cli agents scout on|off` or `/agents scout on|off`; changes
-apply to the next run. When enabled, Scout receives ProtoLink 0.8.1's
+apply to the next run. When enabled, Scout receives ProtoLink 0.8.2's
 `web_search` and `fetch_url` tools with the `network.read` capability. It has no
 workspace tools. Brave search reads `BRAVE_SEARCH_API_KEY` only when invoked;
 DuckDuckGo is keyless best-effort search, and English Wikipedia is keyless
@@ -181,20 +189,21 @@ model. If no model is selected, the CLI shows static help and points the user
 to `/model` before offering interactive help.
 
 
-## Optional workers and MCP in v0.3.0
+## Optional workers and MCP in v0.3.1
 
-Tester defaults on, while Scout/MCP default off. `proto-cli agents tester|scout|mcp
+Verifier defaults on; Tester, Scout and MCP default off for new configurations. `proto-cli agents tester|verifier|scout|mcp
 on|off` and the matching `/agents` commands persist optional-worker settings for
 the next run. Disabled workers are not constructed or registered. Architect,
-Explorer, Coder and Verifier remain required; without Tester, Architect defines
-criteria and Coder writes regressions while all selected checks still run.
+Explorer and Coder remain required. `/agents verifier off` skips checks and labels
+edits unverified; `/agents verifier on` restores one check pass after edits.
+Tester is optional assistance for useful regressions, not a required stage.
 
 `proto-cli mcp` (TUI `/mcp`) shows model-free setup/status. Import an explicit
 server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
 `mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
 not invoke server tools. The broker exposes three fixed tools for names, one
 schema and an approved allowlisted invocation. Architect uses `tool_call`,
-never another inference loop. ProtoLink 0.8.1 owns transports, schema validation,
+never another inference loop. ProtoLink 0.8.2 owns transports, schema validation,
 session cleanup and result/error normalization. See the
 [MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
 

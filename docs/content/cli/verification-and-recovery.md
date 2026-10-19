@@ -62,11 +62,12 @@ Esc/Ctrl-C goes through `RunHandle.cancel()`. ProtoLink cleans up POSIX process
 groups on cancellation, timeout and normal parent exit. Deliberately detached
 processes can escape this cleanup. Command effects have no automatic rollback.
 
-## Completion and repairs
+## Completion and verification
 
 A write task needs an **executed native file change at its current revision**.
 A proposed diff, approval, delegation or model claim cannot satisfy that check.
-Code changes and verification requests need all selected repository checks.
+Verified code changes need the enabled selected repository checks. Disabled or
+unavailable checks leave applied edits unverified.
 Unrelated successful commands do not qualify. Explicit documentation-only requests can
 complete with `applied=true` and `verified=false`.
 
@@ -76,6 +77,9 @@ complete with `applied=true` and `verified=false`.
 | `failed` | A recorded command failed or its execution evidence cannot be accepted. |
 | `stale` | A resource referenced by a check changed. |
 | `unverified` | No qualifying final repository check was executed. |
+| `disabled` | Verifier was switched off; no check discovery or command ran. |
+| `not_configured` | No runnable repository checks were available. |
+| `unavailable` | The selected Python runner or an external dependency is missing. |
 | `deferred` | You explicitly chose to handle verification. Any previous failure remains recorded in `last_attempt_status` and command receipts. |
 
 Checks reference native revisions of changed files, worker-read sources and
@@ -85,8 +89,8 @@ the check. This does not track every repository input, dependency or file a
 command can modify. A passing exit status is evidence for that command, not a
 proof that all behavior is correct. A write can be applied but remain unverified.
 
-If a verification question offers dependency installation or a retry, you may
-answer **"don't run it, I'll do it"** or **"I'll verify it myself; stop here"**.
+The harness does not ask to install missing test dependencies or retry failed checks.
+If an editing clarification is awaiting your response, you may explicitly answer **"don't run it, I'll do it"** or **"I'll verify it myself; stop here"**.
 After edits or final checking have begun, this stops immediately with no further
 commands, model calls or repairs. The application status is `unverified`, and
 the response lists applied files separately from the last check's result.
@@ -96,23 +100,22 @@ revisions still require inspection. Esc skips the question without creating a
 manual verification decision.
 
 For Python projects with no checks, a predefined `python-tests` runner can execute
-new root `test_*.py` unittest regressions. Architect includes test creation in
-Coder's scope; Verifier runs the captured command with approval. Zero tests
+useful new root `test_*.py` unittest regressions. Test creation is not an admission
+requirement for edits. Without runnable tests, the harness skips an empty bootstrap
+and reports unverified changes. Verifier runs available checks with native approval. Zero tests
 reports missing verification, even if Python exits successfully. Invalid planning
 IDs receive native no-change feedback for correction within the shared allowance
 (default two per inference). Rejected plans or check requests cannot provide
 verification evidence. Explicit project
 check configuration takes precedence. See [Task Workflow](../core/task-workflow.md).
 
-Baseline and preparation commands permit subsequent edits. Final verification
-closes the edit phase, and further file mutations are denied for that attempt.
-The plan freezes at the first write or final check. A known empty unittest suite
-is rejected; zero exit status alone does not establish useful coverage. A native **Graph** permits
-one initial attempt and at most **two repair attempts** after completed nonzero
-checks. Its limits are enforced in code and share native workflow budgets.
-Denials, stale revisions, timeouts, interrupted effects and missing evidence
-stop repair routing. Transport retries are separate; task submissions are never
-automatically replayed after a lost response.
+The harness runs one check pass after editing. No default baseline, model-managed
+check sequence or automatic repair loop is used. A follow-up request can address
+a real failure. `/agents verifier off` (shell: `proto-cli agents verifier off`)
+skips discovery and commands; on restores the pass. Tester is independent and
+opt-in for new configurations. Explicit test requests run without a selected or
+running model. The plan freezes at the first write or final check; native
+approvals, revisions, cancellation and the shared root budget still apply.
 
 The report retains every native receipt and each `validation.completed` result.
 A newer execution replaces older evidence only for the same argv, directory

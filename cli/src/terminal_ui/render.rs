@@ -11,7 +11,7 @@ use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::inline_style::{inline_code_segments, InlineKind};
-use crate::{empty_as_unknown, wrap_lines};
+use crate::wrap_lines;
 
 use super::input::InputEditor;
 use super::markdown::{self, Code, Span, Style};
@@ -41,8 +41,12 @@ pub(super) fn draw_header(out: &mut impl Write, width: u16, app: &TerminalApp) -
 
     let available_rows = controls_row.saturating_sub(1) as usize;
     draw_model_row(out, width, 1, app)?;
-    let rows = panel_rows(app);
-    draw_panel_rows(out, width, &rows, available_rows.saturating_sub(1), 2)?;
+    if app.panel == PanelView::Agents {
+        draw_agents_header(out, width, app)?;
+    } else {
+        let rows = panel_rows(app);
+        draw_panel_rows(out, width, &rows, available_rows.saturating_sub(1), 2)?;
+    }
 
     draw_command_bar(out, controls_row, width, app.panel)?;
     write_line(
@@ -51,6 +55,50 @@ pub(super) fn draw_header(out: &mut impl Write, width: u16, app: &TerminalApp) -
         width,
         &"-".repeat(width as usize),
         magenta(),
+        panel_bg(),
+        false,
+    )?;
+    Ok(())
+}
+
+fn draw_agents_header(out: &mut impl Write, width: u16, app: &TerminalApp) -> Result<()> {
+    let cell_width = width.saturating_sub(2) / 2;
+    for (index, agent) in crate::agent_display::AGENTS.iter().enumerate() {
+        let x = 1 + (index as u16 % 2) * cell_width;
+        let y = 2 + index as u16 / 2;
+        let (badge, tone) = agent.badge(&app.agent_settings);
+        let color = match tone {
+            crate::summary::Tone::Title => cyan(),
+            crate::summary::Tone::Added => green(),
+            _ => muted(),
+        };
+        write_at(
+            out,
+            x,
+            y,
+            cell_width,
+            &format!("{:<11} [{badge}]", agent.label),
+            color,
+            panel_bg(),
+            true,
+        )?;
+    }
+    write_at(
+        out,
+        1 + cell_width,
+        5,
+        cell_width,
+        "Guide       /help",
+        muted(),
+        panel_bg(),
+        false,
+    )?;
+    write_line(
+        out,
+        6,
+        width,
+        " CORE required · ON/OFF optional · /agents NAME",
+        muted(),
         panel_bg(),
         false,
     )?;
@@ -588,7 +636,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             rows.push(row("approvals", &app.status.approval_mode, yellow(), false));
             rows.push(row(
                 "agents",
-                "TaskRecord -> Architect -> optional Tester -> Coder -> required checks",
+                "Architect -> Coder -> one optional verification pass",
                 yellow(),
                 false,
             ));
@@ -700,37 +748,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
                 rows.push(row("config", &app.status.config_path, muted(), false));
             }
         }
-        PanelView::Agents => {
-            rows.push(row(
-                "required",
-                "Architect Explorer Coder Verifier",
-                cyan(),
-                true,
-            ));
-            for name in ["tester", "scout", "mcp"] {
-                let enabled = app.agent_settings.is_enabled(name);
-                rows.push(row(
-                    name,
-                    format!(
-                        "{} | /agents {name} {}{}",
-                        if enabled { "ON" } else { "OFF" },
-                        if enabled { "off" } else { "on" },
-                        if name == "mcp" { " | /mcp" } else { "" },
-                    ),
-                    if enabled { green() } else { yellow() },
-                    true,
-                ));
-            }
-            rows.push(row(
-                "profile",
-                format!(
-                    "{} | /agents profile",
-                    empty_as_unknown(&app.agent_settings.prompt_profile.resolved),
-                ),
-                magenta(),
-                false,
-            ));
-        }
+        PanelView::Agents => {} // Dedicated compact grid keeps every role visible.
         PanelView::Context => {
             rows.push(row(
                 "loom",
@@ -906,7 +924,7 @@ fn panel_rows(app: &TerminalApp) -> Vec<PanelRow> {
             ));
             rows.push(row(
                 "agents",
-                "/agents profile | /agents tester|scout|mcp on|off | /mcp",
+                "/agents profile | /agents tester|verifier|scout|mcp on|off | /mcp",
                 cyan(),
                 false,
             ));
@@ -1510,6 +1528,21 @@ fn append_message_lines(
                 }
             }
         }
+    } else if let Some(view) = &message.agents {
+        for row in view.rows(width.saturating_sub(4)) {
+            lines.push(answer_line(
+                row.into_iter()
+                    .map(|part| Span {
+                        text: part.text,
+                        style: Style {
+                            bold: part.bold,
+                            tone: part.tone,
+                            ..Default::default()
+                        },
+                    })
+                    .collect(),
+            ));
+        }
     } else {
         append_wrapped_render_line(lines, "  | ", &message.body, text(), false, width);
     }
@@ -1692,33 +1725,70 @@ mod context_meter_tests {
     }
 
     #[test]
-    fn agents_panel_displays_every_optional_worker_and_its_toggle() {
+    fn agents_header_keeps_every_state_visible_after_resize_and_toggle() {
         use super::*;
         let mut app = TerminalApp::for_test();
         app.panel = PanelView::Agents;
-        for width in [50, 80, 100] {
-            let mut output = vec![];
-            draw_header(&mut output, width, &app).unwrap();
-            let output = String::from_utf8(output).unwrap();
-            for toggle in ["/agents tester off", "/agents scout on", "/agents mcp on"] {
-                assert!(output.contains(toggle), "width={width}, toggle={toggle}");
-            }
-            assert!(output.contains("Architect Explorer Coder Verifier"));
-        }
         app.agent_settings = serde_json::from_value(serde_json::json!({
             "agents": [
                 {"name": "tester", "role": "test design", "enabled": false},
+                {"name": "verifier", "role": "checks", "enabled": false},
                 {"name": "scout", "role": "web research", "enabled": true},
                 {"name": "mcp", "role": "external tools", "enabled": true}
             ]
         }))
         .unwrap();
-        let mut output = vec![];
-        draw_header(&mut output, 80, &app).unwrap();
-        let output = String::from_utf8(output).unwrap();
-        for toggle in ["/agents tester on", "/agents scout off", "/agents mcp off"] {
-            assert!(output.contains(toggle));
+        for width in [50, 80, 100] {
+            let mut output = vec![];
+            draw_header(&mut output, width, &app).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            for state in [
+                "Architect   [CORE]",
+                "Explorer    [CORE]",
+                "Coder       [CORE]",
+                "Tester      [OFF]",
+                "Verifier    [OFF]",
+                "Scout       [ON]",
+                "MCP         [ON]",
+                "Guide       /help",
+                "/agents NAME",
+            ] {
+                assert!(output.contains(state), "width={width}, state={state}");
+            }
         }
+    }
+
+    #[test]
+    fn agent_roster_is_styled_and_cached_without_treating_availability_as_activity() {
+        use super::*;
+        let mut app = TerminalApp::for_test();
+        app.push_agents("/agents", None);
+        let mut cache = TranscriptCache::default();
+        cache.update(&app, 96);
+        let overview = cache.entries[0]
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(overview.contains("AGENT OVERVIEW"));
+        assert!(overview.contains("CORE  Architect"));
+        assert!(overview.contains("ON    Verifier"));
+        assert!(overview.contains("Agents run only when needed"));
+        assert!(cache.entries[0]
+            .lines
+            .iter()
+            .filter_map(|line| line.spans.as_ref())
+            .flatten()
+            .any(|span| span.style.tone == crate::summary::Tone::Added));
+        cache.update(&app, 96);
+        assert_eq!(cache.rebuilds, 1);
+        cache.update(&app, 46);
+        assert_eq!(cache.rebuilds, 2);
+        assert!(cache.entries[0]
+            .lines
+            .iter()
+            .all(|line| line.text.width() <= 46));
     }
 
     #[test]
@@ -1927,6 +1997,7 @@ mod context_meter_tests {
             meta: vec!["status completed".into(), "provider mock".into()],
             details: vec![("RunReport".into(), "report".into())],
             review: None,
+            agents: None,
         };
         let render = |cursor, debug| {
             let mut lines = vec![];
@@ -1978,6 +2049,7 @@ mod context_meter_tests {
                     meta: vec!["status streaming".into()],
                     details: vec![],
                     review: None,
+                    agents: None,
                 };
                 let mut live = vec![];
                 append_message_lines(&mut live, &message, width, Some(true), false);
@@ -2010,6 +2082,7 @@ mod context_meter_tests {
                 meta: vec![],
                 details: vec![],
                 review: None,
+                agents: None,
             };
             let mut on = vec![];
             let mut off = vec![];

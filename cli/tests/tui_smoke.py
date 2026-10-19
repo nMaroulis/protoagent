@@ -107,7 +107,7 @@ def respond(history, prompt):
         return {'type':'tool_call','tool':'replace_file','args':{'path':str(project/'sample.py'),'content':'value = 42\\n'}}
     if os.environ.get('PROTOAGENT_TUI_FIXTURE_DIFF') == '1':
         return {'type':'tool_call','tool':'coder','args':{'task':'Change sample.py value to 42.'}}
-    return {'type':'tool_call','tool':'run_check','args':{'check_id':'python-tests','phase':'baseline'}}
+    return {'type':'final','content':'The harness handles checks.'}
 factory.create_llm = lambda *args, **kwargs: MockLLM(response_callback=respond)
 """
 
@@ -134,11 +134,54 @@ def respond(history, prompt):
     if step == 0:
         return {'type':'tool_call','tool':'coder','args':{'task':'Change sample.py value to 42.'}}
     if step == 1:
-        return {'type':'tool_call','tool':'run_check','args':{'check_id':'regression','phase':'verify'}}
-    if step == 2:
-        return {'type':'tool_call','tool':'ask_user','args':{'question':'Regression failed. Retry or defer verification?','options':['Install', 'Retry']}}
+        if os.environ.get('PROTOAGENT_TUI_FIXTURE_MODE') == 'handoff':
+            return {'type':'tool_call','tool':'ask_user','args':{'question':'Any remaining requirements before verification?','options':['Continue', 'Stop']}}
+        return {'type':'final','content':'Updated sample.py.'}
     raise RuntimeError('Manual handoff incorrectly continued model inference')
 factory.create_llm = lambda *args, **kwargs: MockLLM(response_callback=respond)
+"""
+
+
+SLICES_MOCK = r"""
+import asyncio, json, os
+from pathlib import Path
+import protoagent_core.models as models
+import protoagent_core.agent_engine as engine
+import protolink.llms.factory as factory
+from protolink.llms.mock_client import MockLLM
+models.model_startup_problem = lambda: None
+engine.model_startup_problem = lambda: None
+project = Path(os.environ['PROTOAGENT_TUI_FIXTURE_PROJECT'])
+counts = {}
+def respond(history, prompt):
+    role = 'coder' if 'Your registered name is coder.' in history.to_list()[0]['content'] else 'architect'
+    step = counts.get(role, 0)
+    counts[role] = step + 1
+    Path(os.environ['PROTOAGENT_CONFIG_DIR'], 'model-calls.json').write_text(json.dumps(counts))
+    if role == 'coder':
+        if step in (0, 10):
+            value = 1 if step == 0 else 42
+            return {'type':'tool_call','tool':'replace_file','args':{'path':'sample.py','content':f'value = {value}\n' + '# source\n' * 12}}
+        if step < 10:
+            return {'type':'tool_call','tool':'read_file','args':{'path':'sample.py','start_line':step + 1,'end_line':step + 1}}
+        return {'type':'final','content':'Finished the saved worker assignment.'}
+    if step == 0:
+        return {'type':'tool_call','tool':'coder','args':{'task':'Change sample.py value to 42.'}}
+    return {'type':'final','content':'Saved work continued and verification passed.'}
+class StreamOnly(MockLLM):
+    def call(self, history):
+        if not getattr(self, '_streaming_fixture', False):
+            raise RuntimeError('Checkpoint resume lost streaming acquisition')
+        return super().call(history)
+    async def call_stream(self, history):
+        self._streaming_fixture = True
+        try:
+            response = self.call(history)
+        finally:
+            self._streaming_fixture = False
+        await asyncio.sleep(0.04)
+        yield response
+factory.create_llm = lambda *args, **kwargs: StreamOnly(response_callback=respond)
 """
 
 
@@ -245,9 +288,13 @@ class Terminal:
                     "    def test_command(self):\n        Path(__file__).with_name('check-executed').write_text('ran')\n"
                     "        self.assertTrue(True)\n"
                 )
-        elif fixture in {"handoff", "unavailable"}:
-            (self.directory / "sitecustomize.py").write_text(HANDOFF_MOCK)
-            (self.project / "sample.py").write_text("value = 0\n")
+        elif fixture in {"handoff", "unavailable", "slices", "success"}:
+            (self.directory / "sitecustomize.py").write_text(
+                SLICES_MOCK if fixture == "slices" else HANDOFF_MOCK
+            )
+            (self.project / "sample.py").write_text(
+                "value = 0\n" + ("# source\n" * 12 if fixture == "slices" else "")
+            )
             (self.project / ".protoagent").mkdir()
             (self.project / ".protoagent/project.json").write_text(
                 json.dumps(
@@ -258,7 +305,9 @@ class Terminal:
                                 "argv": [
                                     str(ROOT / ".venv/bin/python"),
                                     "-c",
-                                    "raise ModuleNotFoundError(\"No module named 'pytest'\")"
+                                    "import sample; assert sample.value == 42"
+                                    if fixture in {"slices", "success"}
+                                    else "raise ModuleNotFoundError(\"No module named 'pytest'\")"
                                     if fixture == "unavailable"
                                     else 'raise AssertionError("Regression failed")',
                                 ],
@@ -275,6 +324,7 @@ class Terminal:
         environment.update(
             {
                 "PROTOAGENT_CONFIG_DIR": str(self.directory),
+                "PROTOAGENT_TUI_FIXTURE_MODE": fixture,
                 "PYTHONPATH": os.pathsep.join(
                     [
                         str(self.directory),
@@ -385,20 +435,18 @@ class TuiSmokeTests(unittest.TestCase):
         offset = terminal.send("v")
         terminal.wait_for("File change", after=offset)
         offset = terminal.send("y")
-        terminal.wait_for("Run verification check?", after=offset)
-        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
-        offset = terminal.send("y")
         terminal.wait_for("Architect has a question", after=offset)
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
         offset = terminal.send("do not run it its ok Ill do it\r")
         terminal.wait_for("Verification: deferred to you.", after=offset)
         terminal.wait_for("Ask anything", after=offset)
         terminal.wait_for("Changes applied: sample.py.", after=offset)
         counts = json.loads((terminal.directory / "model-calls.json").read_text())
-        self.assertEqual(counts, {"architect": 3, "coder": 2})
+        self.assertEqual(counts, {"architect": 2, "coder": 2})
         self.assert_intact(terminal)
 
     def test_auto_edits_skip_file_approval_and_finish_with_applied_review(self):
-        terminal = self.terminal("handoff")
+        terminal = self.terminal("success")
         terminal.command("/approvals edits", "Approvals: edits")
         modes = json.loads((terminal.directory / "config.json").read_text())["approval_modes"]
         self.assertEqual(modes[str(terminal.project.resolve())], "edits")
@@ -407,8 +455,6 @@ class TuiSmokeTests(unittest.TestCase):
         self.assertNotIn("Apply file change?", terminal.data[start:].decode(errors="replace"))
         self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
         offset = terminal.send("y")
-        terminal.wait_for("Architect has a question", after=offset)
-        offset = terminal.send("do not run it its ok Ill do it\r")
         terminal.wait_for("Edits: 1 file", after=offset)
         terminal.wait_for("Ask anything", after=offset)
         offset = terminal.send("/diff\r")
@@ -448,16 +494,47 @@ class TuiSmokeTests(unittest.TestCase):
         terminal.command("/approvals ask", "Approvals: ask")
         self.assert_intact(terminal)
 
+    def test_checkpointed_worker_and_approval_resumes_keep_streaming_and_edits(self):
+        terminal = self.terminal("slices")
+        terminal.command("/approvals auto", "Approvals: auto")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Verification: passed (1 check).", after=start, timeout=15)
+        terminal.wait_for("Edits: 1 file", after=start)
+        terminal.wait_for("Ask anything", after=start)
+        counts = json.loads((terminal.directory / "model-calls.json").read_text())
+        self.assertEqual(counts, {"architect": 2, "coder": 12})
+        self.assertTrue((terminal.project / "sample.py").read_text().startswith("value = 42\n"))
+        output = terminal.data[start:].decode(errors="replace")
+        self.assertNotIn("Checkpoint resume lost streaming", output)
+        self.assertNotIn("Architect has a question", output)
+        self.assert_intact(terminal)
+
+    def test_verifier_toggle_persists_and_skips_the_post_edit_check(self):
+        terminal = self.terminal("success")
+        terminal.command("/agents verifier off", "verifier: off")
+        terminal.command("/approvals auto", "Approvals: auto")
+        start = terminal.send("Change sample.py so value is 42\r")
+        terminal.wait_for("Verification: disabled", after=start)
+        terminal.wait_for("Edits: 1 file", after=start)
+        terminal.wait_for("Ask anything", after=start)
+        self.assertEqual((terminal.project / "sample.py").read_text(), "value = 42\n")
+        settings = json.loads((terminal.directory / "config.json").read_text())
+        self.assertFalse(settings["optional_agents"]["verifier"]["enabled"])
+        terminal.command("/agents verifier on", "verifier: on")
+        settings = json.loads((terminal.directory / "config.json").read_text())
+        self.assertTrue(settings["optional_agents"]["verifier"]["enabled"])
+        self.assert_intact(terminal)
+
     def test_command_details_require_an_explicit_decision(self):
         terminal = self.terminal("approval-command")
-        start = terminal.send("Explain this project and run its baseline\r")
-        terminal.wait_for("Run baseline check?", after=start)
+        start = terminal.send("run the tests\r")
+        terminal.wait_for("Run verification check?", after=start)
         offset = terminal.send("v")
         terminal.wait_for("Command details", after=offset)
         terminal.wait_for("Viewing details has not approved", after=offset)
         self.assertFalse((terminal.project / "check-executed").exists())
         offset = terminal.send("\r")
-        terminal.wait_for("Run baseline check?", after=offset)
+        terminal.wait_for("Run verification check?", after=offset)
         self.assertFalse((terminal.project / "check-executed").exists())
         offset = terminal.send("v")
         terminal.wait_for("Command details", after=offset)
@@ -467,8 +544,8 @@ class TuiSmokeTests(unittest.TestCase):
 
     def test_command_details_close_when_native_approval_wait_expires(self):
         terminal = self.terminal("approval-command-expired")
-        start = terminal.send("Explain this project and run its baseline\r")
-        terminal.wait_for("Run baseline check?", after=start)
+        start = terminal.send("run the tests\r")
+        terminal.wait_for("Run verification check?", after=start)
         offset = terminal.send("v")
         terminal.wait_for("Command details", after=offset)
         terminal.wait_for("waiting for your approval", after=offset)
@@ -514,6 +591,32 @@ class TuiSmokeTests(unittest.TestCase):
         self.assert_intact(terminal)
         print(f"\nOffline first interactive frame: {terminal.startup_ms} ms")
 
+    def test_agent_roster_details_and_resize_work_without_a_model(self):
+        terminal = self.terminal("offline")
+        terminal.command("/agents", "AGENT OVERVIEW")
+        screen = terminal.screen.text()
+        for role in ("Architect", "Explorer", "Coder", "Tester", "Verifier", "Scout", "MCP"):
+            self.assertIn(role, screen)
+        self.assertIn("CORE", screen)
+        self.assertIn("tool-only", screen)
+        self.assertIn("Agents run only when needed", screen)
+        terminal.command("/agents verifier off", "verifier: off")
+        self.assertIn("Verifier    [OFF]", terminal.screen.text())
+        terminal.command("/agents verifier on", "verifier: on")
+        self.assertIn("Verifier    [ON]", terminal.screen.text())
+        terminal.command("/agents", "AGENT OVERVIEW")
+        offset = terminal.resize(50, 30)
+        terminal.wait_for("Ask anything", after=offset)
+        for state in ("Architect   [CORE]", "Tester      [OFF]", "Verifier    [ON]", "MCP         [OFF]"):
+            self.assertIn(state, terminal.screen.text())
+        self.assertIn("CORE  Architect", terminal.screen.text())
+        self.assertIn("External tools", terminal.screen.text())
+        offset = terminal.resize(100, 30)
+        terminal.wait_for("Ask anything", after=offset)
+        terminal.command("/agents coder", "coder: on")
+        self.assertIn("Coder", terminal.screen.text())
+        self.assert_intact(terminal)
+
     def test_prebound_logger_and_console_controls_cannot_clear_streaming_ui(self):
         terminal = self.terminal("mock")
         terminal.command("/help fixture question", "Fixture answer complete.")
@@ -537,7 +640,7 @@ class TuiSmokeTests(unittest.TestCase):
 
     def test_scroll_resize_redraw_and_cancel_during_generation(self):
         terminal = self.terminal("mock")
-        terminal.command("/agents", "Agents panel pinned.")
+        terminal.command("/agents", "AGENT OVERVIEW")
         terminal.send("/help fixture question\r")
         deadline = time.monotonic() + 3
         while not (terminal.directory / "model-started").exists() and time.monotonic() < deadline:

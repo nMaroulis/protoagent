@@ -2,6 +2,53 @@
 
 This file records user-visible changes to the active ProtoAgent components.
 
+## [0.3.1] - 2026-10-19
+
+### Added
+
+- Colored agent roster shared by shell and TUI: required CORE roles, enabled ON
+  and disabled OFF workers, short roles and LLM/tool-only execution. Keep every
+  worker visible in a compact pinned grid; `/agents NAME` opens manifest details
+  and toggle hints, while `/agents architecture` retains the full runtime view.
+
+- Local Coder assignments use ProtoLink 0.8.2 checkpointed work slices and
+  structured `RunHandoff` progress. The application grants bounded continuation
+  only for fresh applied edits with current revisions; the SDK preserves the
+  child task, history, corrections, committed actions and cumulative budgets.
+- Existing approval and question controls supply exact responses through native
+  `resume_task`, retaining streaming after approval, input and work handoffs.
+  Execution checkpoints are private temporary files for the active workflow;
+  the coding Graph and TaskRecord are not reconstructed after process exit.
+- `PROTOAGENT_CHECKPOINTED_WORKERS=0` selects live fallback limits locally.
+  Explicit transport meshes retain that fallback. The existing
+  `PROTOAGENT_CODER_MAX_WINDOWS` bounds progressing slices per assignment.
+
+### Changed
+
+- Simplify verification to one harness-controlled check pass after editing, with
+  no default baseline, model-managed test sequencing or automatic repair loop.
+  Explicit test requests use no model inference. Missing setup preserves edits
+  as unverified with a compact note; no install conversation or retries follow.
+- Bind the entire workflow, checkpoint resumes and final checks to one native
+  shared budget. Load only embedded-Python-compatible virtualenv packages.
+- Add `/agents verifier on|off` and its shell equivalent. Off skips check
+  discovery and commands. Tester is opt-in for new configurations; saved user
+  settings are preserved. Useful tests are encouraged without requiring generated
+  test files solely to satisfy a harness gate.
+- Require ProtoLink 0.8.2 and register narrow worker interfaces with the SDK's
+  `Agent.add_worker_tool`. Remove custom delegation wrappers and command preflight
+  from the controller; original workers retain their own policies and approvals.
+- Consume immediate child events from the public native stream, removing the
+  separate Task-metadata polling loop.
+- Raise source and command preparation rejections directly into ProtoLink's
+  correction loop before approval/execution. Remove executable validation
+  actions; rejected preparation consumes no tool call.
+- Remove the application Anthropic SDK upper bound now that the engine supports
+  SDK v1. Keep provider compatibility checks on real SDK serialization with
+  local HTTP fixtures. Forward configured Gemini, OpenAI and Anthropic API URLs.
+- Update CLI, core and documentation metadata together, plus the Guide,
+  installation/development instructions, engine integration docs and whitepaper.
+
 ## [0.3.0] - 2026-09-26
 
 ### Dependency maintenance
