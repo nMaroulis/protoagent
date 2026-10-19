@@ -107,7 +107,7 @@ Manual:
   Missing Python runners/external modules at final checking finish with unavailable
   verification, retaining applied edits unverified. No installation question,
   automatic setup or code repair is triggered for that setup error. Existing
-  local-module import failures and genuine regressions retain bounded repair;
+  local-module import failures and genuine regressions are reported without automatic repairs;
   cancellation, denial, stale revisions and uncertainty still take precedence.
   `/diff` reviews the combined applied diff; `/diff raw` prints it. Incremental
   edits to one file combine from this run's first preimage to last applied
@@ -123,7 +123,7 @@ Manual:
   Inside a review, Y/N decides and Enter/Esc returns without deciding. Native
   expiry/cancellation closes approval and review modals automatically. Command
   approvals have command details; Coder proposals have separate file diffs.
-  Baseline measures existing behavior; verification checks edited/current files.
+  The harness runs one check pass on edited/current files. No baseline is run.
   No environment is inherited.
   Commands run on the host without sandbox isolation and may write files or
   use the network. The ceilings are 600 seconds and 32 KiB combined output.
@@ -132,15 +132,15 @@ Manual:
   through explicit env.PATH or a fixed application search path; python/python3
   prefer project/runtime Python without PATH. The preview shows exact absolute
   paths. No parent environment is inherited. In the small local interface,
-  preparation mistakes produce no-change correction feedback before dispatch.
+  preparation mistakes produce native no-change correction before approval or execution.
   To move root unittest tests into test/ or tests/, use approved mkdir/mv commands
   and ask Coder for __init__.py and necessary imports, retaining the frozen runner.
   Moves are host commands, with no automatic file recovery. Zero tests never verifies.
 - Completion requires executed native changes and current resource revisions;
   approval or preview alone cannot prove execution. Checks report passed,
-  failed, stale or unverified. Graph permits at most two repairs after completed
-  nonzero checks. Edits precede checks within each attempt; denial, timeouts,
-  stale evidence and uncertain effects stop repairs.
+  failed, stale or unverified. The harness runs checks once after edits; no model
+  request or automatic repair follows a failed check. Denial, timeouts, stale
+  evidence and uncertain effects remain visible stopping conditions.
 - Coder accepts project-relative or absolute file paths. Relative create/replace
   paths are joined to the selected project before native preparation; native
   traversal, symlink and root restrictions still apply. Approved paths are absolute.
@@ -153,7 +153,7 @@ Manual:
   the configuration in the shell. Both are read-only, not configuration editors.
   Use `/model` to select a model, `/key PROVIDER` to store a key,
   `/context window 16k` for Ollama context, and `/agents profile MODE` or
-  `/agents tester|scout|mcp on|off` for agent settings. Never suggest a nonexistent
+  `/agents tester|verifier|scout|mcp on|off` for agent settings. Never suggest a nonexistent
   `config set` command. Paths below use the configured directory when overridden.
 - `/key <provider>` stores an API key for OpenAI, Anthropic, Gemini, DeepSeek,
   or OpenAI-compatible providers. From the shell, use `proto-cli key openai`.
@@ -174,9 +174,15 @@ Manual:
 - `/context on` enables persistent project conversation memory. This is the
   default. `/context off` makes each task use task-local ProtoLink state, so the
   model starts fresh each run until memory is turned on again.
-- `/agents` opens the runtime architecture panel: ProtoLink runtime kernel,
-  TaskRecord and RunContract, stateful Architect, task-local Explorer/Tester/Coder workers, tool-only Verifier, optional
-  Scout, policy gate, completion guard, and current prompt profile.
+- `/agents` shows a colored roster: CORE for required Architect/Explorer/Coder,
+  green ON for enabled optional workers, muted OFF for disabled workers, a short
+  role, LLM versus tool-only execution, and the current prompt profile. These are
+  availability settings, not live activity indicators. Guide runs on demand via
+  `/help QUESTION`. `/agents NAME` inspects a worker's state, memory, contract and
+  tool catalog and shows the exact optional-worker toggle. `/agents architecture`
+  shows the detailed ProtoLink runtime architecture and full catalog. The same
+  commands work in the shell after `proto-cli agents`. No model is needed to
+  view or change agent settings.
 - Each turn exposes only the workers its original request needs. Greetings and
   thanks use Architect alone, with no project scan, tests, tools or questions.
   Repository questions use read-only evidence; explicit verification adds
@@ -187,15 +193,16 @@ Manual:
 - `/agents scout on` enables the optional stateless Scout web-research worker;
   `/agents scout off` disables it. Scout is off by default. From the shell, use
   `proto-cli agents scout on|off`.
-- `/agents tester on|off` toggles optional test design (default on). Architect
-  defines criteria and Coder adds regressions when it is off; Verifier remains
-  required. Shell: `proto-cli agents tester on|off`.
-  Architect, Explorer, Coder and Verifier cannot be disabled. Tester, Scout and
-  MCP settings persist user-wide and apply to the next run; a running task keeps
-  its original settings. Use `/agents` to inspect their current ON/OFF states.
-- `/mcp` shows model-free MCP setup/status. `/mcp add NAME FILE.json` imports a
-  stdio, SSE or Streamable HTTP server with explicit allow_tools. `/mcp on|off`
-  toggles the optional model-free broker (default off). `/agents mcp on|off` and
+- `/agents tester on|off` toggles optional test design, off for new configurations.
+  Existing saved preferences are preserved. Coder adds useful focused regressions;
+  Tester is never a mandatory stage. Shell: `proto-cli agents tester on|off`.
+- `/agents verifier on|off` toggles one tool-only verification pass after edits
+  (default on). Off skips check discovery and commands, retaining edits as
+  unverified. On runs captured repository checks once with normal native approval.
+  No baseline, installation question, model inference or automatic repair loop
+  is part of verification. Explicit test requests also need no model inference.
+  Architect, Explorer and Coder cannot be disabled.
+- `/mcp` shows setup/status for the optional model-free broker (default off). `/agents mcp on|off` and
   `proto-cli agents mcp on|off` toggle the same setting. `/mcp test NAME` discovers
   only; `/mcp tools NAME TOOL` reads one schema. Both explicitly connect and never
   invoke a server tool. `/mcp remove NAME` removes configuration. Shell equivalents
@@ -293,18 +300,20 @@ Manual:
   the same run. Verifier/Scout/MCP accept tool calls, not inference; ProtoLink
   validates advertised worker capabilities before dispatch.
   Coder copies short unique old spans literally from read_file.content. Stale
-  revisions, non-unique/missing matches and identical old/new text prepare only read validation feedback;
+  revisions, non-unique/missing matches and identical old/new text raise native preparation rejection;
   the native inference loop can correct them without a file approval. Valid edits
   still require native filesystem.write authorization and exact diff approval.
   Successful exact edits return source_revision for the next edit of known
   source. Native resource.version is a different recovery identity, not the
   expected_revision for edit_file. Reread missing source or a rejected selection.
-  Each native inference has a ten-turn limit separate from the shared run budget.
-  The harness stops Coder before the tenth provider call in each work window.
-  Fresh native writes with current revisions permit up to three windows within
-  the same assignment, scope, history and aggregate budget (at most 27 calls).
-  /trace records worker.continuing; approvals and applied edits are not replayed.
-  PROTOAGENT_CODER_MAX_WINDOWS lowers this bound, clamped to 1-3, default three.
+  Owned-local Coder work uses ProtoLink yield_after_steps=9, RunHandoff and
+  resume_task under private temporary execution checkpoints. Fresh applied
+  writes with current revisions justify bounded continuation; the SDK preserves
+  committed actions, history, corrections and cumulative budgets. /trace records
+  worker.continuing. PROTOAGENT_CODER_MAX_WINDOWS is 1-3, default three slices.
+  Approval/input resumes also start bounded slices; this is not a 27-call cap.
+  PROTOAGENT_CHECKPOINTED_WORKERS=0 selects live fallback limits; explicit
+  transport meshes already use that fallback. No coding restart is supported.
   Without new writes in the current window, earlier edits cannot justify another.
   Exhaustion reports needs_context/worker_turn_limit for progressing partial work;
   a stalled window reports blocked/worker_no_progress, retaining earlier edits.
@@ -314,10 +323,8 @@ Manual:
   plan/edit phase/shared budget. /trace records workflow.work_yielded.
   No-progress handoffs, stale evidence, native failures/denials/uncertainty and
   manual verification stops do not qualify. /trace records workflow.continuing.
-  A completed failing final check yields before another Architect model request.
-  The native Graph alone can open a new edit phase, with at most two repairs;
-  /trace records workflow.repair.requested. Missing dependencies can still be
-  deferred to manual verification through ask_user in that repair attempt.
+  Final verification is software-controlled and never opens a repair/model loop.
+  A follow-up request can address a genuine reported test failure.
   An unresolved handoff prevents completion. Native failures retain their stop behavior and show applied
   paths; inspect /diff, current files and /trace before continuing.
   Check discovery selects pytest for function-style/mixed Python suites and
@@ -336,9 +343,10 @@ Manual:
 - `proto-cli eval harness [--json]` runs four offline native integration samples
   using scripted actions and disposable read-only fixtures, with no live model.
   It measures engine contracts. `eval coding --live` measures coding outcomes.
-- ProtoLink durable execution, RunManager, Docker execution and additional
-  presets are engine capabilities; the current coding Graph has no restart/resume
-  or container integration. Saved reports and file restoration are separate.
+- Native execution checkpoints support bounded local worker continuation only
+  while the Graph/TaskRecord remain alive. The temporary store is removed at exit.
+  Cross-process coding resume, RunManager and Docker execution are not exposed.
+  Saved reports, conversation memory and file restoration are separate.
 - Agent roles: Architect is the stateful controller; Explorer reads/searches
   and builds context as a stateless worker; Tester designs regressions read-only;
   Coder reads bounded source and prepares revision-checked, approval-gated file
@@ -358,34 +366,28 @@ Manual:
   1 MiB, cat shows at most 32768 characters, and each directory list is capped
   at 2000 entries. Binary/non-UTF8 files show an error; previews identify truncation.
   Viewer controls: Up/Down, PgUp/PgDn, Home/End, Left/Right pan, Esc or q back.
-- Task planning exposes available_check_ids and bootstrap_checks. plan_task can
-  omit check_ids or use an empty list for code to retain defaults; invalid selections return corrective feedback
-  and leave the plan unchanged. Python projects with no discovered/configured
-  checks receive a predefined python-tests unittest runner. Coder adds focused
-  root test_*.py regressions; a zero-test run cannot verify changes. A
-  narrowed bootstrap coding scopes must include a root test_*.py file before
-  the plan is accepted. Documentation-only plans can select no checks. Owner
-  project check configuration takes precedence, including an empty checks list.
-  baseline_check_ids lists checks with an available baseline. For a bootstrap
-  runner with no test files, inspect the requested source and create the change
-  and regressions first; do not request an empty baseline command approval.
+- Task planning keeps captured owner checks and file scope; omit check_ids to
+  retain defaults. Invalid IDs receive bounded native correction without changes.
+  No test file is required solely to admit an edit. Without existing or newly
+  added runnable tests, edits remain unverified rather than running an empty suite.
+  Documentation-only edits skip the suite. Owner .protoagent/project.json checks
+  take precedence, including an empty list. Verifier off skips discovery entirely.
   Automatic Python checks prefer the project .venv, then active/runtime Python,
   including the venv whose packages the embedded CLI loads, before bare Python;
   the embedding CLI executable is never used as the Python command.
   worker_packet prepares context for an exact explorer/coder/tester role; the
   Architect must then delegate inference to execute that worker.
   Small-profile owned local runs instead offer direct typed read_file,
-  list_directory, search_regex, coder(task), optional tester(task), and run_check
-  calls. coder(task) actually runs Coder, so no separate packet step is needed.
-  Verifier still owns commands; Coder returns after edits and Architect verifies.
+  list_directory, search_regex, coder(task) and optional tester(task) calls. coder(task) actually runs Coder, so no separate packet step is needed.
+  Verifier owns commands; Coder returns after edits and the harness verifies once.
   These calls use native ProtoLink child supervision, inherited policies,
   approvals and shared budgets. Enabled Scout/MCP operations use the same direct
   surface; disabled agents expose no route. Other profiles/transports retain
   normal native worker delegation. /agents shows the profile's call surface.
   A project with no usable runner can receive approved edits, but remains
   unverified/incomplete. There is no automatic dependency installation.
-  Configure unusual checks in .protoagent/project.json. run_check baseline permits
-  later editing; final verify closes the edit phase. Documentation-only changes
+  Configure unusual checks in .protoagent/project.json. Checks run after editing,
+  never as a model-managed baseline stage. Documentation-only changes
   can complete unverified. eval coding --plan shows disposable same-model deck and
   single-agent exercises; --live runs them on the host with narrow fixture approvals.
 """
@@ -437,7 +439,7 @@ def _settings_context(config: dict[str, Any]) -> str:
     lines.append(
         f"- Optional Scout: {'enabled' if optional_agent_enabled('scout', config) else 'disabled'}"
     )
-    for name in ("tester", "mcp"):
+    for name in ("tester", "verifier", "mcp"):
         lines.append(
             f"- Optional {name}: {'enabled' if optional_agent_enabled(name, config) else 'disabled'}"
         )

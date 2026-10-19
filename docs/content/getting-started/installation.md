@@ -28,8 +28,8 @@ pip install -e core
 ```
 
 The core install includes ProtoLink's HTTP, LLM and MCP extras and compatible
-SDK constraints. Use this install when upgrading too; ProtoLink 0.8.1's
-Anthropic adapter needs `anthropic<1`.
+SDK constraints. ProtoLink 0.8.2 supports Anthropic SDK v1 directly; the core
+no longer adds a separate provider SDK upper bound.
 
 The core imports are resolved from `core/` by the Rust CLI at runtime. The CLI
 also checks common `.venv/lib/python3.x/site-packages` paths so ProtoLink and
@@ -37,17 +37,18 @@ provider extras can be found when the binary starts from either the repo root or
 the `cli/` folder. The editable core install exposes the `protoagent-core`
 package metadata and keeps `protoagent_core.__version__` available to tools.
 
-ProtoLink 0.8.1 is required for native action correction, automatic capability
+ProtoLink 0.8.2 is required for native action correction, automatic capability
 selection and no-change rejection, alongside owned local subagents,
 context policies/hooks, evaluation, live streaming and delegated receipts,
 persistence redaction, checkpoint inventory, process/filesystem tools, managed agent
 groups, approval brokers, normalized run handles and completion checks.
-If a package index does not yet contain 0.8.1, ProtoLink must be published there
-before ProtoAgent 0.3.0 can be installed from that index.
+If a package index does not yet contain 0.8.2, ProtoLink must be published there
+before ProtoAgent 0.3.1 can be installed from that index.
 
 ## Build The CLI
 
 ```bash
+export PYO3_PYTHON="$PWD/.venv/bin/python"
 cargo build --locked --manifest-path cli/Cargo.toml
 ```
 
@@ -114,3 +115,8 @@ export PROTOAGENT_CONFIG_DIR=/tmp/protoagent-demo
 
 This redirects provider config, project config, session summaries, Context Loom
 indexes, ProtoLink conversation storage, and trace output.
+
+The CLI embeds Python through PyO3. Build it with the same interpreter that owns
+the core dependencies (`PYO3_PYTHON="$PWD/.venv/bin/python"` from the repo root).
+The CLI loads only matching-version virtualenv packages; mixing extension modules
+from another Python ABI is unsupported.

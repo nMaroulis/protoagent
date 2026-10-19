@@ -171,7 +171,7 @@ build_context_pack(query: str)
 This lets Architect ask Explorer for a fresh focused evidence pack during a run,
 not only during initial prompt preparation.
 
-## Request admission and direct source (v0.3.0)
+## Request admission and direct source (v0.3.1)
 
 Context Loom supplies initial orientation. Workers now use bounded line-range
 reads with full-file revisions for actual edits. Coder can reread missing source

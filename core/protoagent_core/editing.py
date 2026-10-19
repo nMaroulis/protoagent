@@ -9,22 +9,11 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from protolink import Artifact, Part, RunAction, ToolRejectedError
+from protolink import Artifact, Part, ToolRejectedError
 from protolink.core.resources import ResourceSnapshot
 from protolink.tools.prepared import PreparedTool
 
 from .tools import safe_path
-
-
-def _source_feedback(name, arguments, error):
-    """Prepare no-change feedback; the native loop owns correction and dispatch."""
-    return RunAction(
-        kind="tool.validation",
-        name=name,
-        payload={"arguments": arguments, "source_rejection": error.to_dict()},
-        capabilities=frozenset({"workspace.read"}),
-        description="Report invalid source; no write was prepared.",
-    )
 
 
 def _python_syntax_rejection(action):
@@ -33,8 +22,6 @@ def _python_syntax_rejection(action):
     Existing malformed sources can still be repaired incrementally. This does
     not diagnose names, packages, types or behavior; those need real checks.
     """
-    if action.kind == "tool.validation":
-        return None
     args = action.payload["arguments"]
     path = Path(args["path"])
     if path.suffix.lower() != ".py":
@@ -100,6 +87,16 @@ def process_tool_with_identity(native, workspace=None):
         raise AssertionError("Signature only")
 
     def prepare(arguments, context):
+        try:
+            return prepare_command(arguments, context)
+        except (ValueError, OSError) as error:
+            raise ToolRejectedError(
+                str(error),
+                code="invalid_command_preparation",
+                suggestion="Use an existing project-relative cwd, an installed executable (or explicit env.PATH), timeout_seconds <= 600 and max_output_bytes <= 32768. No command was executed.",
+            ) from error
+
+    def prepare_command(arguments, context):
         args = dict(arguments)
         directory = Path(args.get("cwd", "."))
         args["cwd"] = str(directory if directory.is_absolute() else root / directory)
@@ -161,14 +158,7 @@ def edit_tool(native_replace, workspace):
 
     def prepare(arguments, context):
         def reject(message, code, details, suggestion):
-            # ProtoLink 0.8.1 corrects ToolRejectedError from execution, but
-            # preparation errors terminate inference. Prepare only read-only
-            # feedback here; the native loop owns its correction allowance.
-            return _source_feedback(
-                "edit_file",
-                arguments,
-                ToolRejectedError(message, code=code, details=details, suggestion=suggestion),
-            )
+            raise ToolRejectedError(message, code=code, details=details, suggestion=suggestion)
 
         target = safe_path(arguments["path"], workspace)
         data = target.read_bytes()
@@ -199,15 +189,13 @@ def edit_tool(native_replace, workspace):
             {"path": str(target), "content": content.replace(old, arguments["new"], 1)}, context
         )
         if error := _python_syntax_rejection(action):
-            return _source_feedback("edit_file", arguments, error)
+            raise error
         action.metadata["editing_tool"] = "edit_file"
         return action
 
     async def execute(execution):
         execution.check()
         action = execution.authorization.action
-        if action.kind == "tool.validation":
-            raise ToolRejectedError.from_dict(action.payload["source_rejection"])
         result = await native_replace.execute_authorized(execution)
         if isinstance(result, dict) and result.get("state") == "applied":
             # Native resource.version includes filesystem identity. Exact edits
@@ -251,14 +239,11 @@ def workspace_file_tool(native, workspace):
             path = root / path
         action = native.action_builder({**arguments, "path": str(path)}, context)
         if error := _python_syntax_rejection(action):
-            return _source_feedback(native.name, arguments, error)
+            raise error
         return action
 
     async def execute(execution):
         execution.check()
-        action = execution.authorization.action
-        if action.kind == "tool.validation":
-            raise ToolRejectedError.from_dict(action.payload["source_rejection"])
         return await native.execute_authorized(execution)
 
     tool = PreparedTool(
@@ -266,9 +251,8 @@ def workspace_file_tool(native, workspace):
         name=native.name,
         prepare=prepare,
         execute=execute,
-        # Preparation can yield read-only rejection feedback. Valid requests
-        # carry the native filesystem.write capability on the prepared action,
-        # so changing this declaration cannot bypass write authorization.
+        # Preparation rejection is handled by ProtoLink before approval or
+        # tool-call accounting. Valid actions retain native write authority.
         capabilities=("workspace.read",),
     )
     tool.description = "Use a project-relative or absolute path. " + native.description

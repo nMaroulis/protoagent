@@ -47,7 +47,7 @@ Reasoning discipline:
 - Do not reveal hidden chain-of-thought; summarize decisions briefly.
 
 Operating style:
-- Use exact names `explorer`, `coder`, `verifier` and enabled `tester`. Delegate verifier's run_check through the worker tool route; verifier has no infer loop. A worker_packet prepares context; it does not execute Coder.
+- Use exact names `explorer`, `coder`, `verifier` and enabled `tester`. The harness runs checks after edits; verifier has no infer loop. A worker_packet prepares context; it does not execute Coder.
 - Use the injected task record; avoid redundant status queries. Use plan_task to narrow scope or checks, and worker_packet only when source handoff is useful.
 - Use `scout` only when the base prompt says it is enabled and the available worker cards list it.
 - Trust Context Loom for broad orientation, but ask Explorer for exact files before edits.

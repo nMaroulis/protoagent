@@ -4,7 +4,7 @@ description: How ProtoAgent uses native execution, action correction, capability
 ---
 
 ProtoLink is ProtoAgent's execution engine. The core requires
-`protolink[http,llms,mcp]>=0.8.1`; CLI, core and documentation remain at **0.3.0**.
+`protolink[http,llms,mcp]>=0.8.2`; CLI, core and documentation remain at **0.3.1**.
 The coding harness defines task state, evidence, editing scope and acceptance.
 The engine owns action dispatch, authorization, child execution, budgets,
 cancellation, observations and execution receipts.
@@ -18,7 +18,8 @@ cancellation, observations and execution receipts.
 | Shared root budgets and inherited policies | Children consume the Graph's shared budget and must satisfy both the Architect's capability ceiling and their own role policy. |
 | `ContextPolicy` | Reserve output space, prune complete old turns, clear older observations and offload large tool results to scoped artifacts. |
 | `AgentHooks.before_model` | Refresh the application TaskRecord, compact small-profile declarations, filter redundant worker tools, prepare delegated observations and account for native schemas. Provider acquisition methods are not wrapped. |
-| `PreparedTool` and native owned child supervision | Fixed typed worker calls for small local runs; preparation binds a worker operation and the native supervisor executes it under the original child's policies and receipts. No custom dispatcher, parser or retries. |
+| `Agent.add_worker_tool` | Narrow typed worker declarations for small local runs. ProtoLink resolves each alias to its original owned child with inherited policy, budgets and receipts; no application dispatcher or preflight wrapper. |
+| `yield_after_steps`, `RunHandoff`, `resume_task` | Local Coder work slices use temporary native execution checkpoints. Application policy grants progressing slices; the SDK preserves history, committed actions, correction allowances and cumulative budgets. |
 | Shared action parser and native normalization | Correct recognizable malformed requests inside the current run in JSON/native modes; preserve completed observations and legitimate explicit final data. |
 | `tool_calling`, `resolve_tool_calling()`, `refresh_capabilities()` | Ollama defaults to engine-owned automatic discovery; authenticated exact-tag metadata, five-minute cache, JSON for unknown support and explicit mode overrides. |
 | `ToolRejectedError`, `max_tool_corrections` | Invalid plans, exact-edit preconditions and check selection return explicit no-change feedback. Native correction is bounded, retains receipts and emits distinct rejection events/artifacts. |
@@ -27,12 +28,12 @@ cancellation, observations and execution receipts.
 | `RoutedLLM` | Optional, explicit same-provider `fallback_models`; no extra model orchestrates selection. Each candidate request consumes the shared budget. |
 | `ask_user_tool`, `UserInputRequest` | Architect-only live clarification; the CLI/TUI returns an answer through a correlated callback and the native loop continues. |
 | `evaluate()` | `proto-cli eval harness` runs repeatable offline source-read/task-state cases with fresh factories and linked child receipt checks. |
-| `AgentGroup`, `RunHandle`, `Graph` | Owned lifecycle, normalized results/events, cancellation and bounded edit/check/repair execution. |
+| `AgentGroup`, `RunHandle`, `Graph` | Owned lifecycle, normalized results/events, cancellation and bounded editing followed by one software-scheduled check pass. |
 | `ApprovalBroker`, `filesystem_tools`, `process_tool` | Exact native approvals, prepared file changes/recovery and bounded approved host commands. |
 | Native MCP adapter | Optional lazy broker discovery and allowlisted calls, with managed sessions and approvals. |
 
 Local delegation retains the same action protocol and agent names. Optional
-Tester/Scout/MCP controls still remove disabled workers from construction and the
+Tester/Verifier/Scout/MCP controls still remove disabled workers from construction and the
 roster. Verifier, Scout and MCP remain model-free. Serial delegation avoids
 concurrent model requests competing for one local runner and gives the edit/check
 phase one clear owner. The numerical child limit is configurable through
@@ -63,23 +64,41 @@ local and delegated request errors. Configure `providers.PROVIDER.max_tool_corre
 to change it. Successful actions do not reset it, and correction consumes the
 existing model-call/output/runtime budgets. Parse errors have the engine's
 separate parse circuit breaker. Neither path restarts the coding Graph.
-Native durable rejection handling remains an upstream capability; it does not
-enable restart/resume for this application's Graph.
+Preparation-stage `ToolRejectedError` now enters this same native correction
+loop before approval or execution and consumes no tool call. Source validation
+no longer fabricates an executable read-validation action. Ordinary exceptions
+remain failures; only explicit no-change rejections are correctable.
 
 ## Live child observations
 
-ProtoLink 0.8.1 records local child output in the parent's native Task before
-joining the child. Some events reach the outer stream at join. ProtoAgent's
-presentation adapter reads those already-recorded delegated events in bounded
-batches, deduplicates event IDs against `RunHandle.events()`, and forwards live
-model/process text. This adapter neither dispatches actions nor supplies
-completion evidence of its own. Native reports remain authoritative.
+ProtoLink forwards owned child events immediately through `RunHandle.events()`,
+including nested children. The frontend consumes that public stream and deduplicates
+presentation by native event ID. It no longer polls Task metadata or maintains a
+second child-event reader. Native reports remain authoritative.
+
+## Live checkpointed worker execution
+
+Local coding runs configure `yield_after_steps=9` on Coder and a private temporary
+`SQLiteDurableStore` on its Architect owner. At a native yield, the controller
+checks fresh applied writes, current revisions, worker reports and stop conditions
+before granting `resume_task(root_run_id)`. It admits up to three slices per child
+assignment; `PROTOAGENT_CODER_MAX_WINDOWS` can lower that allowance. SDK approval
+and question interruptions use the existing scoped broker and question UI before
+an exact resume response. No approval or input is inferred from an interruption.
+All model/tool work remains charged to the shared hard budget. Checkpointed
+approval/input resumes can also start a new bounded slice; the setting is not a
+fixed total model-call count. Already committed edits and approvals are not replayed.
+
+The Graph and TaskRecord remain live application state. These execution stores
+are private, temporary and removed at workflow exit; a saved conversation or run
+report cannot restart the coding workflow. Explicit transport meshes retain live
+bounded workers; `PROTOAGENT_CHECKPOINTED_WORKERS=0` selects that fallback locally.
 
 ## Deliberate integration boundaries
 
 | Engine capability | Current application boundary |
 | --- | --- |
-| Durable execution, `SQLiteDurableStore`, `RunManager` | Not enabled for the coding workflow. ProtoLink recovery covers its default engine and blocking local children; the application Graph also carries edit/check phase state and custom orchestration. A durable tool around that Graph would not make those effects safely resumable. |
+| Cross-process durable execution and `RunManager` | Native execution checkpoints support live local worker slices. Restoring the whole coding Graph after exit remains unsupported because its TaskRecord, frozen check plan and phase state are not persisted for reconstruction. |
 | Background children and model supervision tools | Disabled. Small models keep one action at a time; background orchestration adds handles, waits and unresolved jobs to their decisions. |
 | Per-step model routing | The application uses an explicit fallback list, with no reasoning-based escalation or cross-provider migration. |
 | Docker execution backend | Not wired to the coding checks. Host argv/cwd/env and absolute interpreter paths need an explicit container check contract before they can be mapped safely. |
@@ -89,9 +108,17 @@ Saved conversation memory, diagnostic reports and file restoration are distinct
 from durable execution continuation. `session resume` reopens a UI session;
 `undo` restores a native file checkpoint. Neither resumes an interrupted coding
 run. Unknown external outcomes are inspected, never automatically replayed.
-Live questions do not require engine durability: the native tool awaits the UI
-callback inside the current task. Its checkpointed restart mode remains separate
-from this application's live integration.
+Local checkpointed questions continue through the SDK resume API; live fallback
+runs use the SDK callback. Both preserve exact question correlation and return
+answers without expanding execution authority.
+
+## Provider SDKs and model input
+
+ProtoLink owns Anthropic v1 compatibility, response failure propagation, native
+call-count validation and tokenizer control-string handling. The application
+adds no provider SDK upper bound. Configured Gemini, OpenAI and Anthropic API
+URLs are forwarded to the selected native adapter. Telemetry integrations remain
+optional; SDK support for Langfuse 4/5 or LangSmith does not enable them by default.
 
 ## Validation
 
@@ -105,7 +132,7 @@ cargo test --locked --manifest-path cli/Cargo.toml
 Offline checks exercise native approvals, local/transport delegation, independent
 child conversations, inherited denial, shared budgets, child limits, cancellation
 of an owned process, live output, large-result retrieval, receipt preservation,
-request overflow, transient model fallback, bounded repairs, question continuation,
+request overflow, transient model fallback, single-pass verification, question continuation,
 skip, timeout, cancellation, stale-answer rejection and the separation between
 feedback and execution approval. Scripted actions
 verify integration contracts; they do not measure small-model reasoning quality.

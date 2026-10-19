@@ -4,7 +4,7 @@ Proto-CLI is the Rust terminal frontend for ProtoAgent. It renders the
 fullscreen TUI, project and model controls, approvals, cancellation, traces,
 and session state while embedding the Python core through PyO3.
 
-Current CLI version: `0.3.0`, sourced from `cli/Cargo.toml`.
+Current CLI version: `0.3.1`, sourced from `cli/Cargo.toml`.
 
 Use `/approvals` to choose project approvals in the TUI. Direct commands are
 `/approvals ask` (default), `/approvals edits` (automatic file edits, ask for
@@ -145,13 +145,23 @@ changes use ProtoLink's revision-aware restoration.
 
 ## Agent Controls
 
-Architect, Explorer, Coder and the tool-only Verifier are required. Tester is an
-optional test-design worker and defaults on. Scout web research and the tool-only
-MCP broker default off. `/agents` shows all three optional workers and their
-toggle commands.
+Architect, Explorer and Coder are required. Verifier is an optional tool-only
+post-edit check worker, enabled by default. Tester is opt-in test-design assistance. Scout web research and the tool-only
+MCP broker default off. `/agents` shows a compact colored roster: cyan **CORE**
+for required roles, green **ON** for enabled optional workers, and muted **OFF**
+for disabled ones. Each row explains its job and whether it uses an LLM or tools
+only. These are availability settings; workers run only when a request needs them.
+The pinned header keeps all seven workers visible, even in a narrow terminal.
+Guide is available on demand through `/help QUESTION`.
+
+Use `/agents NAME` (for example `/agents verifier`) to inspect a worker's role,
+state, memory, contract, tool catalog and exact toggle command. The catalog
+shows available capabilities; each request may expose fewer tools.
+`/agents architecture` keeps the full runtime and tool-isolation details available.
 
 ```bash
 proto-cli agents
+proto-cli agents verifier
 proto-cli agents profile small
 proto-cli agents tester off
 proto-cli agents scout on
@@ -170,7 +180,7 @@ The same controls are available in the TUI:
 
 Use `on` or `off` for any optional worker. Settings persist user-wide and apply
 to the next run; they do not change a running task. Turning Tester off removes
-its inference while required verification remains enforced. `/mcp` sets up the
+its test-design inference; Verifier has its own independent toggle. `/mcp` sets up the
 broker's servers. Guide knows these controls: `/help how do I disable Tester?`
 returns instructions and current settings without changing them.
 
@@ -193,10 +203,13 @@ reports its preference. `/diff` shows the last run's combined applied changes;
 | `/config` | Show redacted configuration. |
 | `/check` | Refresh Python, ProtoLink, web-tool, transport, auth, and provider readiness. |
 | `/version` | Show CLI, core, and planned ACP versions. |
-| `/agents` | Show required roles, prompt profile, and optional Tester/Scout/MCP states. |
+| `/agents` | Colored roster with roles, CORE/ON/OFF availability, execution type and prompt profile. |
+| `/agents NAME` | Inspect an agent, its tool catalog, and its optional toggle. |
+| `/agents architecture` | Detailed runtime architecture and tool isolation. |
 | `/agents profile [auto\|small\|medium\|large\|api]` | Show or set the prompt profile. |
 | `/agents scout [on\|off]` | Enable or disable Scout for subsequent runs. |
-| `/agents tester [on\|off]` | Enable or disable test-design inference; required checks remain enforced. |
+| `/agents tester [on\|off]` | Inspect or toggle optional test-design inference. |
+| `/agents verifier [on\|off]` | Inspect or toggle the tool-only post-edit check pass. |
 | `/agents mcp [on\|off]` | Enable or disable the external-tool broker; use `/mcp` to set up servers. |
 | `/context [QUERY]` | Show Context Loom status or build a source-cited Context Pack. |
 | `/context on`, `/context off` | Enable or disable persistent project conversation memory. |
@@ -265,12 +278,12 @@ The Python orchestration logic is documented in the
 [core README](../core/README.md). The full command and TUI manual is in the
 [documentation site](https://nmaroulis.github.io/protoagent/docs/cli/overview).
 
-## v0.3.0 task workflow and coding evals
+## v0.3.1 task workflow and coding evals
 
 The deck adds a read-only Tester, runtime task state, bounded Coder reads and exact
-edits. `run_check` selects a frozen project check by ID; baselines and preparation
-allow subsequent editing, while final verification closes the edit phase. Code
-changes without qualifying final checks remain incomplete. Configure unusual
+edits. The harness selects captured checks and runs one pass after editing,
+without baseline or automatic repair stages. Verifier can be disabled with
+`/agents verifier off`; skipped or unavailable checks leave edits unverified. Configure unusual
 checks in `.protoagent/project.json`; see the
 [task workflow guide](../docs/content/core/task-workflow.md).
 
@@ -285,20 +298,21 @@ independent acceptance tests. Generated code executes on the host without sandbo
 isolation. Routing diagnostics remain available through `eval profiles`.
 
 
-## Optional workers and MCP in v0.3.0
+## Optional workers and MCP in v0.3.1
 
-Tester defaults on, while Scout/MCP default off. `proto-cli agents tester|scout|mcp
+Verifier defaults on; Tester, Scout and MCP default off for new configurations. `proto-cli agents tester|verifier|scout|mcp
 on|off` and the matching `/agents` commands persist optional-worker settings for
 the next run. Disabled workers are not constructed or registered. Architect,
-Explorer, Coder and Verifier remain required; without Tester, Architect defines
-criteria and Coder writes regressions while all selected checks still run.
+Explorer and Coder remain required. `/agents verifier off` skips checks and labels
+edits unverified; `/agents verifier on` restores one check pass after edits.
+Tester is optional assistance for useful regressions, not a required stage.
 
 `proto-cli mcp` (TUI `/mcp`) shows model-free setup/status. Import an explicit
 server contract with `mcp add NAME FILE.json`, inspect with `mcp test NAME` or
 `mcp tools NAME TOOL`, and enable with `mcp on`. Probes only discover; they do
 not invoke server tools. The broker exposes three fixed tools for names, one
 schema and an approved allowlisted invocation. Architect uses `tool_call`,
-never another inference loop. ProtoLink 0.8.1 owns transports, schema validation,
+never another inference loop. ProtoLink 0.8.2 owns transports, schema validation,
 session cleanup and result/error normalization. See the
 [MCP guide](../docs/content/core/mcp.md) for local/remote setup and boundaries.
 

@@ -35,7 +35,7 @@ The pinned panel is a compact status dashboard at the top of the screen.
 | Dashboard | Project, model inventory summary, agent roles, last query, UI mode. |
 | Project | Active project, state, `/project` commands, file-tagging hint, project config path. |
 | Models | Active provider/model, inventory status, provider chips, setup commands, config path. |
-| Agents | Required roles, Tester/Scout/MCP ON/OFF states, their toggle commands, and prompt profile. |
+| Agents | Required roles, Tester/Verifier/Scout/MCP ON/OFF states, their toggle commands, and prompt profile. |
 | Context | Context Loom, context window, memory commands, pack preview, index refresh. |
 | Sessions | Current session, store path, recent sessions. |
 | Timeline | Latest structured agent path. |
@@ -50,13 +50,24 @@ The command bar exposes quick panel commands:
 /dashboard /project /models /agents /context /sessions /timeline /check /config /version /help
 ```
 
-The Agents panel reads the same Python manifest used by the shell command. All
-three optional workers have a visible ON/OFF row and a command to toggle their
-current setting. Open it with `/agents`.
+Open `/agents` for a colored roster with a short job description, execution
+kind (LLM or tool-only), current prompt profile, and availability for every worker:
+cyan **CORE** means required, green **ON** means enabled, and muted **OFF** means
+disabled. Enabled workers run only when needed; these badges do not mean they
+are currently executing. Live activity continues to appear in the loading line.
+
+The pinned header uses a compact two-column grid so all seven workers remain
+visible when resizing. `/agents NAME`, such as `/agents verifier`, opens details
+from the Python manifest: role, state, memory, contract, tool catalog and the
+exact toggle command. Tool catalogs describe available capabilities; a request
+may expose fewer tools. `/agents architecture` shows the full runtime details.
+Guide is separate and runs on demand through `/help QUESTION`. These controls
+work without a running model.
 
 | Worker | Default | Control |
 | --- | --- | --- |
-| Tester | On | `/agents tester on` or `/agents tester off` |
+| Tester | Off | `/agents tester on` or `/agents tester off` |
+| Verifier | On | `/agents verifier on` or `/agents verifier off` |
 | Scout | Off | `/agents scout on` or `/agents scout off` |
 | MCP broker | Off | `/agents mcp on` or `/agents mcp off`; `/mcp` configures servers. |
 
@@ -69,8 +80,9 @@ For example:
 ```
 
 Settings persist user-wide and apply to the next run. Architect, Explorer,
-Coder and Verifier are required and cannot be disabled. Turning Tester off
-removes test-design inference; repository checks remain required. Shell commands
+Coder remain required. Verifier is enabled by default for one post-edit check
+pass; `/agents verifier off` skips discovery and commands and marks edits
+unverified. Tester is opt-in design assistance for new configurations. Shell commands
 use the same arguments after `proto-cli agents`, such as
 `proto-cli agents tester off`.
 
@@ -261,7 +273,7 @@ even when no final agent report was returned.
 an active project. Guide receives a bundled command reference and a redacted
 settings snapshot on each call. For example, `/help what does config do?`
 can explain `/config`, `proto-cli config` and the commands for changing settings.
-Guide's manual includes all three optional-worker toggles, their defaults and
+Guide's manual includes all four optional-worker toggles, their defaults and
 required roles. Its per-call snapshot includes current Tester, Scout and MCP
 settings; `/help how do I disable Tester?` explains the control without changing it.
 

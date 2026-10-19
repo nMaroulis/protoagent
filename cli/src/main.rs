@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{env, fs};
 
+mod agent_display;
 mod diff;
 mod inline_style;
 mod progress;
@@ -291,7 +292,7 @@ impl AgentSettings {
         self.agent(name)
             .map(|agent| agent.enabled)
             .unwrap_or_else(|| match name {
-                "tester" => true,
+                "verifier" => true,
                 "scout" => self.scout_enabled,
                 _ => false,
             })
@@ -1703,6 +1704,8 @@ fn show_check() -> Result<()> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AgentsCommand {
     Status,
+    Inspect(String),
+    Architecture,
     Profile(Option<String>),
     Scout(Option<bool>),
     Optional(String, Option<bool>),
@@ -1711,6 +1714,8 @@ enum AgentsCommand {
 fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, String> {
     match args {
         [] | ["status"] => Ok(AgentsCommand::Status),
+        ["architecture" | "graph"] => Ok(AgentsCommand::Architecture),
+        [name] if matches!(*name, "architect" | "explorer" | "coder") => Ok(AgentsCommand::Inspect((*name).to_string())),
         [command] if matches!(*command, "profile" | "prompt" | "mode" | "reasoning") => {
             Ok(AgentsCommand::Profile(None))
         }
@@ -1726,13 +1731,13 @@ fn parse_agents_command(args: &[&str]) -> std::result::Result<AgentsCommand, Str
         }
         ["enable", "scout"] => Ok(AgentsCommand::Scout(Some(true))),
         ["disable", "scout"] => Ok(AgentsCommand::Scout(Some(false))),
-        [name] if matches!(*name, "tester" | "mcp") => Ok(AgentsCommand::Optional((*name).to_string(), None)),
-        [name, value] if matches!(*name, "tester" | "mcp") => parse_scout_toggle(value)
+        [name] if matches!(*name, "tester" | "verifier" | "mcp") => Ok(AgentsCommand::Optional((*name).to_string(), None)),
+        [name, value] if matches!(*name, "tester" | "verifier" | "mcp") => parse_scout_toggle(value)
             .map(|enabled| AgentsCommand::Optional((*name).to_string(), Some(enabled))),
-        [command, name] if matches!(*command, "enable" | "disable") && matches!(*name, "tester" | "mcp") =>
+        [command, name] if matches!(*command, "enable" | "disable") && matches!(*name, "tester" | "verifier" | "mcp") =>
             Ok(AgentsCommand::Optional((*name).to_string(), Some(*command == "enable"))),
         _ => Err(
-            "Usage: agents [status | profile [auto|small|medium|large|api] | tester|scout|mcp [on|off]]. Architect, Explorer, Coder and Verifier are required."
+            "Usage: agents [NAME | architecture | profile [auto|small|medium|large|api] | tester|verifier|scout|mcp [on|off]]. Architect, Explorer and Coder are required."
                 .to_string(),
         ),
     }
@@ -1755,6 +1760,29 @@ fn handle_agents_command(args: &[String]) -> Result<()> {
         )
     })? {
         AgentsCommand::Status => show_agents(),
+        AgentsCommand::Inspect(name) => {
+            print_agent_view(load_agent_settings()?, Some(name));
+            Ok(())
+        }
+        AgentsCommand::Architecture => {
+            let settings = load_agent_settings()?;
+            print_agent_graph(&settings);
+            print_panel(
+                "RUNTIME ARCHITECTURE",
+                &format_architecture_manifest(&settings.architecture),
+                PanelTone::Magenta,
+            );
+            print_panel(
+                "TOOL ISOLATION",
+                &settings
+                    .agents
+                    .iter()
+                    .map(format_agent_manifest)
+                    .collect::<Vec<_>>(),
+                PanelTone::Cyan,
+            );
+            Ok(())
+        }
         AgentsCommand::Profile(value) => {
             let text = agent_profile_text(value)?;
             print_panel(
@@ -1766,16 +1794,12 @@ fn handle_agents_command(args: &[String]) -> Result<()> {
         }
         AgentsCommand::Scout(enabled) => {
             let settings = scout_settings(enabled)?;
-            print_panel("SCOUT", &format_scout_settings(&settings), PanelTone::Cyan);
+            print_agent_view(settings, Some("scout".into()));
             Ok(())
         }
         AgentsCommand::Optional(name, enabled) => {
             let settings = optional_agent_settings(&name, enabled)?;
-            print_panel(
-                &name.to_uppercase(),
-                &format_optional_agent_settings(&settings, &name),
-                PanelTone::Cyan,
-            );
+            print_agent_view(settings, Some(name));
             Ok(())
         }
     }
@@ -1790,31 +1814,32 @@ fn readiness(ready: bool) -> &'static str {
 }
 
 fn show_agents() -> Result<()> {
-    let settings = load_agent_settings()?;
-    print_agent_graph(&settings);
-    print_panel(
-        "RUNTIME ARCHITECTURE",
-        &format_architecture_manifest(&settings.architecture),
-        PanelTone::Magenta,
-    );
-    print_panel(
-        "PROMPT PROFILE",
-        &[format_prompt_profile(&settings.prompt_profile)],
-        PanelTone::Magenta,
-    );
-    print_panel(
-        "OPTIONAL WORKERS",
-        &[
-            format_optional_agent_settings(&settings, "tester"),
-            format_scout_settings(&settings),
-            format_optional_agent_settings(&settings, "mcp"),
-        ]
-        .concat(),
-        PanelTone::Magenta,
-    );
-    let rows: Vec<String> = settings.agents.iter().map(format_agent_manifest).collect();
-    print_panel("TOOL ISOLATION", &rows, PanelTone::Cyan);
+    print_agent_view(load_agent_settings()?, None);
     Ok(())
+}
+
+fn print_agent_view(settings: AgentSettings, focus: Option<String>) {
+    println!();
+    let width = (Term::stdout().size().1 as usize)
+        .min(118)
+        .saturating_sub(4)
+        .max(1);
+    for row in agent_display::View::new(settings, focus).rows(width) {
+        print!("  ");
+        for part in row {
+            let styled = match part.tone {
+                summary::Tone::Plain => style(part.text),
+                summary::Tone::Title => style(part.text).cyan(),
+                summary::Tone::Added => style(part.text).green(),
+                summary::Tone::Removed => style(part.text).red(),
+                summary::Tone::Muted => style(part.text).dim(),
+                summary::Tone::Warning => style(part.text).yellow(),
+            };
+            print!("{}", if part.bold { styled.bold() } else { styled });
+        }
+        println!();
+    }
+    println!();
 }
 
 fn format_agent_manifest(agent: &AgentManifest) -> String {
@@ -1872,29 +1897,6 @@ fn optional_agent_settings(name: &str, enabled: Option<bool>) -> Result<AgentSet
     }
 }
 
-fn format_optional_agent_settings(settings: &AgentSettings, name: &str) -> Vec<String> {
-    let agent = settings.agent(name);
-    vec![
-        format!(
-            "{name}: {}",
-            if settings.is_enabled(name) {
-                "on"
-            } else {
-                "off"
-            }
-        ),
-        format!(
-            "Role: {}",
-            agent.map(|a| a.role.as_str()).unwrap_or("optional worker")
-        ),
-        format!(
-            "Contract: {}",
-            agent.map(|a| a.contract.as_str()).unwrap_or("")
-        ),
-        format!("Next run: /agents {name} on|off | proto-cli agents {name} on|off"),
-    ]
-}
-
 fn mcp_settings_text(args: &[String]) -> Result<String> {
     let raw = call_mcp_configuration(serde_json::to_string(args)?, false)
         .map_err(|err| anyhow!("Python MCP setup error: {err}"))?;
@@ -1909,30 +1911,6 @@ fn mcp_settings_text_input(text: &str) -> Result<String> {
     Ok(serde_json::to_string_pretty(
         &serde_json::from_str::<Value>(&raw)?,
     )?)
-}
-
-fn format_scout_settings(settings: &AgentSettings) -> Vec<String> {
-    let enabled = settings.is_scout_enabled();
-    let scout = settings.agent("scout");
-    let role = scout
-        .map(|agent| empty_as_unknown(&agent.role))
-        .unwrap_or("optional stateless network worker");
-    let tools = scout
-        .map(|agent| {
-            if agent.tools.is_empty() {
-                "web_search, fetch_url".to_string()
-            } else {
-                agent.tools.join(", ")
-            }
-        })
-        .unwrap_or_else(|| "web_search, fetch_url".to_string());
-    vec![
-        format!("Status   : {}", if enabled { "on" } else { "off" }),
-        format!("Role     : {role}"),
-        format!("Tools    : {tools}"),
-        "Timing   : Changes apply to the next run.".to_string(),
-        "Commands : /agents scout on|off | proto-cli agents scout on|off".to_string(),
-    ]
 }
 
 fn format_architecture_manifest(architecture: &ArchitectureManifest) -> Vec<String> {
@@ -2077,7 +2055,19 @@ mod agent_command_tests {
             parse_agents_command(&["mcp"]).unwrap(),
             AgentsCommand::Optional("mcp".to_string(), None)
         );
-        for name in ["architect", "explorer", "coder", "verifier"] {
+        assert_eq!(
+            parse_agents_command(&["verifier", "off"]).unwrap(),
+            AgentsCommand::Optional("verifier".to_string(), Some(false))
+        );
+        assert_eq!(
+            parse_agents_command(&["architecture"]).unwrap(),
+            AgentsCommand::Architecture
+        );
+        for name in ["architect", "explorer", "coder"] {
+            assert_eq!(
+                parse_agents_command(&[name]).unwrap(),
+                AgentsCommand::Inspect(name.to_string())
+            );
             assert!(parse_agents_command(&[name, "off"]).is_err());
         }
     }
@@ -2824,7 +2814,14 @@ fn print_agent_graph(settings: &AgentSettings) {
         "   |".to_string(),
         "   +--> [CODER] stateless write worker: approved edits, checkpoints, undo".to_string(),
         "   |".to_string(),
-        "   +--> [VERIFIER] tool-only worker: approved test/build/lint commands".to_string(),
+        format!(
+            "   +--> [VERIFIER] {}: one check pass after edits, no model",
+            if settings.is_enabled("verifier") {
+                "on"
+            } else {
+                "off"
+            }
+        ),
         "   |".to_string(),
         "   v".to_string(),
         "[PROTOLINK POLICY] approval gate, events, report".to_string(),
@@ -3583,7 +3580,11 @@ fn prepare_python_path(py: Python<'_>) -> PyResult<()> {
     let sys = py.import("sys")?;
     sys.setattr("dont_write_bytecode", true)?;
     let path = sys.getattr("path")?;
-    for candidate in python_path_candidates() {
+    let version = sys.getattr("version_info")?;
+    for candidate in python_path_candidates(
+        version.get_item(0)?.extract()?,
+        version.get_item(1)?.extract()?,
+    ) {
         if candidate.exists() {
             path.call_method1("insert", (0, candidate.to_string_lossy().to_string()))?;
         }
@@ -3659,14 +3660,12 @@ mod embedded_python_tests {
     }
 }
 
-fn python_path_candidates() -> Vec<PathBuf> {
+fn python_path_candidates(major: u8, minor: u8) -> Vec<PathBuf> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let repo = repo_root_from(&cwd).unwrap_or(cwd.clone());
     vec![
         repo.join("core"),
-        repo.join(".venv/lib/python3.14/site-packages"),
-        repo.join(".venv/lib/python3.13/site-packages"),
-        repo.join(".venv/lib/python3.12/site-packages"),
+        repo.join(format!(".venv/lib/python{major}.{minor}/site-packages")),
         cwd.join("python"),
     ]
 }

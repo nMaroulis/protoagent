@@ -42,7 +42,23 @@
     ],
     [
       "/agents",
-      "Required roles, prompt profile and optional Tester/Scout/MCP states. Toggle an optional worker with /agents NAME on|off; settings apply to the next run."
+      "Colored agent roster with CORE/ON/OFF availability, roles, LLM versus tool-only workers, and prompt profile. Enabled means available for matching requests, not currently running."
+    ],
+    [
+      "/agents architect",
+      "Inspect Architect: role, state, memory, contract and tool catalog. Explorer and Coder support the same detail view."
+    ],
+    [
+      "/agents explorer",
+      "Inspect Explorer: read-only role, state, memory, contract and tool catalog."
+    ],
+    [
+      "/agents coder",
+      "Inspect Coder: editing role, state, memory, contract and tool catalog."
+    ],
+    [
+      "/agents architecture",
+      "Show the detailed runtime architecture and full tool catalog."
     ],
     [
       "/agents profile",
@@ -242,15 +258,15 @@
     ],
     [
       "/agents tester",
-      "Show optional test design (default on); required checks stay enforced."
+      "Show optional test design (default off); enabled checks run once after edits."
     ],
     [
       "/agents tester on",
-      "Enable test design (default on); required checks stay enforced."
+      "Enable test design (default off); enabled checks run once after edits."
     ],
     [
       "/agents tester off",
-      "Disable test design (default on); required checks stay enforced."
+      "Disable test design (default off); enabled checks run once after edits."
     ],
     [
       "/agents mcp",
@@ -267,6 +283,18 @@
     [
       "/diff proposed",
       "Review approval previews, including proposals that may never have been applied."
+    ],
+    [
+      "/agents verifier",
+      "Show automatic post-edit verification (default on)."
+    ],
+    [
+      "/agents verifier on",
+      "Run configured checks once after edits, using native command approval and no model inference."
+    ],
+    [
+      "/agents verifier off",
+      "Skip check discovery and commands on subsequent runs. Applied edits remain unverified."
     ]
   ],
   "shell": [
@@ -364,7 +392,23 @@
     ],
     [
       "agents",
-      "Show the runtime kernel, RunContract, stateful Architect, stateless workers, optional Tester/Scout/MCP state, and tool isolation."
+      "Colored agent roster with CORE/ON/OFF availability, roles, LLM versus tool-only workers, and prompt profile. Enabled means available for matching requests, not currently running."
+    ],
+    [
+      "agents architect",
+      "Inspect Architect: role, state, memory, contract and tool catalog. Explorer and Coder support the same detail view."
+    ],
+    [
+      "agents explorer",
+      "Inspect Explorer: read-only role, state, memory, contract and tool catalog."
+    ],
+    [
+      "agents coder",
+      "Inspect Coder: editing role, state, memory, contract and tool catalog."
+    ],
+    [
+      "agents architecture",
+      "Show the detailed runtime architecture and full tool catalog."
     ],
     [
       "agents profile [auto|small|medium|large|api]",
@@ -440,7 +484,7 @@
     ],
     [
       "agents tester [on|off]",
-      "Toggle optional test design. Architect defines criteria and Coder adds regression tests when off; Verifier remains required."
+      "Toggle optional test design. Tester is off by default; it helps design useful regressions when enabled. Checks run independently of Tester."
     ],
     [
       "agents mcp [on|off]",
@@ -457,6 +501,10 @@
     [
       "proto-cli approvals",
       "Show saved project approvals. Set with proto-cli approvals ask|edits|auto. Auto commands use normal host permissions; MCP and restoration still ask."
+    ],
+    [
+      "agents verifier [on|off]",
+      "Toggle the tool-only post-edit check pass. Off skips checks and reports applied changes as unverified."
     ]
   ]
 }

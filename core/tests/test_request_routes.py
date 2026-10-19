@@ -75,8 +75,8 @@ class RequestRouteTests(NativeRuntimeCase):
         for prompt, roles in (
             ("hello", {"architect"}),
             ("Explain this project", {"architect", "explorer"}),
-            ("Run the tests", {"architect", "explorer", "verifier"}),
-            ("Fix sample.py", {"architect", "explorer", "coder", "tester", "verifier"}),
+            ("Run the tests", {"architect", "verifier"}),
+            ("Fix sample.py", {"architect", "explorer", "coder", "verifier"}),
         ):
             with (
                 self.subTest(prompt=prompt),

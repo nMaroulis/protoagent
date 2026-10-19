@@ -5,7 +5,7 @@ import json
 from unittest.mock import patch
 
 import httpx
-from protolink import ApprovalDecision, RunHandle, Task
+from protolink import ApprovalDecision, RunBudget, RunHandle, Task
 from protolink.llms.factory import create_llm
 from protolink.llms.server.ollama_client import OllamaLLM
 from runtime_support import NativeRuntimeCase
@@ -16,6 +16,7 @@ from protoagent_core.request_budget import configure_agent_context
 
 class SourceFeedbackTests(NativeRuntimeCase):
     async def test_double_escaped_newlines_are_corrected_before_approval_or_mutation(self):
+        self.context.budget = RunBudget(max_tool_calls=1)
         sample = self.root / "sample.py"
         sample.write_text("value = 0\n")
         invalid = {**self.arguments(), "old": "value = 0\n", "new": "value = 42\\n"}
@@ -243,8 +244,8 @@ class SourceFeedbackTests(NativeRuntimeCase):
         ).result()
         self.assertEqual(result.status, "failed")
         self.assertIn("stale_source_revision", json.dumps(result.report.to_dict()))
-        self.assertTrue(any(e.type == "action.rejected" for e in result.report.events))
-        self.assertFalse(any(e.type == "action.failed" for e in result.report.events))
+        self.assertFalse(any(e.type == "action.requested" for e in result.report.events))
+        self.assertFalse(any(e.type == "process.started" for e in result.report.events))
         self.assertFalse(self.broker.records(self.authorization.scope))
         self.assertFalse(self.attempt.record.frozen)
 

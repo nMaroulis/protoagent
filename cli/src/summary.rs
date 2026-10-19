@@ -126,7 +126,7 @@ pub(crate) fn rows(review: &Value, width: usize) -> Vec<Vec<Segment>> {
     wrap(lines, width.max(1))
 }
 
-fn wrap(lines: Vec<Vec<Segment>>, width: usize) -> Vec<Vec<Segment>> {
+pub(crate) fn wrap(lines: Vec<Vec<Segment>>, width: usize) -> Vec<Vec<Segment>> {
     let mut output = Vec::new();
     for line in lines {
         let mut row: Vec<Segment> = Vec::new();

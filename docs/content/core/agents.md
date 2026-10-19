@@ -1,18 +1,18 @@
 ---
 title: Agent Deck
-description: Required coding roles, optional Tester/Scout/MCP, Guide, policies, tools, and memory boundaries.
+description: Required coding roles, optional Tester/Verifier/Scout/MCP, Guide, policies, tools, and memory boundaries.
 ---
 
 The default coding mesh exposes four LLM-capable roles:
 
 1. Architect
 2. Explorer
-3. Tester (optional, enabled by default)
+3. Tester (optional, disabled by default)
 4. Coder
 
 Architect is the stateful controller. Explorer, Tester and Coder are stateless,
-task-local workers. Verifier is the required tool-only command worker for coding
-and explicit verification. Scout is a
+task-local workers. Verifier is an optional tool-only command worker, enabled by default for one
+harness-controlled post-edit check pass and explicit verification. Scout is a
 tool-only web-research agent that is disabled by default. MCP is a model-free
 broker, also disabled by default. Guide is separate and only answers usage help
 questions.
@@ -31,7 +31,7 @@ original user request before the model runs; `verification.py` supplies native
 completion checks after execution. Write tasks are returned as `incomplete` when the trace
 lacks an executed native file change at its current resource revision.
 Approval, preview and model prose never count as execution. Native Graph limits
-allow one initial attempt and at most two repairs after completed failing checks.
+bound progressing edit continuations. Final checks run once without an automatic repair loop.
 
 The original request also determines what the model can see and do:
 
@@ -231,7 +231,7 @@ with the original traversal, symlink and allowed-root checks preserved. It does 
 get Explorer's broad search tools. It has bounded `read_file` access and can
 request missing context through `report_task`. Architect can pass real source
 packets using `worker_packet` outside the simplified local interface. Coder
-returns after applying its assignment; Architect owns the verification step.
+returns after applying its assignment; the harness runs verification after editing.
 Small-profile inference omits redundant `task_status` and `list_files` tools.
 The preferred edit is an exact replacement with a
 full-file revision, avoiding reproduction of unaffected source.
@@ -262,7 +262,7 @@ Tester is task-local and read-only. It inspects source and existing tests, propo
 acceptance criteria and regression cases, selects discovered check IDs, and
 classifies observed failures. It cannot edit or run commands. Coder implements
 tests; Verifier supplies measured execution evidence. Task status and validated
-worker reports use `task.manage`. Tester is optional and enabled by default; delegation is
+worker reports use `task.manage`. Tester is optional and disabled by default for new configurations; delegation is
 chosen by Architect rather than required on every request.
 
 ## Verifier
@@ -284,7 +284,7 @@ duration_seconds and budget_exceeded. ProtoLink owns execution and cleanup;
 commands run on the host without sandbox isolation. No environment is inherited.
 
 `verification.py` defines application acceptance using native `CompletionCheck`
-and `CompletionValidator`. `workflow.py` bounds repair attempts with Graph and
+and `CompletionValidator`. `workflow.py` schedules one post-edit check pass with Graph and
 keeps edits before final verification in each attempt. No interactive application process runner or
 integer file-change revision counter remains.
 See [Verify & Recover](../cli/verification-and-recovery.md).
@@ -321,7 +321,7 @@ proto-cli agents scout off
 Changes apply to the next run. Disabled means the factory is not called, the
 agent is not started, and Architect cannot discover it.
 
-Scout exposes fresh instances of the ProtoLink 0.8.1 built-ins:
+Scout exposes fresh instances of the ProtoLink 0.8.2 built-ins:
 
 | Tool | Capability | Behavior |
 | --- | --- | --- |
@@ -388,9 +388,9 @@ changes.
 
 ## Optional-worker controls and MCP
 
-Architect, Explorer, Coder and Verifier cannot be disabled. Tester defaults on;
-Scout and MCP default off. Use `proto-cli agents tester|scout|mcp on|off`, or
-`/agents tester|scout|mcp on|off`. Settings persist user-wide and apply to the
+Architect, Explorer and Coder cannot be disabled. Verifier can be disabled; edits then remain unverified. Tester defaults off for new configurations;
+Scout and MCP default off. Use `proto-cli agents tester|verifier|scout|mcp on|off`, or
+`/agents tester|verifier|scout|mcp on|off`. Settings persist user-wide and apply to the
 next run. Disabled workers are not constructed or advertised, and Architect's
 instructions explain their absence. When Tester is off, Architect defines
 criteria and Coder adds regression tests; repository verification stays required.

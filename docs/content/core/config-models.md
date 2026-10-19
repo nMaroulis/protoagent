@@ -47,6 +47,9 @@ Optional agents live under a separate top-level key:
 ```json
 {
   "optional_agents": {
+    "tester": {"enabled": false},
+    "verifier": {"enabled": true},
+    "mcp": {"enabled": false},
     "scout": {
       "enabled": false
     }
@@ -217,3 +220,8 @@ features ProtoAgent expects:
 ready. `web_tools_ready` is reported separately because Scout is optional; a
 missing web-tool surface prevents Scout use but should not make the default
 coding deck unavailable.
+
+Verifier runs one check pass after edits without inference. `/agents verifier off`
+skips check discovery and commands and marks edits unverified. Tester is opt-in
+for new configurations; saved preferences are preserved. Checks do not require
+baselines, dependency-install questions or automatic repair loops.

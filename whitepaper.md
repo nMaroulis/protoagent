@@ -357,7 +357,7 @@ be fetched again. Deterministic retrieval means the procedure does not use an
 LLM; it does not mean the retrieved evidence is complete or relevant. Context
 management must therefore be evaluated alongside coding accuracy.
 
-## 7. Verification, bounded repair and recovery
+## 7. Verification and recovery
 
 The harness distinguishes three outcomes: a change was applied, selected checks
 passed against the relevant state, and those checks support the task's criteria.
@@ -365,13 +365,15 @@ None of these alone proves arbitrary natural-language correctness.
 
 Repository checks are captured before model execution. The model can select
 existing checks while planning, but cannot substitute an arbitrary successful
-command for them or remove a requirement after editing. Baseline measurements
-describe the original behavior; preparation commands support setup and diagnosis;
-final verification supplies evidence about the resulting state.
+command for them or remove a requirement after editing. The default schedule
+places checks after edits and lets software choose captured commands. Baselines
+can be useful in an explicit diagnostic task, but they need not be a prerequisite
+for every change. Preparation commands remain separate from verification evidence.
 
 A repository without tests still needs a path to useful verification. A harness
-can declare a standard test runner before inference, then ask the coding worker
-to create focused regressions that the runner executes. Registering that runner
+can declare a standard test runner before inference and execute useful newly
+added regressions through it. A new test file is not a prerequisite for admitting
+an otherwise valid edit. Registering that runner
 does not establish coverage: a successful process that ran zero tests must not
 verify a change. Explicit project configuration remains authoritative. If no
 usable runner exists, approved edits may be applied while the task remains
@@ -389,7 +391,7 @@ Routine command preparation should also be software responsibility. A small
 model can name an installed program and a project-relative working directory;
 the harness resolves those inputs into exact paths before native authorization.
 Executable lookup does not require inheriting the host's environment. A rejected
-preparation request should return no-change feedback before child dispatch,
+preparation request should return no-change feedback before approval or execution,
 while denial and errors after execution remain stopping conditions. Keeping
 input correction distinct from replay avoids turning an ordinary missing PATH
 or invalid limit into a failed workflow, without weakening the approval boundary.
@@ -406,8 +408,8 @@ before any write is prepared. The application must explicitly guarantee that
 the rejected request made no changes; an ordinary exception cannot supply that
 guarantee. The kernel records rejection separately from successful execution,
 and rejection provides no evidence for completion. For an exact edit, source
-validation can be represented as a read-only action that emits typed no-change
-feedback. Only a valid proposal becomes an effectful native replacement with
+validation returns typed no-change feedback during preparation, before approval,
+execution or tool-call accounting. Only a valid proposal becomes a native replacement with
 write authorization and an exact diff approval. This keeps input correction
 separate from retrying a mutation that may already have happened.
 
@@ -428,18 +430,20 @@ model every environmental input, external service or repository dependency.
 ```mermaid
 flowchart TD
   P[Objective, evidence and check plan] --> C[Approved edits]
-  C --> V[Selected final checks]
+  C --> V[One enabled software-scheduled check pass]
   V --> G[Acceptance over receipts and revisions]
   G -->|Required evidence satisfied| R[Report applied and verified separately]
-  G -->|Completed qualifying check failure| F[Bounded repair]
-  F --> C
+  G -->|Check failed or setup unavailable| F[Report edits and measured limitation]
   G -->|Missing, denied, stale or uncertain evidence| S[Stop and report the unresolved state]
 ```
 
 The encouraged route does not make every worker call mandatory. Enforcement
-covers policy, execution evidence, plan stability, revision freshness and repair
-limits. A completed failing check can justify a focused repair. A timeout,
-denial or uncertain effect requires inspection, not an automatic replay.
+covers policy, execution evidence, plan stability and revision freshness. Checks
+do not send the model back through an automatic repair loop. A follow-up request
+can authorize a focused repair using the recorded failure. A timeout, denial or
+uncertain effect requires inspection, not an automatic replay. Optional test-design
+inference and optional command execution are independent controls: disabling either
+never turns unexecuted checks into evidence of correctness.
 
 An unavailable verification environment is also distinct from a measured
 regression. If a completed final check cannot import its Python runner or an
@@ -546,8 +550,12 @@ and file recovery have narrower guarantees.
 Persistent conversation memory and file checkpoints do not by themselves provide
 restartable execution. Safe continuation also needs the task record, frozen check
 plan, edit/check phase and committed action cursor. The current coding workflow
-does not reconstruct these after a process restart. Integrating engine durability
-requires preserving that application state and reconciling uncertain effects.
+does not reconstruct these after a process restart. Native execution checkpoints
+can safely retain a live worker's cursor, history, corrections and committed
+actions across bounded slices while its controller remains alive. Private
+temporary execution checkpoints do not persist the entire application's state.
+Cross-process recovery still requires preserving that state and reconciling
+uncertain effects.
 
 The research priorities are comparative evaluation and component ablations,
 followed by stronger isolation, better criterion-to-test evidence, broader check
@@ -585,7 +593,7 @@ execution before approval. Immutable message caches limit repainting to the
 active response while preserving earlier conversation layouts.
 
 Review and authorization are distinct operator actions. Approval screens name
-the operation and its phase: baseline measurement, final checking, preparation
+the operation and its phase: final checking, preparation
 or a file change. Viewing command details or a diff leaves execution paused;
 an explicit decision authorizes or denies the native request. The interface
 tracks that request's lifetime and closes both approval and review views when
@@ -629,22 +637,22 @@ do not create execution or verification evidence.
 | --- | --- |
 | Request routing | RunContract selects the per-turn workers, tools, prompt and native RunContext permission ceilings. Recognized conversation uses Architect without tools or project/check discovery. Repository questions omit Coder, Tester and Verifier; explicit verification adds Verifier. |
 | Task state | `TaskRecord` retains the objective, criteria, selected checks, source dependencies and worker reports. Plans freeze at the first write or final check. |
-| Worker handoff | Small-profile local runs expose fixed typed reads, `coder(task)`, optional `tester(task)`, Verifier checks and enabled external operations. Prepared calls reach original workers through native ProtoLink child supervision. Other profiles/transports retain native delegation. Low-level packet preparation remains an unexecuted context operation. |
-| Bounded Coder assignments | A hook stops before the tenth provider call in each native window. Fresh committed writes with current revisions can admit up to three windows in the same assignment, history and shared budget (at most 27 model calls). `PROTOAGENT_CODER_MAX_WINDOWS` can lower that bound. Earlier progress cannot justify a stalled window. Exhaustion returns partial `needs_context`/`worker_turn_limit`; stalled work returns `blocked`/`worker_no_progress` while retaining earlier edits. Native failures, denials, cancellation, uncertainty and explicit missing-context reports prevent continuation. |
+| Worker handoff | Small-profile local runs expose fixed typed reads, `coder(task)`, optional `tester(task)`, Verifier checks and enabled external operations. Native typed worker declarations resolve to original workers through ProtoLink child supervision. Other profiles/transports retain native delegation. Low-level packet preparation remains an unexecuted context operation. |
+| Bounded Coder assignments | Owned-local workers use native cooperative slices and structured handoffs. Fresh applied writes with current revisions can justify another slice under the original history, correction allowance and hard run budget. The controller caps progressing slices per assignment; the SDK owns checkpoint/resume. Temporary execution checkpoints do not make the Graph restartable. Explicit transport meshes retain live bounded workers. |
 | Partial-work continuation | An exhausted partial Coder assignment returns Architect directly to the native Graph before another model request. The Graph allows at most two qualifying focused continuations in the same open edit phase, frozen plan and shared budget. Stable native write evidence is required. No-progress handoffs, stale or uncertain evidence, native stops and final checking exclude continuation. Exhaustion remains incomplete. |
-| Failed-check handoff | A completed failing final check yields before another Architect model request. Only the native Graph can open a new edit phase, with at most two repairs. Denied, interrupted or uncertain execution cannot use this path. Remaining failures finish incomplete. |
-| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique observed span, matching revision and different old/new text. Invalid selections execute only read validation feedback through native bounded correction; valid proposals prepare native recoverable writes with exact approval. Successful exact edits return the approved afterimage's source digest for another focused edit without rereading known source. Native recovery identities remain distinct. Project-relative create/replace inputs preserve native path and symlink guards. |
+| Failed checks | Software runs one enabled check pass after editing. A real failure is reported with native evidence; missing external setup leaves edits unverified. Checks never dispatch another model request, install question or automatic repair. |
+| Source and edits | Bounded reads carry a SHA-256 revision. `edit_file(path, old, new, expected_revision)` requires a unique observed span, matching revision and different old/new text. Invalid selections enter native bounded correction during preparation, before approval or execution and without consuming a tool call; valid proposals prepare native recoverable writes with exact approval. Successful exact edits return the approved afterimage's source digest for another focused edit without rereading known source. Native recovery identities remain distinct. Project-relative create/replace inputs preserve native path and symlink guards. |
 | Context admission | Requests reserve output space and retain required instructions/task state. Small profiles with unknown capacity use an 8,192-token application cap; accounting remains estimated. |
 | Generation controls | Small-profile Ollama requests default to a 4,096-token output limit. Small Gemma 4 variants disable optional thinking and use the engine's JSON action protocol in automatic mode to avoid native-channel narration/action confusion. Explicit protocol and generation settings win, model sampling remains unchanged and provider aborts never authorize partial tool proposals. These defaults are heuristics, not a guarantee of model quality. |
 | Local supervision | Architect owns enabled workers through native local subagents, with one active child and depth one. The default limit is 32 children per attempt, configurable independently of the shared Graph budget. No Registry or server is needed for local delegation. |
 | Progressive observations | Native context policies and before-model hooks refresh task state, prune complete old turns and make large results retrievable. Small-profile previews are bounded to 3,000 characters; retrieval remains scoped and paginated. |
 | User clarification | Architect has native `ask_user` with optional suggestions and free-text answers. The live callback continues the same task, with a 300-second deadline bounded by remaining runtime and a 4,096-character answer limit. Skip and timeout do not invent an answer or grant approval. |
-| Clarification retention | Native after-tool hooks copy validated answers and their questions into TaskRecord and worker packets. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
+| Clarification retention | A prepared-tool adapter copies validated native answers and their prepared questions into TaskRecord and worker packets, including after checkpointed continuation. These requirements survive observation pruning within a live run; they do not change frozen plans or execution permissions. |
 | Manual verification | A prepared-tool adapter consumes the validated native answer and uses ProtoLink cancellation to honor an explicit verification stop without another model call. Applied changes remain `unverified`, verification is `deferred`, failed receipts remain intact and no repair is started. Uncertain effects, denial and stale evidence take precedence. |
-| Repository checks | `.protoagent/project.json` declares check IDs, argv, cwd, environment and dependency paths. Bounded static inspection chooses pytest for function-style/mixed suites and unittest for unittest-only suites, without importing code or installing dependencies. Owner-declared checks remain authoritative. Omitted/empty code check selections retain defaults. Narrowed bootstrap scopes must include regression files. A runner without existing tests supplies no coding baseline; changes and regressions precede final checking. |
-| Command preparation | Project-relative cwd and bare programs are resolved before native approval without inheriting environment values. Native preparation validation in the small local interface returns typed no-change rejection before child dispatch. Defaults fit configured execution ceilings; the engine owns execution, correction budgets and cleanup. |
+| Repository checks | Owner configuration captures IDs, argv, cwd, environment and dependency paths. Bounded static inspection chooses an appropriate existing runner without importing project code. There is no default baseline or mandatory generated test file. No usable checks means unverified; zero tests never proves correctness. |
+| Command preparation | Project-relative cwd and bare programs are resolved before native approval without inheriting environment values. Native preparation returns typed no-change rejection before approval or execution, without consuming a tool call. Defaults fit configured execution ceilings; the engine owns execution, correction budgets and cleanup. |
 | Acceptance | Code changes require native applied-write evidence and all selected final checks at captured revisions. Explicit documentation-only work may complete as unverified. Dependency capture is bounded to 512 files. |
-| Repair | The native workflow permits one initial attempt and at most two repairs after completed qualifying check failures. Missing or uncertain evidence does not trigger replay. |
+| Verification controls | Verifier is a tool-only agent, enabled by default, invoked by the harness after edits. `/agents verifier off` skips discovery and commands and labels edits unverified; on restores the pass. Tester is opt-in design assistance for new configurations. |
 | MCP access | Three fixed broker tools provide name discovery, one exact schema and an allowlisted invocation. Pages contain at most 12 descriptors; schemas over 12,000 characters are rejected and results over 6,000 characters are marked truncated. |
 
 These numerical bounds are implementation choices, not universal optima.

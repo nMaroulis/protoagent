@@ -6,7 +6,7 @@ description: The Python core package that powers ProtoAgent frontends.
 The Python core lives under `core/protoagent_core/`. It is the shared runtime
 brain behind the Rust CLI and the planned ACP server.
 
-The active core package version is `0.3.0`. It is declared in
+The active core package version is `0.3.1`. It is declared in
 `core/pyproject.toml` and exported as `protoagent_core.__version__`.
 
 The core is responsible for:
@@ -33,7 +33,7 @@ The core is responsible for:
 | `runtime_policy.py` | Trusted authorization scope, workspace policy, edit/check phases. |
 | `runtime_storage.py` | Credential selection and terminal sanitization for native redaction. |
 | `streaming.py` | Native model/process events projected into provisional UI output. |
-| `workflow.py` | Native Graph with bounded coding and repair attempts. |
+| `workflow.py` | Native Graph with bounded editing and one software-controlled check pass. |
 | `verification.py` | Application acceptance through native completion checks. |
 | `checkpoints.py` | Private native checkpoint storage, project lease and inventory. |
 | `history.py` | ProtoLink-owned conversation state controls. |
@@ -45,7 +45,7 @@ The core is responsible for:
 | `mcp.py` | Lazy MCP configuration, bounded discovery/calls, native policy and model-free setup/probes. |
 | `help_agent.py` | Isolated Guide agent for `/help QUESTION`. |
 | `context/` | Context Loom indexer, SQLite store, packer, schemas. |
-| `agents/` | Required Architect/Explorer/Coder/Verifier, optional Tester/Scout/MCP, and deck assembly. |
+| `agents/` | Required Architect/Explorer/Coder, optional Tester/Verifier/Scout/MCP, and deck assembly. |
 
 ## Core Contract With Rust
 
@@ -70,7 +70,7 @@ ProtoLink objects used by the core include:
 
 | ProtoLink object | How ProtoAgent uses it |
 | --- | --- |
-| `Agent` | Architect, Explorer, Coder, Verifier, optional Tester/Scout/MCP, Guide, and state-control facades. |
+| `Agent` | Architect, Explorer, Coder, optional Tester/Verifier/Scout/MCP, Guide, and state-control facades. |
 | `AgentGroup` | Owned agents, readiness, cleanup and explicitly external resources. |
 | `Registry` | Agent discovery for Architect delegation. |
 | `AgentClient` | Native delegation between agents over the configured transport. |
@@ -88,7 +88,7 @@ ProtoLink objects used by the core include:
 | `ApprovalDecision` | Human decision from the Rust app. |
 | `StorageCheckpointStore` | Dedicated SQLite-backed native file recovery records. |
 | `CompletionCheck` / `CompletionValidator` | Executed outcomes and revision-dependent acceptance. |
-| `Graph` | One initial attempt and at most two bounded repair attempts. |
+| `Graph` | Bounded edit continuations, then one check pass; no automatic repair loop. |
 | `ConversationState` | Durable Architect memory and state-control facades. |
 | `Tool` | First-party agent tools, including Scout's bounded `web_search` and `fetch_url`. |
 
@@ -125,7 +125,7 @@ The core tests focus on runtime contracts rather than only prompt text:
 | Test file | Coverage |
 | --- | --- |
 | `core/tests/test_runtime_integration.py` | Policies, approvals, cancellation, streaming, run budgets, event/report behavior. |
-| `core/tests/test_native_runtime.py` | Real native tools, broker correlation, runtime/SSE meshes, uncertainty and bounded repairs without paid models. |
+| `core/tests/test_native_runtime.py` | Real native tools, broker correlation, runtime/SSE meshes, uncertainty and single-pass checking without paid models. |
 | `core/tests/test_verification.py` | Native process outcomes, resource revisions and completion evidence. |
 | `core/tests/test_checkpoints.py` | Private storage, native restoration, conflicts and legacy inspection. |
 | `core/tests/test_history_integration.py` | ProtoLink conversation state describe, compact, reset, and top-level turn persistence. |

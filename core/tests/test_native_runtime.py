@@ -115,7 +115,6 @@ class NativeRuntimeTests(NativeRuntimeCase):
         )
         self.assertFalse(accepted.completion["satisfied"])
         self.assertEqual(accepted.completion["checks"][0]["code"], "execution_evidence_missing")
-        self.assertFalse(accepted.repairable)
 
     async def test_passed_check_becomes_stale_after_external_edit(self):
         target = self.root / "one"
@@ -163,7 +162,6 @@ class NativeRuntimeTests(NativeRuntimeCase):
         after = await validate_completion(contract, task, report, self.attempt, self.broker)
         self.assertEqual(after.verification["status"], "stale")
         self.assertFalse(after.completion["satisfied"])
-        self.assertFalse(after.repairable)
 
     async def test_redaction_protects_native_snapshots_and_free_text_output(self):
         policy = output_redaction("a-known-private-value")
@@ -233,7 +231,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
                     break
         self.assertEqual((await handle.result()).status, "canceled")
 
-    async def test_graph_enforces_two_repairs_with_real_native_receipts(self):
+    async def test_failing_checks_do_not_start_automatic_repairs(self):
         await self.exercise_embedded_mesh("runtime", repairs=True)
 
     async def test_embedded_mesh_uses_broker_and_persists_delegated_receipts(self):
@@ -242,7 +240,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
     async def test_owned_local_children_preserve_approvals_live_output_and_receipts(self):
         await self.exercise_embedded_mesh("local")
 
-    async def test_owned_local_children_preserve_bounded_repairs(self):
+    async def test_owned_local_children_report_failed_check_without_more_inference(self):
         await self.exercise_embedded_mesh("local", repairs=True)
 
     async def test_project_auto_mode_flows_through_owned_children_and_final_review(self):
@@ -351,15 +349,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
                 response.pop("agent")
                 response.pop("action")
         if repairs:
-            import copy
-
             responses[1]["args"]["argv"] = [sys.executable, "-c", "raise SystemExit(7)"]
-            # Completed failing checks now yield before a model final. Each
-            # following scripted action belongs to the next Graph edit phase.
-            responses = responses[:2]
-            repair = copy.deepcopy(responses)
-            repair[0]["tool"] = "replace_file"
-            responses += copy.deepcopy(repair) + copy.deepcopy(repair)
         (self.root / ".protoagent").mkdir()
         command = responses[1]["args"]
         (self.root / ".protoagent" / "project.json").write_text(
@@ -376,6 +366,7 @@ class NativeRuntimeTests(NativeRuntimeCase):
                 }
             )
         )
+        responses = [responses[0], responses[-1]]
         llm = create_llm("mock", sequential_responses=responses)
 
         async def resolve_ui():
@@ -441,9 +432,9 @@ class NativeRuntimeTests(NativeRuntimeCase):
             await asyncio.gather(controls, return_exceptions=True)
         if repairs:
             self.assertEqual(result["status"], "incomplete", result["answer"])
-            self.assertEqual(result["verification"]["attempts"], 3)
-            self.assertEqual(len(result["verification"]["results"]), 3)
-            self.assertEqual(len(result["approval_decisions"]), 6)
+            self.assertEqual(result["verification"]["attempts"], 1)
+            self.assertEqual(len(result["verification"]["results"]), 1)
+            self.assertEqual(len(result["approval_decisions"]), 2)
             return
         self.assertEqual(result["status"], "completed", result["answer"])
         self.assertEqual(result["approval_mode"], approval_mode)
@@ -487,7 +478,11 @@ class NativeRuntimeTests(NativeRuntimeCase):
         self.assertEqual(len(receipts), 2)
         if architecture == "deck":
             self.assertTrue(
-                all(event["delegation_id"] and event["parent_action_id"] for event in receipts)
+                all(
+                    event["delegation_id"] and event["parent_action_id"]
+                    for event in receipts
+                    if event["agent_name"] == "coder"
+                )
             )
 
     async def test_uncertain_checkpoint_stops_further_mutation_without_replay(self):
@@ -516,7 +511,6 @@ class NativeRuntimeTests(NativeRuntimeCase):
             self.broker,
         )
         self.assertEqual(accepted.completion["outcome"], "uncertain")
-        self.assertFalse(accepted.repairable)
         retry = await self.start_tool(
             self.coder, "replace_file", {"path": str(target), "content": "do not replay"}
         ).result()

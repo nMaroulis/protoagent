@@ -143,9 +143,14 @@ def get_agent_settings() -> str:
     profile = prompt_profile_status(config, provider=provider, model=str(active.get("model", "")))
     scout_enabled = optional_agent_enabled("scout", config)
     tester_enabled = optional_agent_enabled("tester", config)
+    verifier_enabled = optional_agent_enabled("verifier", config)
     mcp_enabled = optional_agent_enabled("mcp", config)
     manifest = agent_manifest(
-        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+        profile,
+        scout_enabled=scout_enabled,
+        tester_enabled=tester_enabled,
+        verifier_enabled=verifier_enabled,
+        mcp_enabled=mcp_enabled,
     )
     return _json(
         {
@@ -154,6 +159,7 @@ def get_agent_settings() -> str:
             "agents": manifest["agents"],
             "scout_enabled": scout_enabled,
             "tester_enabled": tester_enabled,
+            "verifier_enabled": verifier_enabled,
             "mcp_enabled": mcp_enabled,
         }
     )
@@ -345,9 +351,14 @@ def doctor(workspace: str | None = None) -> str:
     )
     scout_enabled = optional_agent_enabled("scout", config)
     tester_enabled = optional_agent_enabled("tester", config)
+    verifier_enabled = optional_agent_enabled("verifier", config)
     mcp_enabled = optional_agent_enabled("mcp", config)
     manifest = agent_manifest(
-        profile, scout_enabled=scout_enabled, tester_enabled=tester_enabled, mcp_enabled=mcp_enabled
+        profile,
+        scout_enabled=scout_enabled,
+        tester_enabled=tester_enabled,
+        verifier_enabled=verifier_enabled,
+        mcp_enabled=mcp_enabled,
     )
     return _json(
         {
@@ -365,6 +376,7 @@ def doctor(workspace: str | None = None) -> str:
             "prompt_profile": profile,
             "scout_enabled": scout_enabled,
             "tester_enabled": tester_enabled,
+            "verifier_enabled": verifier_enabled,
             "mcp_enabled": mcp_enabled,
             "architecture": manifest["architecture"],
             "agents": manifest["agents"],
@@ -407,17 +419,19 @@ def process_prompt(
     """
     started = time.time()
     workspace = str(workspace_root(workspace))
-    if progress_path and os.getenv("PROTOAGENT_SCAFFOLD") != "1":
+    from .run_contracts import infer_run_contract
+
+    contract = infer_run_contract(prompt)
+    checks_only = contract.task_kind == "workspace-verification"
+    if progress_path and not checks_only and os.getenv("PROTOAGENT_SCAFFOLD") != "1":
         if problem := model_startup_problem():
             return _json({**problem, "elapsed_ms": round((time.time() - started) * 1000)})
     os.environ["PROTOAGENT_WORKSPACE"] = workspace
     _emit_progress(progress_path, f"CLI accepted task for workspace {workspace}.")
-    from .run_contracts import infer_run_contract
-
-    conversational = infer_run_contract(prompt).task_kind == "direct-answer"
+    conversational = contract.task_kind == "direct-answer"
     tagged_context = {"items": [], "errors": []}
     loom_context = None
-    if not conversational:
+    if not conversational and not checks_only:
         _emit_progress(progress_path, "Resolving tagged file context from the prompt.")
         tagged_context = _tagged_file_context(prompt, workspace)
         for event in _tag_events(tagged_context):
@@ -570,7 +584,10 @@ def _model_response(
     runtime_status = str(result.get("status") or "completed")
     from .run_contracts import infer_run_contract
 
-    if runtime_status == "completed":
+    if (
+        runtime_status == "completed"
+        and infer_run_contract(prompt).task_kind != "workspace-verification"
+    ):
         remember_valid_provider(result["provider"], result["model"])
     if runtime_status == "canceled" or infer_run_contract(prompt).task_kind == "direct-answer":
         targets = []

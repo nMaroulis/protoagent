@@ -63,9 +63,7 @@ class GuideHelpAgentTests(unittest.TestCase):
         self.assertIn("/agents scout on", seen_prompt["system"])
         self.assertIn("proto-cli agents tester on|off", seen_prompt["system"])
         self.assertIn("proto-cli agents mcp on|off", seen_prompt["system"])
-        self.assertIn(
-            "Architect, Explorer, Coder and Verifier cannot be disabled", seen_prompt["system"]
-        )
+        self.assertIn("Architect, Explorer and Coder cannot be disabled", seen_prompt["system"])
         self.assertIn("apply to the next run", seen_prompt["system"])
         self.assertIn("BRAVE_SEARCH_API_KEY", seen_prompt["system"])
         self.assertIn("Active provider: mock", seen_prompt["user"])

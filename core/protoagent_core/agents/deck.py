@@ -32,7 +32,8 @@ def create_agent_deck(
     telemetry=None,
     prompt_profile: str = "auto",
     scout_enabled: bool = False,
-    tester_enabled: bool = True,
+    tester_enabled: bool = False,
+    verifier_enabled: bool = True,
     mcp_enabled: bool = False,
     mcp_servers: dict | None = None,
     auth: AgentRuntimeAuth | None = None,
@@ -59,11 +60,12 @@ def create_agent_deck(
     auth = auth or create_runtime_auth()
     record = attempt.record if attempt is not None else None
     conversational = run_contract is not None and run_contract.task_kind == "direct-answer"
+    checks_only = run_contract is not None and run_contract.task_kind == "workspace-verification"
     writing = run_contract is None or run_contract.requires_write
     verifying = writing or (run_contract and run_contract.task_kind == "workspace-verification")
     explorer = (
         None
-        if conversational
+        if conversational or checks_only
         else create_explorer_agent(
             registry=registry,
             provider=provider,
@@ -111,7 +113,7 @@ def create_agent_deck(
             authenticator=auth.authenticator,
             credentials=auth.credentials,
         )
-        if scout_enabled and not conversational
+        if scout_enabled and not conversational and not checks_only
         else None
     )
     deck = {
@@ -151,13 +153,13 @@ def create_agent_deck(
                     attempt=attempt,
                 )
             }
-            if verifying
+            if verifying and verifier_enabled
             else {}
         ),
     }
     if scout is not None:
         deck["scout"] = scout
-    if mcp_enabled and not conversational:
+    if mcp_enabled and not conversational and not checks_only:
         deck["mcp"] = create_mcp_agent(
             servers=mcp_servers or {},
             registry=registry,
@@ -207,7 +209,8 @@ def agent_manifest(
     profile: dict[str, Any] | None = None,
     *,
     scout_enabled: bool = False,
-    tester_enabled: bool = True,
+    tester_enabled: bool = False,
+    verifier_enabled: bool = True,
     mcp_enabled: bool = False,
 ) -> dict[str, Any]:
     """Return the visible runtime architecture and worker manifest."""
@@ -234,12 +237,12 @@ def agent_manifest(
             "stateless": [
                 "explorer",
                 "coder",
-                "verifier",
+                *(["verifier"] if verifier_enabled else []),
                 *(["tester"] if tester_enabled else []),
                 *(["scout"] if scout_enabled else []),
                 *(["mcp"] if mcp_enabled else []),
             ],
-            "optional": ["tester", "scout", "mcp"],
+            "optional": ["tester", "verifier", "scout", "mcp"],
             "contract": (
                 "RunContract selects each turn's workers, tools, context and native permission ceilings. "
                 "Write tasks require native execution receipts and application checks."
@@ -279,8 +282,7 @@ def agent_manifest(
                         "list_directory",
                         "search_regex",
                         "coder",
-                        "run_check",
-                        "execute_command",
+                        *(["execute_command"] if verifier_enabled else []),
                         *(["tester"] if tester_enabled else []),
                         *(["web_search", "fetch_url"] if scout_enabled else []),
                         *(
@@ -359,10 +361,10 @@ def agent_manifest(
                 "memory": "none",
                 "persistence": "no model or durable conversation state",
                 "state": "stateless",
-                "contract": "approved process.execute with native budgets, output limits and cancellation",
-                "tools": ["run_check", "execute_command"],
-                "enabled": True,
-                "optional": False,
+                "contract": "one harness-controlled check pass after edits; approved native execution without inference, baselines or automatic repairs",
+                "tools": ["execute_command"],
+                "enabled": verifier_enabled,
+                "optional": True,
                 "prompt_profile": "not-applicable",
                 "prompt_profile_label": "Tool-only (no LLM)",
             },

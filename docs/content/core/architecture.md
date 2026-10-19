@@ -18,9 +18,9 @@ thin but important adaptation layer around the rest of the Python core.
 | `answer_help_question(question)` | `help QUESTION`, `/help QUESTION` | Guide answer JSON. |
 | `get_context_settings()` | `/context window` | Active provider context-window settings. |
 | `configure_context_window(value)` | `/context window 16k` | Updated context-window settings. |
-| `get_agent_settings()` | `agents`, `/agents` | Prompt profile, architecture manifest, agent list, and Tester/Scout/MCP state. |
+| `get_agent_settings()` | `agents`, `/agents` | Prompt profile, architecture manifest, agent list, and Tester/Verifier/Scout/MCP state. |
 | `configure_agent_prompt_profile(value)` | `agents profile`, `/agents profile` | Updated prompt-profile settings. |
-| `configure_optional_agent(name, enabled)` | `agents tester|scout|mcp`, `/agents tester|scout|mcp` | Updated optional-agent settings and manifest. |
+| `configure_optional_agent(name, enabled)` | `agents tester|verifier|scout|mcp`, `/agents tester|verifier|scout|mcp` | Updated optional-agent settings and manifest. |
 | `compact_protolink_history(session_id, strategy, limit)` | `/context compact` | ProtoLink state compaction report JSON. |
 | `reset_protolink_history(session_id)` | `/context reset` | ProtoLink state reset report JSON. |
 | `describe_protolink_history(session_id)` | `/context history` | ProtoLink state summary JSON. |
@@ -148,4 +148,4 @@ That makes the CLI robust enough to show actionable diagnostics even before a
 model/provider is fully configured.
 
 
-`configure_mcp(args_json)` and `configure_mcp_text(text)` provide model-free MCP setup and discovery probes to shell/TUI frontends. `mcp.py` uses ProtoLink 0.8.1 native adapters behind the optional tool-only broker; see [MCP Broker](mcp.md).
+`configure_mcp(args_json)` and `configure_mcp_text(text)` provide model-free MCP setup and discovery probes to shell/TUI frontends. `mcp.py` uses ProtoLink 0.8.2 native adapters behind the optional tool-only broker; see [MCP Broker](mcp.md).

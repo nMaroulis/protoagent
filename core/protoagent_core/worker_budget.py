@@ -59,6 +59,8 @@ class BoundedCoderAgent(Agent):
         self.work_record, self.work_attempt = work_record, work_attempt
 
     async def call_llm(self, infer_part, task=None, **kwargs):
+        if task is not None and RunContext.from_task(task).metadata.get("native_worker_slices"):
+            return await super().call_llm(infer_part, task=task, **kwargs)
         run_id = RunContext.from_task(task).run_id if task is not None else ""
         original_assignment = self._assignment(infer_part)
         maximum = coder_work_windows()
@@ -249,6 +251,8 @@ class BoundedCoderAgent(Agent):
 
 def reserve_coder_turn(request) -> str:
     """Stop before the last provider call; early reminders are only an affordance."""
+    if request.context.metadata.get("native_worker_slices"):
+        return ""
     if request.step >= MAX_INFER_STEPS:
         request.tools.clear()
         raise CoderHandoff(request.context, request.step - 1)

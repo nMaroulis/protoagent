@@ -3,8 +3,8 @@ title: Runtime
 description: AgentGroup lifecycle, scoped approvals, native RunHandle results, bounded coding workflows and reports.
 ---
 
-ProtoAgent 0.3.0 requires **ProtoLink 0.8.1**. `runtime.py` configures an embedded
-local child roster by default; `workflow.py` defines coding acceptance and repair routing. Native agents,
+ProtoAgent 0.3.1 requires **ProtoLink 0.8.2**. `runtime.py` configures an embedded
+local child roster by default; `workflow.py` defines coding acceptance and a post-edit check pass. Native agents,
 tools, policies, budgets, storage and cancellation execute the work.
 
 ## Entry and ownership
@@ -36,7 +36,7 @@ No model-produced plan or clarification response can raise those ceilings.
 | `ask_user_tool` | Architect asks through a native prepared tool; a UI callback returns an answer, decline or timeout before the next inference step. |
 | `StorageCheckpointStore` | Dedicated per-project `SQLiteStorage` namespace under `recovery/`. |
 | `SQLiteRunStore` | Native task/report persistence in a private per-run database under `runs/`. |
-| `Graph` | One initial attempt, two repair visits, three acceptance visits, seven total visits maximum. |
+| `Graph` | Initial edits, up to two progressing continuations, and one final check pass; at most nine node visits. |
 | `CompletionValidator` | Application predicates over native execution receipts and resource revisions. |
 
 The tool-only workflow controller exposes an application `run_workflow` tool to
@@ -48,22 +48,20 @@ harness runs its independent acceptance scripts outside the fixture workspace.
 
 ```mermaid
 flowchart LR
-  I[Initial Architect attempt] --> A[Native completion validation]
-  A -->|Satisfied or requires inspection| D[Return result]
-  A -->|Completed nonzero check| R[Repair: at most 2 visits]
-  R --> A
+  I[Architect and Coder edit] --> C[One enabled check pass]
+  C --> A[Validate receipts and revisions]
+  A --> D[Compact result and diffs]
 ```
 
 For repository work, Architect receives repository context. Small owned-local runs use fixed typed
-worker calls prepared with `PreparedTool` and executed by ProtoLink's child
-supervisor; other profiles/transports use normal `agent_call` execution.
+worker tools registered with `Agent.add_worker_tool` and resolved by ProtoLink's
+native child supervisor; other profiles/transports use normal `agent_call` execution.
 Both retain native child policies, approvals and receipts.
 A runtime-owned TaskRecord holds criteria, scope, discovered
-check IDs and worker reports. Baseline and preparation commands allow later edits;
-final verification closes the edit phase. The check plan freezes at the first
+check IDs and worker reports. Preparation commands allow later edits; the harness runs final checks once after editing. The check plan freezes at the first
 write or final check. See [Task Workflow](task-workflow.md).
-Only Graph dispatch opens a new repair attempt. Graph limits and shared native
-budgets bound repair work independently of `RetryPolicy`.
+Checks never open an automatic repair phase. Graph limits and shared native
+budgets bound editing and checking independently of transport `RetryPolicy`.
 
 ProtoLink selects the action protocol for each inference. Small-profile Gemma 4
 on Ollama uses its JSON action protocol when configured for automatic selection;
@@ -181,11 +179,12 @@ explicitly declines. Feedback does not change RunContract or grant permission
 to write, restore, run commands or invoke MCP. A missing answer to a blocking
 requirement must be reported rather than guessed. Questions and answers enter
 native history/events and redacted reports; this tool is not for credentials.
-An after-tool lifecycle hook retains answered question/answer pairs in TaskRecord
+A prepared-tool adapter retains answered question/answer pairs in TaskRecord
 and worker packets, so subsequent observation pruning does not discard user
-requirements. It consumes the validated native result and does not alter its
-execution receipt. Required clarification state that cannot fit still fails
-context admission explicitly rather than being silently truncated.
+requirements. It consumes the validated native result and the prepared question,
+including after checkpointed continuation, without altering the execution receipt.
+Required clarification state that cannot fit still fails context admission
+explicitly rather than being silently truncated.
 
 A thin prepared-tool adapter observes the validated native answer before model
 continuation. After editing or final checking begins, an explicit verification
@@ -199,10 +198,10 @@ resources remain unresolved rather than being hidden by a handoff. A declined
 or expired question is not a handoff, and instructions to continue other work
 still use the ordinary native continuation path.
 
-This is continuation inside the current live run. ProtoLink also supports
-checkpointed questions with `Agent.resume(..., answer=...)`, but restartable
-coding execution requires preservation of application Graph state and remains
-outside this integration. Reopening a session does not resume a pending question.
+This is continuation inside the current live run. Local checkpointed questions
+use `resume_task(..., answer=...)`; fallback workers use the SDK callback.
+Restartable coding execution requires preservation of application Graph state
+and remains outside this integration. Reopening a session does not resume a pending question.
 
 ## Transports and events
 
@@ -211,7 +210,7 @@ children with no Registry or loopback listeners. `agent_call` retains its normal
 infer/tool-call format. Children share the Graph's root budget and satisfy
 ancestor policies. Background model tools are disabled, concurrency is one,
 depth is one, and `PROTOAGENT_MAX_CHILDREN` defaults to 32 per Architect attempt.
-Graph still permits at most two repairs; its shared budget persists across them.
+The Graph permits bounded continuations of progressing partial edits; all execution shares the root budget.
 
 Set
 `PROTOAGENT_AGENT_TRANSPORT=http`, `websocket`, `grpc` or `runtime` as needed.
@@ -240,7 +239,7 @@ runtime activity stays in the status area. Worker/process
 previews retain up to four streams, each with the last 4096 characters; the
 Architect answer is not truncated by this preview limit. Shell output is flushed
 as deltas arrive. Task/agent/step/channel identities keep streams separate;
-a new Architect step or repair replaces the previous provisional text.
+a new Architect step replaces the previous provisional text.
 
 TUI polling processes at most 256 complete progress records per batch and yields
 after crossing 256 KiB, checked between records. The final drain consumes the
@@ -281,7 +280,7 @@ handles still consume execution once. Peer capabilities determine whether
 delegated output arrives live or with the final snapshot. Even an HTTP worker
 mesh can show live output from the locally invoked Architect.
 
-ProtoLink 0.8.1 puts delegated events and receipts directly in parent streams,
+ProtoLink 0.8.2 puts delegated events and receipts directly in parent streams,
 tasks and reports, with native identity preservation and deduplication. Completion
 uses `RunReport.from_task()` on the native Graph task. Each attempt carries its
 handle's complete report events into the Graph task, preserving model metrics
@@ -297,17 +296,21 @@ reported as potentially effected work, never as an action that was not submitted
 
 ## Budgets and persistence
 
-Each ProtoLink inference invocation also has a ten-turn cap. It is independent
-of the aggregate budgets below and the 120-message live trace preview limit.
-Coder's native before-model hook stops before the tenth provider call in each
-work window. A public Agent extension permits at most three native windows in
-the same assignment when each preceding window made fresh native writes and its
-latest resource revisions remain current. It preserves the original assignment,
-history, run context and aggregate budget; committed edits and approvals are not
-replayed. Explicit missing-context reports, native stops, uncertainty and stale
-writes prevent continuation. `worker.continuing` records each admitted window.
-`PROTOAGENT_CODER_MAX_WINDOWS` can lower the ceiling to one or two; it is clamped
-to 1–3 and defaults to three (at most 27 model calls per assignment).
+Local Coder work uses the SDK's `yield_after_steps=9`, `RunHandoff` and root
+`resume_task` API. The controller checks actual fresh writes and current revisions
+before granting another slice, up to `PROTOAGENT_CODER_MAX_WINDOWS` (default 3,
+clamped to 1–3). Private temporary execution checkpoints preserve the original
+child history, corrections, committed effects and cumulative budget. Approval
+and input interruptions pass through the existing UI and exact native resume
+responses. Every model call still consumes the aggregate budget; checkpointed
+approval/input resumes mean this is not a fixed 27-call cap.
+
+The application's Graph/TaskRecord remain live state. Stores are deleted on exit,
+and session reopening does not resume an interrupted workflow. Explicit transport
+meshes retain live bounded workers; `PROTOAGENT_CHECKPOINTED_WORKERS=0` chooses
+that fallback locally. That fallback reserves the tenth inference turn and can
+admit three nine-call windows after fresh progress. `worker.continuing` records
+admitted work in either mode.
 
 At the ceiling, an unfinished progressing assignment returns
 `needs_context`/`worker_turn_limit`. A window without fresh writes returns
@@ -328,14 +331,10 @@ the repair attempt. Stable native write receipts are required. Native stops,
 stale revisions, no-progress handoffs and completed final checking exclude this
 path. `workflow.continuing` events and `workflow_continuations` report the count.
 After two unfinished continuations, the answer reports incomplete work rather
-than preserving prose announcing another tool call. The existing maximum of two
-repairs after qualifying completed check failures remains separate.
-Completed failing final checks yield through a public Architect Agent extension
-before another model request, so a model cannot accidentally begin editing while
-checking has closed the phase. `workflow.repair.requested` records this handoff;
-only the Graph's acceptance decision opens the next edit phase. The extension
-catches its own typed control signal, never native action/provider errors. After
-two repairs, unresolved failures finish incomplete without another dispatch.
+than preserving prose announcing another tool call. After completed edits, software
+calls the tool-only Verifier once per selected check. No model request, setup
+question or automatic repair follows checking. Failed checks retain native logs
+and receipts; missing external setup produces a compact unavailable result.
 Live presentation deduplicates native event IDs across all workflow handles;
 earlier activity and output are not replayed when another Graph node starts.
 The full native report retains its execution evidence.
@@ -350,7 +349,8 @@ retains the native error and execution evidence.
 | `PROTOAGENT_RUN_MAX_SECONDS` | `max_runtime_seconds`; default agent timeout, 600 seconds |
 | `PROTOAGENT_RUN_MAX_INPUT_TOKENS` | Aggregate `max_input_tokens` for all providers, including Ollama |
 | `PROTOAGENT_RUN_MAX_OUTPUT_TOKENS` | `max_output_tokens` |
-| `PROTOAGENT_CODER_MAX_WINDOWS` | Application work windows per Coder assignment; default 3, clamped to 1–3 |
+| `PROTOAGENT_CODER_MAX_WINDOWS` | Progressing work slices per Coder assignment; default 3, clamped to 1–3 |
+| `PROTOAGENT_CHECKPOINTED_WORKERS` | Default 1 for owned-local coding; 0 selects live fallback limits |
 
 Input and output token budgets are optional totals across model calls in a run.
 The runtime clock includes waiting for approvals and user answers. An explicit
@@ -376,11 +376,11 @@ secrets printed by project code can still be sensitive.
 
 ## Frozen optional-worker configuration
 
-`run_selected_model()` snapshots Tester/Scout/MCP toggles and MCP server
-contracts before assembling the deck. Tester defaults on; Scout/MCP default
-off. Disabled optional workers are not constructed, registered or included in
+`run_selected_model()` snapshots Tester/Verifier/Scout/MCP toggles and MCP server
+contracts before assembling the deck. Verifier defaults on; Tester, Scout and MCP
+default off for new configurations. Existing saved preferences are preserved. Disabled optional workers are not constructed, registered or included in
 the runtime transport report. The Architect prompt carries their availability.
-Required checks stay enforced when Tester is off. Native MCP tools are used
+Enabled verification runs independently of Tester. Verifier off skips discovery and commands and reports edits unverified. Native MCP tools are used
 through lazy, approved broker operations rather than eager server discovery
 at startup; see [MCP Broker](mcp.md). The broker has no context-admission/model
 entry because it never calls an LLM.

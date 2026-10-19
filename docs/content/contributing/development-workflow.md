@@ -17,6 +17,7 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e core -r requirements-dev.txt
 rustup component add rustfmt clippy
+export PYO3_PYTHON="$PWD/.venv/bin/python"
 cargo build --locked --manifest-path cli/Cargo.toml
 ```
 
@@ -27,9 +28,10 @@ The CLI uses PyO3 0.29.3 and the committed Cargo lockfile; Rust 1.85 remains the
 declared minimum, with stable 1.99 used for release validation.
 
 Update through `pip install -U -e core` so the core's compatibility constraints
-apply. In particular, ProtoLink 0.8.1's Anthropic adapter requires the pre-1.0
-SDK's generation parameters; upgrading Anthropic independently to 1.x breaks
-that adapter. ELK stays on 0.1.9 to satisfy Docusaurus's Mermaid theme.
+apply. ProtoLink owns provider SDK compatibility and supports Anthropic v1;
+the core has no separate Anthropic upper bound. Local HTTP fixtures check actual
+SDK request serialization and response parsing without provider credentials.
+ELK stays on 0.1.9 to satisfy Docusaurus's Mermaid theme.
 
 ## Boundaries
 
@@ -119,3 +121,8 @@ Documentation CI uses Node 24 and `npm ci` with the committed docs lockfile.
 Keep pull requests focused. Include tests for behavior changes and regression
 fixes when practical, paste the relevant command output into the PR description,
 and call out any checks that were skipped with the reason.
+
+The CLI embeds Python through PyO3. Build it with the same interpreter that owns
+the core dependencies (`PYO3_PYTHON="$PWD/.venv/bin/python"` from the repo root).
+The CLI loads only matching-version virtualenv packages; mixing extension modules
+from another Python ABI is unsupported.

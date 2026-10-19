@@ -112,12 +112,6 @@ def compact_protocol_prompt(
         pieces.append(
             "The direct worker calls have fixed routes. Use their normal arguments; no worker/action fields or encoded argument strings are needed."
         )
-        if bootstrap_only:
-            pieces.append(
-                "No existing baseline tests are available. Read the requested source and call coder(task) "
-                "to apply the change and add focused root test_*.py regressions. Do not run an empty baseline. "
-                "Then use run_check with phase=verify for every required check."
-            )
         pieces.append(
             "Enabled worker descriptions: "
             + json.dumps(
@@ -125,16 +119,13 @@ def compact_protocol_prompt(
                 separators=(",", ":"),
             )
         )
-        if check_id and "run_check" in worker_interface:
+        if writing:
             pieces.append(
-                "Before editing call run_check with "
-                + json.dumps({"check_id": check_id, "phase": "baseline"})
-                + ". Then call coder(task) to apply the edit. After applied changes call run_check "
-                "with phase=verify for every required check."
-                if writing
-                else "For this verification request, call run_check with "
-                + json.dumps({"check_id": check_id, "phase": "verify"})
-                + ". Report measured results without editing files."
+                "Apply the requested edits through coder(task), then return a brief summary. The harness runs checks once afterwards; no baseline or check call is needed."
+            )
+        elif check_id and "run_check" in worker_interface:
+            pieces.append(
+                "For this verification request, use the supplied check ID and report measured results without edits."
             )
         pieces.append(
             "For a project overview, read README.md if supplied evidence is insufficient, then explain the project. "
@@ -169,12 +160,16 @@ def compact_protocol_prompt(
                 "worker_packet only reads context; it never runs Coder or applies edits. "
                 "If you prepare one, your next action is worker inference, not another packet or final verification."
             )
-        if check_id and any(
-            card["name"] == "verifier"
-            and any(tool["name"] == "run_check" for tool in card["tools"])
-            for card in card_data
+        if (
+            check_id
+            and not writing
+            and any(
+                card["name"] == "verifier"
+                and any(tool["name"] == "run_check" for tool in card["tools"])
+                for card in card_data
+            )
         ):
-            args = {"check_id": check_id, "phase": "baseline" if writing else "verify"}
+            args = {"check_id": check_id, "phase": "verify"}
             example = (
                 "Invoke protolink_call_agent_tool with "
                 + json.dumps(
@@ -195,13 +190,7 @@ def compact_protocol_prompt(
                 )
             )
             pieces.append(
-                "Before editing, measure a baseline through verifier. "
-                + example
-                + ". Delegate the edit to coder; worker_packet alone does not run coder. "
-                "After applied edits, use the same worker route with phase=verify for every required check. "
-                "run_check is verifier's tool, not a local Architect function."
-                if writing
-                else "Run the requested check through Verifier with phase=verify. "
+                "Run the requested check through Verifier with phase=verify. "
                 + example
                 + ". Report measured results without editing files."
             )
@@ -279,6 +268,15 @@ def configure_agent_context(
         history = request.history
         native = llm.resolve_tool_calling() == "native"
         state = record.snapshot() if record else {}
+        if record and getattr(record, "automatic_verification", False):
+            for key in (
+                "baseline_check_ids",
+                "bootstrap_checks",
+                "available_checks",
+                "available_check_ids",
+            ):
+                state.pop(key, None)
+            request.tools.pop("run_check", None)
         budget_instruction = ""
         if coder_hooks:
             from .worker_budget import reserve_coder_turn

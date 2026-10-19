@@ -12,7 +12,7 @@ from protoagent_core.runtime import _run_agent_deck
 
 
 class VerificationHandoffTests(NativeRuntimeCase):
-    async def test_applied_changes_and_failed_check_stop_without_further_effects(self):
+    async def test_manual_stop_after_edits_prevents_the_automatic_check_pass(self):
         (self.root / ".protoagent").mkdir()
         (self.root / ".protoagent/project.json").write_text(
             json.dumps(
@@ -48,18 +48,11 @@ class VerificationHandoffTests(NativeRuntimeCase):
                 "args": {"path": "test_server.py", "content": "# Regression fixture\n"},
             },
             {
-                "type": "agent_call",
-                "agent": "verifier",
-                "action": "tool_call",
-                "tool": "run_check",
-                "args": {"check_id": "regression", "phase": "verify"},
-            },
-            {
                 "type": "tool_call",
                 "tool": "ask_user",
                 "args": {
-                    "question": "Regression failed. Retry or defer verification?",
-                    "options": ["Install", "Retry"],
+                    "question": "Any remaining requirements before verification?",
+                    "options": ["Continue", "Stop"],
                 },
             },
         ]
@@ -129,7 +122,7 @@ class VerificationHandoffTests(NativeRuntimeCase):
             controls.cancel()
             await asyncio.gather(controls, return_exceptions=True)
         self.assertEqual(result["status"], "unverified", result["answer"])
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 3)
         self.assertEqual((self.root / "server.py").read_text(), "value = 42\n")
         self.assertTrue((self.root / "test_server.py").exists())
         completion, verification = result["completion_validation"], result["verification"]
@@ -138,19 +131,14 @@ class VerificationHandoffTests(NativeRuntimeCase):
         self.assertFalse(completion["verified"])
         self.assertFalse(completion["criteria_supported"])
         self.assertEqual(verification["status"], "deferred")
-        self.assertEqual(verification["last_attempt_status"], "failed")
-        # The failed check hands back to Graph, which opens the next phase
-        # before asking. The user's stop prevents any repair effect or rerun.
-        self.assertEqual(verification["attempts"], 2)
-        self.assertEqual(len(verification["results"]), 1)
-        self.assertEqual(verification["results"][0]["attempt"], 1)
-        self.assertEqual(verification["results"][0]["exit_code"], 1)
-        self.assertIn("AssertionError", verification["results"][0]["stderr"])
+        self.assertEqual(verification["last_attempt_status"], "unverified")
+        self.assertEqual(verification["attempts"], 1)
+        self.assertFalse(verification["results"])
         self.assertIn("Changes applied: server.py, test_server.py.", result["answer"])
         self.assertIn("Verification: deferred to you.", result["answer"])
         self.assertIn("Previous check details: /trace", result["answer"])
         self.assertNotIn("Run blocked", result["answer"])
-        self.assertEqual(len(result["approval_decisions"]), 3)
+        self.assertEqual(len(result["approval_decisions"]), 2)
         native = result["run_report"]
         self.assertNotEqual(native["metadata"]["transport_task_status"], "completed")
         self.assertEqual(native["metadata"]["application_status"], "unverified")
@@ -168,4 +156,4 @@ class VerificationHandoffTests(NativeRuntimeCase):
             and isinstance(event["payload"].get("action"), dict)
             and event["payload"]["action"].get("name") == "execute_command"
         ]
-        self.assertEqual(len(process_receipts), 1)
+        self.assertFalse(process_receipts)

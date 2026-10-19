@@ -293,9 +293,19 @@ class TaskRecord:
     forbids_write: bool = False
     clarifications: dict[str, dict[str, str]] = field(default_factory=dict)
     verification_handoff: dict[str, str] | None = None
+    verification_enabled: bool = True
+    automatic_verification: bool = False
 
     @classmethod
-    def create(cls, workspace: str, objective: str, *, contract=None) -> TaskRecord:
+    def create(
+        cls,
+        workspace: str,
+        objective: str,
+        *,
+        contract=None,
+        verification_enabled=True,
+        automatic_verification=False,
+    ) -> TaskRecord:
         from .run_contracts import infer_run_contract
 
         workspace_task = (
@@ -303,7 +313,7 @@ class TaskRecord:
             or contract.requires_write
             or (contract.task_kind == "workspace-verification")
         )
-        checks = discover_checks(workspace) if workspace_task else {}
+        checks = discover_checks(workspace) if workspace_task and verification_enabled else {}
         return cls(
             workspace,
             objective,
@@ -313,6 +323,8 @@ class TaskRecord:
             forbids_write=not contract.requires_write
             if contract is not None
             else infer_run_contract(objective).forbids_write,
+            verification_enabled=verification_enabled,
+            automatic_verification=automatic_verification,
         )
 
     def plan(
@@ -361,6 +373,7 @@ class TaskRecord:
         )
         if (
             contract.requires_write
+            and not self.automatic_verification
             and not contract.allows_unverified_docs
             and bootstrap_needs_tests
             and allowed_paths
@@ -533,6 +546,7 @@ class TaskRecord:
             "acceptance_criteria": list(self.criteria),
             "allowed_paths": list(self.allowed_paths),
             "required_checks": list(self.selected),
+            "verification": "after_edits" if self.verification_enabled else "disabled",
             "baseline_check_ids": self.baseline_check_ids(),
             "available_check_ids": list(self.checks),
             "bootstrap_checks": [

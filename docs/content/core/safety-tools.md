@@ -108,6 +108,6 @@ also understands older typed preview records for history compatibility.
 
 The application uses native `CompletionCheck` and `CompletionValidator` over
 execution receipts and resource revisions. A code change is not certified by a
-preview or an approving UI response. Graph bounds repairs independently of
+preview or an approving UI response. Graph bounds edit continuations independently of
 transport retry policy. See [Verify & Recover](../cli/verification-and-recovery.md)
 for observable statuses and platform/recovery limits.

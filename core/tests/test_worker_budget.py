@@ -20,6 +20,13 @@ from protoagent_core.verification import validate_completion
 
 
 class WorkerBudgetTests(NativeRuntimeCase):
+    def setUp(self):
+        super().setUp()
+        # These exercise the live fallback used by non-checkpointed transports.
+        mode = patch.dict("os.environ", {"PROTOAGENT_CHECKPOINTED_WORKERS": "0"})
+        mode.start()
+        self.addCleanup(mode.stop)
+
     async def test_tool_calling_model_is_handed_off_without_another_model_reply(self):
         sample = self.root / "sample.py"
         original = "value = 0\nremaining = 0\n" + "# source\n" * MAX_INFER_STEPS
